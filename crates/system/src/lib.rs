@@ -200,3 +200,268 @@ pub mod radio {
         }
     }
 }
+
+pub mod radio_ext {
+    use windows::Devices::Radios::{Radio, RadioKind, RadioState};
+
+    pub fn bluetooth_on() -> Option<bool> {
+        let radios = Radio::GetRadiosAsync().ok()?.join().ok()?;
+        let r = radios.into_iter().find(|r| r.Kind().is_ok_and(|k| k == RadioKind::Bluetooth))?;
+        Some(r.State().ok()? == RadioState::On)
+    }
+
+    pub fn set_bluetooth(on: bool) {
+        let _ = Radio::RequestAccessAsync().and_then(|a| a.join());
+        let Some(radios) = Radio::GetRadiosAsync().ok().and_then(|a| a.join().ok()) else { return };
+        if let Some(r) = radios.into_iter().find(|r| r.Kind().is_ok_and(|k| k == RadioKind::Bluetooth)) {
+            let _ = r.SetStateAsync(if on { RadioState::On } else { RadioState::Off }).and_then(|a| a.join());
+        }
+    }
+}
+
+pub mod wifi {
+    use windows::core::HSTRING;
+    use windows::Networking::Connectivity::NetworkInformation;
+    use windows::Security::Credentials::PasswordCredential;
+    use windows::Devices::WiFi::{WiFiAdapter, WiFiAvailableNetwork, WiFiConnectionStatus, WiFiReconnectionKind};
+    use windows::Networking::Connectivity::NetworkAuthenticationType;
+
+    pub struct Net {
+        pub ssid: String,
+        pub bars: u8,
+        pub secured: bool,
+        pub connected: bool,
+    }
+
+    static LAST_ERROR: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+    /// Dernière raison d'échec (accès refusé, pas de carte…), vide si tout va bien.
+    pub fn last_error() -> String {
+        LAST_ERROR.lock().map(|s| s.clone()).unwrap_or_default()
+    }
+
+    fn fail<T>(msg: String) -> Option<T> {
+        if let Ok(mut s) = LAST_ERROR.lock() {
+            *s = msg;
+        }
+        None
+    }
+
+    fn adapter() -> Option<WiFiAdapter> {
+        if let Ok(mut s) = LAST_ERROR.lock() {
+            s.clear();
+        }
+        match WiFiAdapter::RequestAccessAsync().and_then(|a| a.join()) {
+            Ok(windows::Devices::WiFi::WiFiAccessStatus::Allowed) => {}
+            Ok(st) => return fail(format!("accès Wi-Fi : {st:?}")),
+            Err(e) => return fail(format!("accès Wi-Fi : {e}")),
+        }
+        match WiFiAdapter::FindAllAdaptersAsync().and_then(|a| a.join()) {
+            Ok(l) => l.into_iter().next().or_else(|| fail("aucune carte Wi-Fi".into())),
+            Err(e) => fail(format!("cartes Wi-Fi : {e}")),
+        }
+    }
+
+    fn connected_ssid() -> Option<String> {
+        let p = NetworkInformation::GetInternetConnectionProfile().ok()?;
+        p.IsWlanConnectionProfile().ok()?.then(|| p.WlanConnectionProfileDetails().ok()?.GetConnectedSsid().ok().map(|s| s.to_string())).flatten()
+    }
+
+    /// Réseaux visibles (bloquant : à appeler hors du thread UI), triés par signal.
+    pub fn scan() -> Vec<Net> {
+        let Some(a) = adapter() else { return super::netsh::scan() };
+        let _ = a.ScanAsync().and_then(|s| s.join());
+        let cur = connected_ssid();
+        let mut v: Vec<Net> = a
+            .NetworkReport()
+            .and_then(|r| r.AvailableNetworks())
+            .map(|l| {
+                l.into_iter()
+                    .filter_map(|n| {
+                        let ssid = n.Ssid().ok()?.to_string();
+                        (!ssid.is_empty()).then(|| Net {
+                            bars: n.SignalBars().unwrap_or(0),
+                            secured: n.SecuritySettings().and_then(|s| s.NetworkAuthenticationType()).is_ok_and(|t| t != NetworkAuthenticationType::Open80211),
+                            connected: cur.as_deref() == Some(ssid.as_str()),
+                            ssid,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort_by_key(|n| (!n.connected, std::cmp::Reverse(n.bars)));
+        v.dedup_by(|a, b| a.ssid == b.ssid);
+        v
+    }
+
+    fn find(a: &WiFiAdapter, ssid: &str) -> Option<WiFiAvailableNetwork> {
+        a.NetworkReport().ok()?.AvailableNetworks().ok()?.into_iter().find(|n| n.Ssid().is_ok_and(|s| s == ssid))
+    }
+
+    /// Connexion (mot de passe pour un réseau sécurisé). Bloquant.
+    pub fn connect(ssid: &str, password: Option<&str>) -> bool {
+        let Some(a) = adapter() else { return super::netsh::connect(ssid, password) };
+        let Some(net) = find(&a, ssid) else { return false };
+        let kind = WiFiReconnectionKind::Automatic;
+        let res = match password {
+            Some(p) => {
+                let Ok(c) = PasswordCredential::new() else { return false };
+                let _ = c.SetPassword(&HSTRING::from(p));
+                a.ConnectWithPasswordCredentialAsync(&net, kind, &c)
+            }
+            None => a.ConnectAsync(&net, kind),
+        };
+        res.and_then(|o| o.join()).and_then(|r| r.ConnectionStatus()).is_ok_and(|s| s == WiFiConnectionStatus::Success)
+    }
+}
+
+pub mod pads {
+    use windows::Gaming::Input::RawGameController;
+
+    pub fn names() -> Vec<String> {
+        RawGameController::RawGameControllers()
+            .map(|l| l.into_iter().filter_map(|c| c.DisplayName().ok().map(|n| n.to_string())).collect())
+            .unwrap_or_default()
+    }
+}
+
+pub mod updates {
+    use windows::core::BSTR;
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
+    use windows::Win32::System::UpdateAgent::{IUpdateSession, UpdateSession};
+
+    /// Nombre de mises à jour logicielles en attente (Windows Update). Bloquant, parfois long.
+    pub fn pending() -> Result<i32, String> {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let s: IUpdateSession = CoCreateInstance(&UpdateSession, None, CLSCTX_INPROC_SERVER).map_err(|e| e.to_string())?;
+            let r = s
+                .CreateUpdateSearcher()
+                .and_then(|u| u.Search(&BSTR::from("IsInstalled=0 and Type='Software' and IsHidden=0")))
+                .map_err(|e| e.to_string())?;
+            r.Updates().and_then(|u| u.Count()).map_err(|e| e.to_string())
+        }
+    }
+}
+
+pub mod storage {
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives};
+
+    pub struct Drive {
+        pub name: String,
+        pub free: u64,
+        pub total: u64,
+        pub removable: bool,
+    }
+
+    /// Disques fixes et amovibles montés.
+    pub fn drives() -> Vec<Drive> {
+        let mask = unsafe { GetLogicalDrives() };
+        (0..26)
+            .filter(|i| mask & (1 << i) != 0)
+            .filter_map(|i| {
+                let name = format!("{}:\\", (b'A' + i as u8) as char);
+                let w: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+                let kind = unsafe { GetDriveTypeW(PCWSTR(w.as_ptr())) };
+                // 2 amovible, 3 fixe
+                if kind != 2 && kind != 3 {
+                    return None;
+                }
+                let (mut free, mut total) = (0u64, 0u64);
+                unsafe { GetDiskFreeSpaceExW(PCWSTR(w.as_ptr()), Some(&mut free), Some(&mut total), None) }.ok()?;
+                Some(Drive { name, free, total, removable: kind == 2 })
+            })
+            .collect()
+    }
+}
+
+/// Repli quand WinRT refuse l'accès Wi-Fi (localisation désactivée) : `netsh wlan`.
+mod netsh {
+    use super::wifi::Net;
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    fn run(args: &str) -> String {
+        // chcp 65001 : sortie UTF-8 (noms de réseaux accentués).
+        let out = Command::new("cmd")
+            .raw_arg(format!("/c chcp 65001 >nul & netsh wlan {args}"))
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .output();
+        out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
+    }
+
+    fn value(line: &str) -> Option<&str> {
+        line.split_once(':').map(|(_, v)| v.trim())
+    }
+
+    fn connected() -> Option<String> {
+        let out = run("show interfaces");
+        let mut ssid = None;
+        let mut up = false;
+        for l in out.lines() {
+            let t = l.trim_start();
+            if t.starts_with("SSID") && !t.starts_with("BSSID") {
+                ssid = value(t).map(String::from);
+            } else if t.to_lowercase().contains("connect") && value(t).is_some_and(|v| v.to_lowercase().starts_with("connect") || v.to_lowercase().starts_with("connecté")) {
+                up = true;
+            }
+        }
+        up.then_some(ssid).flatten()
+    }
+
+    pub fn scan() -> Vec<Net> {
+        let cur = connected();
+        let out = run("show networks mode=bssid");
+        let mut v: Vec<Net> = vec![];
+        for l in out.lines() {
+            let t = l.trim();
+            if t.starts_with("SSID") && !t.starts_with("BSSID") {
+                let ssid = value(t).unwrap_or("").to_string();
+                v.push(Net { connected: cur.as_deref() == Some(ssid.as_str()), ssid, bars: 0, secured: true });
+            } else if let Some(n) = v.last_mut() {
+                let low = t.to_lowercase();
+                if low.starts_with("authentification") || low.starts_with("authentication") {
+                    n.secured = !(low.contains("ouvert") || low.contains("open"));
+                } else if t.ends_with('%') && value(t).is_some() {
+                    let pct: u32 = value(t).and_then(|p| p.trim_end_matches('%').trim().parse().ok()).unwrap_or(0);
+                    n.bars = n.bars.max((pct / 25).min(4) as u8);
+                }
+            }
+        }
+        v.retain(|n| !n.ssid.is_empty());
+        v.sort_by_key(|n| (!n.connected, std::cmp::Reverse(n.bars)));
+        v.dedup_by(|a, b| a.ssid == b.ssid);
+        v
+    }
+
+    fn escape(s: &str) -> String {
+        s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    }
+
+    pub fn connect(ssid: &str, password: Option<&str>) -> bool {
+        if let Some(pw) = password {
+            let xml = format!(
+                "<?xml version=\"1.0\"?><WLANProfile xmlns=\"http://www.microsoft.com/networking/WLAN/profile/v1\"><name>{n}</name><SSIDConfig><SSID><name>{n}</name></SSID></SSIDConfig><connectionType>ESS</connectionType><connectionMode>auto</connectionMode><MSM><security><authEncryption><authentication>WPA2PSK</authentication><encryption>AES</encryption><useOneX>false</useOneX></authEncryption><sharedKey><keyType>passPhrase</keyType><protected>false</protected><keyMaterial>{k}</keyMaterial></sharedKey></security></MSM></WLANProfile>",
+                n = escape(ssid),
+                k = escape(pw)
+            );
+            let path = std::env::temp_dir().join(format!("hearth-wlan-{}.xml", std::process::id()));
+            if std::fs::write(&path, xml).is_err() {
+                return false;
+            }
+            run(&format!("add profile filename=\"{}\"", path.display()));
+            let _ = std::fs::remove_file(&path);
+        }
+        let out = run(&format!("connect name=\"{ssid}\""));
+        // Le message de succès varie selon la langue : on vérifie l'état réel après quelques secondes.
+        let _ = out;
+        for _ in 0..10 {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            if connected().as_deref() == Some(ssid) {
+                return true;
+            }
+        }
+        false
+    }
+}

@@ -7,8 +7,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use input::Nav;
+use i18n::tr;
 use slint::{ComponentHandle, Model, SharedString, VecModel};
 
+mod i18n;
 mod settings;
 
 slint::include_modules!();
@@ -23,6 +25,8 @@ const MAX_NOTES: usize = 5;
 #[derive(serde::Deserialize)]
 struct Game {
     name: String,
+    #[serde(default)]
+    id: String,
     exe: String,
     #[serde(default)]
     args: Vec<String>,
@@ -52,6 +56,10 @@ struct Shell {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
+    // Le shell n'a pas de console : les paniques vont dans un fichier.
+    std::panic::set_hook(Box::new(|info| {
+        let _ = std::fs::write(games_file().with_file_name("panic.log"), info.to_string());
+    }));
     // set_fullscreen() avant run() est ignoré par winit : plein écran dès la création.
     std::env::set_var("SLINT_FULLSCREEN", "1");
     // ponytail: femtovg cesse de se redessiner avec ce design (constaté sur l'Optiplex) ; rendu logiciel.
@@ -61,7 +69,7 @@ fn main() -> Result<(), slint::PlatformError> {
         .iter()
         .map(|g| Tile {
             name: g.name.as_str().into(),
-            cover: slint::Image::load_from_path(Path::new(&g.cover)).unwrap_or_default(),
+            cover: cover_of(g),
             running: false,
         })
         .collect();
@@ -77,7 +85,8 @@ fn main() -> Result<(), slint::PlatformError> {
     });
     shell.ui.set_games(shell.tiles.clone().into());
     shell.guide.set_notes(shell.notes.clone().into());
-    shell.ui.set_cats(Rc::new(VecModel::from(settings::CATS.map(SharedString::from).to_vec())).into());
+    i18n::init();
+    shell.refresh_lang();
     shell.ui.set_rows(shell.settings.rows.clone().into());
     shell.ui.set_user(std::env::var("USERNAME").unwrap_or_default().into());
     shell.set_clock();
@@ -86,6 +95,8 @@ fn main() -> Result<(), slint::PlatformError> {
     shell.ui.on_open_cat(move|c| s.open_cat(c));
     let s = shell.clone();
     shell.ui.on_setting(move|c, r, d| s.setting(c, r, d));
+    let s = shell.clone();
+    shell.ui.on_kb_press(move |x, y| s.kb_press(x, y));
 
     let s = shell.clone();
     shell.ui.on_launch(move |i| s.launch(i as usize));
@@ -98,6 +109,8 @@ fn main() -> Result<(), slint::PlatformError> {
         _ => {}
     });
     shell.ui.on_desktop(|| std::process::exit(EXIT_DESKTOP));
+    let s = shell.clone();
+    shell.ui.on_open_store(move |_| s.notify(tr("Bientôt disponible")));
     let s = shell.clone();
     shell.guide.on_action(move |item, delta| s.guide_action(item, delta));
 
@@ -113,6 +126,11 @@ fn main() -> Result<(), slint::PlatformError> {
     let tick = slint::Timer::default();
     tick.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || s.tick());
 
+    let s = shell.clone();
+    let phase = Cell::new(0.0f32);
+    let anim = slint::Timer::default();
+    anim.start(slint::TimerMode::Repeated, Duration::from_millis(66), move || s.animate(&phase));
+
     // Le menu guide est créé une fois puis affiché/masqué en Win32, sans jamais prendre le focus
     // (un jeu plein écran qui perd le focus se réduit et clignote).
     shell.guide.show()?;
@@ -125,6 +143,11 @@ fn main() -> Result<(), slint::PlatformError> {
             wm::hide(h);
             if let Some(m) = wm::find_window(MAIN_TITLE) {
                 wm::focus(m);
+                // Dev : un ancien shell élevé peut masquer le nôtre ; HEARTH_DEV_TOPMOST le recouvre.
+                if std::env::var_os("HEARTH_DEV_TOPMOST").is_some() {
+                    let (x, y, w, h) = wm::primary_monitor();
+                    wm::show_overlay(m, x, y, w, h);
+                }
             }
             t.stop();
         }
@@ -166,7 +189,7 @@ impl Shell {
                 self.running.borrow_mut().push(Running { tile: i, session, hands_off, closing: false });
                 self.set_running(i, true);
             }
-            Err(e) => self.notify(format!("Impossible de lancer {} : {}", g.name, e.message())),
+            Err(e) => self.notify(format!("{} {} : {}", tr("Impossible de lancer"), g.name, e.message())),
         }
     }
 
@@ -216,13 +239,98 @@ impl Shell {
     fn open_cat(&self, cat: i32) {
         let hint = self.settings.open(cat);
         self.ui.set_shint(hint.into());
+        if settings::needs_fetch(cat) {
+            self.spawn_fetch(cat);
+        }
+    }
+
+    /// Lecture WinRT hors du thread UI, résultat renvoyé au thread UI.
+    fn spawn_fetch(&self, cat: i32) {
+        std::thread::spawn(move || {
+            let f = settings::fetch(cat);
+            let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.fetched(cat, f)));
+        });
+    }
+
+    fn fetched(&self, cat: i32, f: settings::Fetched) {
+        self.settings.apply(f);
+        if self.ui.get_cat() == cat {
+            self.open_cat_keep(cat);
+        }
     }
 
     fn setting(&self, cat: i32, row: i32, delta: i32) {
-        if self.settings.act(cat, row, delta) {
-            self.display_changed();
+        match self.settings.act(cat, row, delta) {
+            settings::Outcome::DisplayChanged => self.display_changed(),
+            settings::Outcome::Toggle { wifi, on } => {
+                self.settings.start_loading();
+                std::thread::spawn(move || {
+                    if wifi {
+                        system::radio::set_wifi(on);
+                    } else {
+                        system::radio_ext::set_bluetooth(on);
+                    }
+                    let f = settings::fetch(cat);
+                    let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.fetched(cat, f)));
+                });
+            }
+            settings::Outcome::Password(ssid) => {
+                self.settings.kb_open(&ssid);
+                self.kb_refresh();
+                self.ui.set_kbx(0);
+                self.ui.set_kby(0);
+                self.ui.set_kb_title(format!("{} {ssid}", tr("Mot de passe :")).into());
+                self.ui.set_zone(4);
+            }
+            settings::Outcome::Connect(ssid) => self.connect(ssid, None),
+            settings::Outcome::LangChanged => self.refresh_lang(),
+            settings::Outcome::CheckUpdates => {
+                std::thread::spawn(move || {
+                    let r = system::updates::pending();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        with_shell(|s| {
+                            s.settings.set_update(r);
+                            s.open_cat_keep(6);
+                        })
+                    });
+                });
+            }
+            settings::Outcome::None => {}
         }
         self.open_cat_keep(cat);
+    }
+
+    fn kb_refresh(&self) {
+        self.ui.set_kb_text(self.settings.kb_text().into());
+        let keys: Vec<SharedString> = self.settings.kb_keys().into_iter().map(Into::into).collect();
+        self.ui.set_kb_keys(Rc::new(VecModel::from(keys)).into());
+    }
+
+    fn kb_press(&self, x: i32, y: i32) {
+        match self.settings.kb_press(x, y) {
+            settings::Kb::Continue => self.kb_refresh(),
+            settings::Kb::Cancel => self.ui.set_zone(3),
+            settings::Kb::Done(ssid, pw) => {
+                self.ui.set_zone(3);
+                self.connect(ssid, Some(pw));
+            }
+        }
+    }
+
+    fn connect(&self, ssid: String, password: Option<String>) {
+        self.settings.set_message(format!("{} {ssid}…", tr("Connexion à")));
+        self.open_cat_keep(2);
+        std::thread::spawn(move || {
+            let ok = system::wifi::connect(&ssid, password.as_deref());
+            let _ = slint::invoke_from_event_loop(move || {
+                with_shell(|s| {
+                    s.settings.set_message(format!("{} {ssid}", tr(if ok { "Connecté à" } else { "Échec de la connexion à" })));
+                    s.settings.start_loading();
+                    s.open_cat_keep(2);
+                    s.spawn_fetch(2);
+                })
+            });
+        });
     }
 
     /// Rafraîchit les lignes sans recharger les données (garde les choix en cours).
@@ -257,6 +365,7 @@ impl Shell {
         self.guide_tile.set(tile);
         let closing = self.running.borrow().iter().any(|r| r.tile == tile && r.closing);
         self.guide.set_game(self.games[tile].name.as_str().into());
+        self.guide.set_art(self.tiles.row_data(tile).map(|t| t.cover).unwrap_or_default());
         self.guide.set_closing(closing);
         self.guide.set_sel(0);
         self.guide.set_volume(system::audio::volume().map_or(-1, |v| v as i32));
@@ -348,7 +457,7 @@ impl Shell {
         };
         for &tile in &ended {
             self.set_running(tile, false);
-            self.notify(format!("{} s'est fermé", self.games[tile].name));
+            self.notify(format!("{} {}", self.games[tile].name, tr("s'est fermé")));
         }
         if !ended.is_empty() {
             if ended.contains(&self.guide_tile.get()) {
@@ -403,6 +512,50 @@ fn load_games() -> Vec<Game> {
     ["notepad.exe", "calc.exe", "mspaint.exe"]
         .into_iter()
         .zip(["Bloc-notes", "Calculatrice", "Paint"])
-        .map(|(exe, name)| Game { name: name.into(), exe: exe.into(), args: vec![], cover: String::new(), anticheat: false })
+        .map(|(exe, name)| Game { name: name.into(), id: String::new(), exe: exe.into(), args: vec![], cover: String::new(), anticheat: false })
         .collect()
+}
+
+fn with_shell(f: impl FnOnce(&Shell)) {
+    SHELL.with(|s| {
+        if let Some(s) = s.borrow().as_ref() {
+            f(s);
+        }
+    });
+}
+
+/// Visuel d'une tuile : `cover` du jeu, sinon assets\<id>\cover.* (cf. crate `stores`).
+fn cover_of(g: &Game) -> slint::Image {
+    let path = if g.cover.is_empty() { stores::asset(&g.id, "cover").unwrap_or_default() } else { PathBuf::from(&g.cover) };
+    slint::Image::load_from_path(&path).unwrap_or_default()
+}
+
+impl Shell {
+    /// Textes calculés en Rust après un changement de langue (les @tr de Slint suivent seuls).
+    fn refresh_lang(&self) {
+        let cats: Vec<SharedString> = settings::cats().into_iter().map(Into::into).collect();
+        self.ui.set_cats(Rc::new(VecModel::from(cats)).into());
+        let stores: Vec<StoreEntry> = stores::all()
+            .iter()
+            .map(|s| StoreEntry { name: s.name().into(), status: tr(if s.status() == stores::Status::Soon { "Bientôt disponible" } else { "Non connecté" }).into() })
+            .collect();
+        self.ui.set_stores(Rc::new(VecModel::from(stores)).into());
+        // Pas avant la création de la fenêtre : COM multithread sur ce thread ferait échouer winit.
+        if self.ui.get_zone() == 3 {
+            self.open_cat_keep(self.ui.get_cat());
+        }
+    }
+
+    /// Fond animé (arrêté quand la console n'est pas devant : économise le CPU en jeu) et pictogrammes.
+    fn animate(&self, phase: &Cell<f32>) {
+        let pad = input::last_pad() as i32;
+        if self.ui.global::<Pad>().get_kind() != pad {
+            self.ui.global::<Pad>().set_kind(pad);
+            self.guide.global::<Pad>().set_kind(pad);
+        }
+        if wm::find_window(MAIN_TITLE).is_some_and(|h| h == wm::foreground()) {
+            phase.set((phase.get() + 0.4) % 3600.0);
+            self.ui.set_phase(phase.get());
+        }
+    }
 }

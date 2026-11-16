@@ -36,6 +36,7 @@ $script:Ws = New-Object -ComObject WScript.Shell
 
 function Deploy {
     cargo build --release 2>&1 | Select-String '^error|^warning|-->|Finished'
+    Get-Process hearth-shell -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Get-CimInstance Win32_Process -Filter "Name like 'hearth%'" | Where-Object ExecutablePath |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     for ($i = 0; $i -lt 20 -and (Get-Process hearth-shell -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 250 }
@@ -47,8 +48,8 @@ function Deploy {
 }
 
 function Press([string]$key, [int]$wait = 600) {
-    if ($key -eq 'back') { $key = 'backspace' }
-    $k = if ($key.Length -eq 1) { $key } else { "{$($key.ToUpper())}" }
+    $map = @{ up = 'F1'; down = 'F2'; left = 'F3'; right = 'F4'; enter = 'F5'; back = 'F6'; g = 'F7'; m = 'F8' }
+    $k = "{$($map[$key])}"
     $script:Ws.SendKeys("^%+$k")
     Start-Sleep -Milliseconds $wait
 }
@@ -68,4 +69,16 @@ function Shot([string]$name = 'shot') {
 function Ask {
     $p = Get-Process claude -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0 | Select-Object -First 1
     if ($p) { [HearthDev]::Focus($p.MainWindowHandle) }
+}
+
+#   Dev             compile et lance target\release\hearth-shell.exe (ne touche pas à la copie installée,
+#                   utile quand un ancien shell élevé verrouille app\hearth-shell.exe)
+function Dev {
+    Get-CimInstance Win32_Process -Filter "Name='hearth-shell.exe'" | Where-Object { $_.ExecutablePath -like '*\target\release\*' } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep 1
+    cargo build --release 2>&1 | Select-String '^error|^warning|-->|Finished'
+    $env:HEARTH_DEV_TOPMOST = '1'
+    Start-Process C:\dev\hearth\target\release\hearth-shell.exe
+    Start-Sleep 6
 }

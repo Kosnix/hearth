@@ -1,5 +1,6 @@
 //! Manette -> actions de navigation. Windows.Gaming.Input + XInput (bouton guide, repli).
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 use windows::core::{w, PCSTR};
@@ -58,12 +59,23 @@ pub fn spawn(on_nav: impl Fn(Nav) + Send + 'static) {
         unsafe { RoInitialize(RO_INIT_MULTITHREADED).ok() };
         let get_state = xinput_get_state_ex().unwrap_or(xinput_get_state);
         let mut xinput = XInput { get_state, connected: [true; 4], tick: 0 };
-        register_hotkeys();        let mut prev = 0u16;
+        register_hotkeys();
+        if sony_present() {
+            LAST_PAD.store(1, Ordering::Relaxed);
+        }
+        let mut prev = 0u16;
         let mut next_repeat = Instant::now();
         loop {
-            while let Some(nav) = poll_hotkey() {                on_nav(nav);
+            while let Some(nav) = poll_hotkey() {
+                on_nav(nav);
             }
-            let cur = read_wgi() | read_sony() | xinput.read();
+            let (sony, other) = (read_sony(), read_wgi() | xinput.read());
+            if sony != 0 {
+                LAST_PAD.store(1, Ordering::Relaxed);
+            } else if other != 0 {
+                LAST_PAD.store(0, Ordering::Relaxed);
+            }
+            let cur = sony | other;
             let pressed = cur & !prev;
             for (bit, nav) in MAP {
                 if pressed & bit != 0 {
@@ -87,17 +99,17 @@ pub fn spawn(on_nav: impl Fn(Nav) + Send + 'static) {
     });
 }
 
-/// Ctrl+Alt+Maj + touche = bouton de manette, quel que soit le focus : permet de piloter
+/// Ctrl+Alt+Maj + F1..F8 (haut, bas, gauche, droite, valider, retour, guide, menu) = bouton de manette, quel que soit le focus : permet de piloter
 /// et tester la console sans manette (scripts : SendKeys "^%+{UP}", "^%+g"…).
 const HOTKEYS: [(VIRTUAL_KEY, Nav); 8] = [
-    (VK_UP, Nav::Up),
-    (VK_DOWN, Nav::Down),
-    (VK_LEFT, Nav::Left),
-    (VK_RIGHT, Nav::Right),
-    (VK_RETURN, Nav::Accept),
-    (VK_BACK, Nav::Back),
-    (VK_G, Nav::Guide),
-    (VK_M, Nav::Menu),
+    (VK_F1, Nav::Up),
+    (VK_F2, Nav::Down),
+    (VK_F3, Nav::Left),
+    (VK_F4, Nav::Right),
+    (VK_F5, Nav::Accept),
+    (VK_F6, Nav::Back),
+    (VK_F7, Nav::Guide),
+    (VK_F8, Nav::Menu),
 ];
 
 fn register_hotkeys() {
@@ -251,4 +263,15 @@ mod tests {
         assert_eq!(stick(-0.9, 0.9), LEFT | UP);
         assert_eq!(stick(0.3, -0.3), 0);
     }
+}
+
+/// Dernière manette utilisée (pour afficher les bons pictogrammes) : 0 Xbox/générique, 1 PlayStation.
+static LAST_PAD: AtomicU8 = AtomicU8::new(0);
+
+pub fn last_pad() -> u8 {
+    LAST_PAD.load(Ordering::Relaxed)
+}
+
+fn sony_present() -> bool {
+    RawGameController::RawGameControllers().is_ok_and(|l| l.into_iter().any(|r| r.HardwareVendorId() == Ok(SONY)))
 }
