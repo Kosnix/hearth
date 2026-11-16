@@ -4,3 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
+qrcode = { version = "0.14", default-features = false }
+
+[dependencies.windows]
+workspace = true
+features = [
+  "Win32_Foundation",
+  "Win32_Networking_WinHttp",
+  "Win32_System_Registry",
+]

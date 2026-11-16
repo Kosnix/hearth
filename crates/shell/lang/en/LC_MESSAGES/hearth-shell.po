@@ -339,3 +339,15 @@ msgctxt "GuideMenu"
 msgid "Notifications"
 msgstr "Notifications"
 
+msgctxt "App"
+msgid "Chargement…"
+msgstr "Loading…"
+
+msgctxt "App"
+msgid "Aucune offre (réseau indisponible ?)"
+msgstr "No offers (network unavailable?)"
+
+msgctxt "App"
+msgid "Scannez avec votre téléphone pour acheter"
+msgstr "Scan with your phone to buy"
+

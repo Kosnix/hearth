@@ -6,6 +6,7 @@ export struct Tile {
     initial: string,
     hue: color,
     cover: image,
+    hero: image,
     running: bool,
 }
 
@@ -13,6 +14,12 @@ export struct SettingRow {
     label: string,
     value: string,
     adjustable: bool,
+}
+
+export struct Offer {
+    title: string,
+    price: string,
+    art: image,
 }
 
 export struct StoreEntry {
@@ -41,20 +48,66 @@ export global Pad {
 // Pictogramme d'un bouton de manette. btn : 0 valider, 1 retour, 2 guide, 3 menu.
 component PadGlyph inherits Rectangle {
     in property <int> btn;
-    property <string> sym: Pad.kind == 1 ? (btn == 0 ? "×" : btn == 1 ? "○" : btn == 2 ? "PS" : "\u{E700}") : (btn == 0 ? "A" : btn == 1 ? "B" : btn == 2 ? "\u{E7FC}" : "\u{E700}");
-    property <color> tint: Pad.kind == 1 ? (btn == 0 ? #8fb4ff : btn == 1 ? #ff8c8c : #ffffff) : (btn == 0 ? #86e486 : btn == 1 ? #ff8c8c : #ffffff);
+    property <bool> ps: Pad.kind == 1;
+    property <color> tint: ps ? (btn == 0 ? #7ea6ff : btn == 1 ? #ff7d7d : #ffffff) : (btn == 0 ? #6fd36f : btn == 1 ? #ff6b6b : #ffffff);
     width: 44px;
     height: 44px;
-    border-radius: 22px;
-    background: #ffffff1a;
-    border-width: 2px;
-    border-color: tint;
-    Text {
-        text: sym;
-        font-family: (btn >= 2 && Pad.kind == 0) || (btn == 3) ? Theme.icons : "";
-        font-size: btn == 2 && Pad.kind == 1 ? 17px : (btn == 0 && Pad.kind == 1 ? 36px : 24px);
-        font-weight: 700;
+    // Pastille : anneau (PlayStation) ou disque plein coloré (Xbox A/B).
+    Rectangle {
+        border-radius: 22px;
+        background: ps ? #ffffff14 : (btn <= 1 ? tint : #ffffff1f);
+        border-width: ps || btn > 1 ? 2px : 0px;
+        border-color: tint;
+    }
+    // PlayStation : croix et rond dessinés, logo PS.
+    if ps && btn == 0: Path {
+        width: 44px;
+        height: 44px;
+        viewbox-width: 44;
+        viewbox-height: 44;
+        commands: "M 14 14 L 30 30 M 30 14 L 14 30";
+        stroke: tint;
+        stroke-width: 4px;
+        stroke-line-cap: round;
+    }
+    if ps && btn == 1: Rectangle {
+        x: 12px;
+        y: 12px;
+        width: 20px;
+        height: 20px;
+        border-radius: 10px;
+        border-width: 4px;
+        border-color: tint;
+    }
+    if ps && btn == 2: Text {
+        text: "PS";
+        font-size: 16px;
+        font-weight: 800;
         color: tint;
+    }
+    // Xbox : lettres sombres sur disque coloré, manette pour le bouton guide.
+    if !ps && btn <= 1: Text {
+        text: btn == 0 ? "A" : "B";
+        font-size: 26px;
+        font-weight: 800;
+        color: #17183a;
+    }
+    if !ps && btn == 2: Text {
+        text: "\u{E7FC}";
+        font-family: Theme.icons;
+        font-size: 22px;
+        color: tint;
+    }
+    // Menu / Options : trois traits.
+    if btn == 3: Path {
+        width: 44px;
+        height: 44px;
+        viewbox-width: 44;
+        viewbox-height: 44;
+        commands: "M 13 15 L 31 15 M 13 22 L 31 22 M 13 29 L 31 29";
+        stroke: #ffffff;
+        stroke-width: 3px;
+        stroke-line-cap: round;
     }
 }
 
@@ -136,23 +189,24 @@ component GameTile inherits Rectangle {
 
 component StoreCard inherits Rectangle {
     in property <StoreEntry> store;
-    in property <bool> selected;
-    width: selected ? 440px : 400px;
-    height: selected ? 270px : 240px;
-    border-radius: 18px;
-    background: selected ? Theme.accent : Theme.glass;
+    in property <bool> selected; // focus sur la rangée des boutiques
+    in property <bool> current; // boutique dont on voit la sélection
+    width: selected ? 350px : 330px;
+    height: selected ? 160px : 140px;
+    border-radius: 16px;
+    background: selected ? Theme.accent : (current ? #ffffff33 : Theme.glass);
     animate width, height, background { duration: 120ms; }
     Text {
-        y: parent.height / 2 - 40px;
+        y: parent.height / 2 - 34px;
         text: store.name;
-        font-size: 40px;
+        font-size: 36px;
         font-weight: 700;
         color: Theme.text;
     }
     Text {
-        y: parent.height / 2 + 20px;
+        y: parent.height / 2 + 14px;
         text: store.status;
-        font-size: 24px;
+        font-size: 22px;
         color: selected ? Theme.text : Theme.dim;
     }
 }
@@ -192,6 +246,14 @@ component NavKeys inherits FocusScope {
 export component App inherits Window {
     in property <[Tile]> games;
     in property <[StoreEntry]> stores;
+    in property <[Offer]> offers;
+    in property <string> offers-state; // "", "loading", "empty"
+    in property <string> offers-title;
+    in property <image> qr;
+    in property <string> qr-title;
+    in property <string> qr-url;
+    in-out property <int> osel: 0;
+    in-out property <int> brow: 0; // 0 boutiques, 1 offres
     in property <string> user: "Joueur";
     in property <string> clock;
     in property <float> phase; // animation du fond (degrés), pilotée par le shell
@@ -207,7 +269,7 @@ export component App inherits Window {
     in-out property <int> ssel: 0;
     in-out property <int> tab: 0; // 0 jeux, 1 boutique
     in-out property <int> top: 0; // barre du haut : 0-1 onglets, 2 réglages, 3 bureau, 4 alimentation
-    in-out property <int> zone: 0; // 0 contenu, 1 barre du haut, 2 menu alimentation, 3 réglages, 4 clavier
+    in-out property <int> zone: 0; // 0 contenu, 1 barre du haut, 2 menu alimentation, 3 réglages, 4 clavier, 5 QR d'achat
     in-out property <int> pw: 0;
     in-out property <int> cat: 0;
     in-out property <int> srow: 0;
@@ -216,6 +278,7 @@ export component App inherits Window {
     callback power(int); // 0 veille, 1 redémarrer, 2 éteindre
     callback desktop();
     callback open-store(int);
+    callback show-offer(int);
     callback kb-press(int, int); // colonne, rangée (rangée 4 = actions) ; (-1, -1) = annuler
     callback open-cat(int);
     callback setting(int, int, int); // catégorie, ligne, delta (0 valider, -1/+1 ajuster)
@@ -231,6 +294,8 @@ export component App inherits Window {
     public function nav(a: int) {
         if (a == 6) {
             zone = 0;
+        } else if (zone == 5) {
+            if (a == 4 || a == 5) { zone = 0; }
         } else if (zone == 4) {
             if (a == 0) { kby = max(0, kby - 1); }
             else if (a == 1) { kby = min(4, kby + 1); }
@@ -267,15 +332,24 @@ export component App inherits Window {
             else if (a == 4 && top == 3) { desktop(); }
             else if (a == 4 && top == 4) { pw = 0; zone = 2; }
         } else {
-            if (a == 0 || a == 5) { top = tab; zone = 1; }
+            if (a == 5 && brow == 1 && tab == 1) { brow = 0; }
+            else if (a == 0 && brow == 1 && tab == 1) { brow = 0; }
+            else if (a == 0 || a == 5) { top = tab; zone = 1; }
             else if (tab == 0) {
                 if (a == 2) { sel = max(0, sel - 1); }
                 else if (a == 3) { sel = min(games.length - 1, sel + 1); }
                 else if (a == 4 && games.length > 0) { launch(sel); }
             } else {
-                if (a == 2) { ssel = max(0, ssel - 1); }
-                else if (a == 3) { ssel = min(stores.length - 1, ssel + 1); }
-                else if (a == 4 && stores.length > 0) { open-store(ssel); }
+                if (brow == 0) {
+                    if (a == 2 && ssel > 0) { ssel = ssel - 1; open-store(ssel); }
+                    else if (a == 3 && ssel < stores.length - 1) { ssel = ssel + 1; open-store(ssel); }
+                    else if ((a == 1 || a == 4) && offers.length > 0) { brow = 1; }
+                } else {
+                    if (a == 2) { osel = max(0, osel - 1); }
+                    else if (a == 3) { osel = min(offers.length - 1, osel + 1); }
+                    else if (a == 0) { brow = 0; }
+                    else if (a == 4) { show-offer(osel); }
+                }
             }
         }
     }
@@ -304,23 +378,23 @@ export component App inherits Window {
     }
 
     // --- Accueil (onglet Jeux) ---
-    if tab == 0 && games.length > 0 && games[sel].cover.width > 0: Image {
+    if tab == 0 && games.length > 0 && games[sel].hero.width > 0: Image {
         x: parent.width * 0.40;
         y: 0px;
         width: parent.width * 0.60;
         height: parent.height * 0.62;
-        source: games[sel].cover;
+        source: games[sel].hero;
         image-fit: cover;
         opacity: 0.6;
     }
-    if tab == 0 && games.length > 0 && games[sel].cover.width > 0: Rectangle {
+    if tab == 0 && games.length > 0 && games[sel].hero.width > 0: Rectangle {
         x: parent.width * 0.38;
         width: parent.width * 0.62;
         height: parent.height * 0.62;
         background: @linear-gradient(90deg, #35468f 0%, #35468f00 70%);
     }
     // Pas de visuel : grand halo teinté et initiale géante à droite.
-    if tab == 0 && games.length > 0 && games[sel].cover.width == 0: Rectangle {
+    if tab == 0 && games.length > 0 && games[sel].hero.width == 0: Rectangle {
         x: parent.width * 0.50;
         y: 60px;
         width: 1000px;
@@ -394,33 +468,91 @@ export component App inherits Window {
         color: Theme.dim;
     }
 
-    // --- Onglet Boutique (squelette) ---
+    // --- Onglet Boutique : boutiques, puis sélection « à la une » de la boutique choisie ---
     if tab == 1: Text {
         x: 80px;
-        y: 260px;
+        y: 200px;
         text: @tr("Boutique");
         font-size: 88px;
         font-weight: 800;
         color: Theme.text;
     }
+    if tab == 1: Rectangle {
+        x: 80px;
+        y: 340px;
+        width: stores.length * 370px;
+        height: 170px;
+        for s[i] in stores: StoreCard {
+            x: i * 370px + (i > ssel && zone == 0 && brow == 0 ? 30px : 0px);
+            animate x { duration: 120ms; }
+            store: s;
+            selected: zone == 0 && brow == 0 && i == ssel;
+            current: i == ssel;
+        }
+    }
     if tab == 1: Text {
         x: 80px;
-        y: 400px;
-        text: @tr("Connectez vos boutiques par QR code pour parcourir et acheter. Bientôt disponible.");
+        y: 540px;
+        text: offers-title;
+        font-size: 30px;
+        font-weight: 600;
+        color: Theme.text;
+    }
+    if tab == 1 && offers-state != "": Text {
+        x: 80px;
+        y: 620px;
+        text: offers-state == "loading" ? @tr("Chargement…") : @tr("Aucune offre (réseau indisponible ?)");
         font-size: 28px;
         color: Theme.dim;
     }
     if tab == 1: Rectangle {
-        x: 80px;
-        y: 520px;
-        width: stores.length * 440px;
-        height: 300px;
-        for s[i] in stores: StoreCard {
-            x: i * 440px + (i > ssel && zone == 0 ? 40px : 0px);
-            animate x { duration: 120ms; }
-            y: i == ssel && zone == 0 ? 0px : 15px;
-            store: s;
-            selected: zone == 0 && i == ssel;
+        x: 80px - max(0, osel - 6) * 268px;
+        y: 600px;
+        width: offers.length * 300px;
+        height: 560px;
+        animate x { duration: 150ms; easing: ease-out; }
+        for o[i] in offers: Rectangle {
+            property <bool> on: brow == 1 && zone == 0 && i == osel;
+            x: i * 268px + (i > osel && brow == 1 ? 40px : 0px);
+            y: on ? -16px : 0px;
+            width: on ? 280px : 240px;
+            height: on ? 420px : 360px;
+            animate x, y, width, height { duration: 120ms; easing: ease-out; }
+            Rectangle {
+                height: parent.height - 70px;
+                border-radius: 16px;
+                clip: true;
+                background: Theme.tile;
+                Image {
+                    width: 100%;
+                    height: 100%;
+                    source: o.art;
+                    image-fit: cover;
+                }
+                Rectangle {
+                    border-radius: 16px;
+                    border-width: on ? 5px : 0px;
+                    border-color: Theme.text;
+                }
+            }
+            Text {
+                y: parent.height - 62px;
+                width: parent.width;
+                text: o.title;
+                font-size: 22px;
+                font-weight: 600;
+                color: on ? Theme.text : Theme.dim;
+                overflow: elide;
+            }
+            Text {
+                y: parent.height - 30px;
+                text: o.price;
+                font-size: 22px;
+                color: Theme.accent;
+            }
+            TouchArea {
+                clicked => { root.brow = 1; root.osel = i; root.show-offer(i); }
+            }
         }
     }
 
@@ -628,6 +760,54 @@ export component App inherits Window {
             y: parent.height - 100px;
             spacing: 48px;
             Hint { btn: 0; label: @tr("Valider"); }
+            Hint { btn: 1; label: @tr("Retour"); }
+        }
+    }
+
+    // QR code d'achat : à scanner avec un téléphone.
+    if zone == 5: Rectangle {
+        background: #0b0e24ee;
+        TouchArea { }
+        Text {
+            x: (parent.width - self.width) / 2;
+            y: 140px;
+            text: qr-title;
+            font-size: 44px;
+            font-weight: 700;
+            color: Theme.text;
+        }
+        Rectangle {
+            x: (parent.width - 560px) / 2;
+            y: 250px;
+            width: 560px;
+            height: 560px;
+            border-radius: 20px;
+            background: #ffffff;
+            Image {
+                width: 520px;
+                height: 520px;
+                source: qr;
+                image-rendering: pixelated;
+            }
+        }
+        Text {
+            x: (parent.width - self.width) / 2;
+            y: 850px;
+            text: @tr("Scannez avec votre téléphone pour acheter");
+            font-size: 32px;
+            color: Theme.text;
+        }
+        Text {
+            x: (parent.width - self.width) / 2;
+            y: 910px;
+            text: qr-url;
+            font-size: 22px;
+            color: Theme.dim;
+        }
+        HorizontalLayout {
+            x: 80px;
+            y: parent.height - 100px;
+            spacing: 48px;
             Hint { btn: 1; label: @tr("Retour"); }
         }
     }

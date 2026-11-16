@@ -38,6 +38,10 @@ const EN: &[(&str, &str)] = &[
     ("s'est fermé", "has closed"),
     ("Impossible de lancer", "Cannot launch"),
     ("Bientôt disponible", "Coming soon"),
+    ("À la une", "Featured"),
+    ("jeux installés", "installed games"),
+    ("Non détecté", "Not detected"),
+    ("Gratuit", "Free"),
     ("Pilotes", "Drivers"),
     ("pilote", "driver"),
     ("Pilotes Windows Update", "Windows Update drivers"),
@@ -109,4 +113,10 @@ pub fn set_anim(on: bool) {
 
 fn persist() {
     let _ = std::fs::write(file(), format!("{{\"lang\":\"{}\",\"anim\":{}}}", LANGS[lang()].0, anim()));
+}
+
+/// Valeur textuelle d'une préférence de `settings.json` (ex. clé SteamGridDB).
+pub fn pref(key: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(std::fs::read_to_string(file()).ok()?.trim_start_matches('\u{feff}')).ok()?;
+    v[key].as_str().map(String::from).filter(|s| !s.is_empty())
 }

@@ -34,6 +34,10 @@ struct Game {
     cover: String,
     #[serde(default)]
     anticheat: bool,
+    #[serde(skip)]
+    uri: Option<String>,
+    #[serde(skip)]
+    store: String,
 }
 
 /// Jeu en cours, lancé depuis la tuile `tile`.
@@ -53,6 +57,12 @@ struct Shell {
     running: RefCell<Vec<Running>>,
     guide_tile: Cell<usize>,
     settings: Rc<settings::Settings>,
+    offers: Rc<VecModel<Offer>>,
+    /// Offres du catalogue affiché (titres, URLs) et leurs images locales.
+    offer_data: RefCell<Vec<stores::Offer>>,
+    featured: RefCell<std::collections::HashMap<usize, (Vec<stores::Offer>, Vec<Option<PathBuf>>)>>,
+    store_status: RefCell<Vec<(String, bool, usize)>>,
+    loaded_store: Cell<Option<usize>>,
 }
 
 fn main() -> Result<(), slint::PlatformError> {
@@ -72,6 +82,7 @@ fn main() -> Result<(), slint::PlatformError> {
             initial: g.name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default().into(),
             hue: hue_of(&g.name),
             cover: cover_of(g),
+            hero: hero_of(g),
             running: false,
         })
         .collect();
@@ -84,12 +95,19 @@ fn main() -> Result<(), slint::PlatformError> {
         running: RefCell::new(Vec::new()),
         guide_tile: Cell::new(0),
         settings: settings::Settings::new(),
+        offers: Rc::new(VecModel::default()),
+        offer_data: RefCell::new(vec![]),
+        featured: RefCell::new(Default::default()),
+        store_status: RefCell::new(vec![]),
+        loaded_store: Cell::new(None),
     });
     shell.ui.set_games(shell.tiles.clone().into());
     shell.guide.set_notes(shell.notes.clone().into());
+    *shell.store_status.borrow_mut() = stores::all().iter().map(|s| (s.name().to_string(), s.detected(), shell.games.iter().filter(|g| g.store == s.name()).count())).collect();
     i18n::init();
     shell.refresh_lang();
     shell.ui.set_rows(shell.settings.rows.clone().into());
+    shell.ui.set_offers(shell.offers.clone().into());
     shell.ui.set_user(std::env::var("USERNAME").unwrap_or_default().into());
     shell.set_clock();
 
@@ -112,7 +130,9 @@ fn main() -> Result<(), slint::PlatformError> {
     });
     shell.ui.on_desktop(|| std::process::exit(EXIT_DESKTOP));
     let s = shell.clone();
-    shell.ui.on_open_store(move |_| s.notify(tr("Bientôt disponible")));
+    shell.ui.on_open_store(move |i| s.load_offers(i as usize));
+    let s = shell.clone();
+    shell.ui.on_show_offer(move |i| s.show_offer(i as usize));
     let s = shell.clone();
     shell.guide.on_action(move |item, delta| s.guide_action(item, delta));
 
@@ -167,6 +187,7 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     });
 
+    shell.start_art();
     shell.ui.run()
 }
 
@@ -181,6 +202,11 @@ impl Shell {
             return;
         }
         let Some(g) = self.games.get(i) else { return };
+        if let Some(uri) = &g.uri {
+            // Lancement par le client de la boutique : le jeu n'est pas encapsulé.
+            let _ = Command::new("cmd").args(["/c", "start", "", uri]).spawn();
+            return;
+        }
         let exe = Path::new(&g.exe);
         let compat = wm::compat::lookup(exe);
         compat.apply_ini();
@@ -505,19 +531,31 @@ fn games_file() -> PathBuf {
 
 // ponytail: liste manuelle en attendant les connecteurs de boutiques (phase 5).
 fn load_games() -> Vec<Game> {
-    if let Ok(s) = std::fs::read_to_string(games_file()) {
+    let mut games: Vec<Game> = std::fs::read_to_string(games_file())
         // Notepad et PowerShell ajoutent souvent un BOM, que serde_json refuse.
-        if let Ok(games) = serde_json::from_str(s.trim_start_matches('\u{feff}')) {
-            return games;
+        .ok()
+        .and_then(|s| serde_json::from_str(s.trim_start_matches('\u{feff}')).ok())
+        .unwrap_or_default();
+    // Jeux installés des boutiques (Steam, Epic, GOG), sans doublon avec games.json.
+    for g in stores::installed() {
+        if games.iter().any(|m| m.id == g.id) {
+            continue;
         }
+        let (exe, args, uri) = match g.launch {
+            stores::Launch::Exe { path, args } => (path, args, None),
+            stores::Launch::Uri(u) => (String::new(), vec![], Some(u)),
+        };
+        games.push(Game { name: g.title, id: g.id, exe, args, cover: String::new(), anticheat: false, uri, store: g.store.into() });
     }
-    ["notepad.exe", "calc.exe", "mspaint.exe"]
-        .into_iter()
-        .zip(["Bloc-notes", "Calculatrice", "Paint"])
-        .map(|(exe, name)| Game { name: name.into(), id: String::new(), exe: exe.into(), args: vec![], cover: String::new(), anticheat: false })
-        .collect()
+    if games.is_empty() {
+        games = ["notepad.exe", "calc.exe", "mspaint.exe"]
+            .into_iter()
+            .zip(["Bloc-notes", "Calculatrice", "Paint"])
+            .map(|(exe, name)| Game { name: name.into(), id: String::new(), exe: exe.into(), args: vec![], cover: String::new(), anticheat: false, uri: None, store: String::new() })
+            .collect();
+    }
+    games
 }
-
 fn with_shell(f: impl FnOnce(&Shell)) {
     SHELL.with(|s| {
         if let Some(s) = s.borrow().as_ref() {
@@ -537,9 +575,11 @@ impl Shell {
     fn refresh_lang(&self) {
         let cats: Vec<SharedString> = settings::cats().into_iter().map(Into::into).collect();
         self.ui.set_cats(Rc::new(VecModel::from(cats)).into());
-        let stores: Vec<StoreEntry> = stores::all()
+        let stores: Vec<StoreEntry> = self
+            .store_status
+            .borrow()
             .iter()
-            .map(|s| StoreEntry { name: s.name().into(), status: tr(if s.status() == stores::Status::Soon { "Bientôt disponible" } else { "Non connecté" }).into() })
+            .map(|(n, found, count)| StoreEntry { name: n.as_str().into(), status: if *found { format!("{count} {}", tr("jeux installés")) } else { tr("Non détecté") }.into() })
             .collect();
         self.ui.set_stores(Rc::new(VecModel::from(stores)).into());
         // Pas avant la création de la fenêtre : COM multithread sur ce thread ferait échouer winit.
@@ -550,6 +590,9 @@ impl Shell {
 
     /// Fond animé (arrêté quand la console n'est pas devant : économise le CPU en jeu) et pictogrammes.
     fn animate(&self, phase: &Cell<f32>) {
+        if self.ui.get_tab() == 1 && self.loaded_store.get() != Some(self.ui.get_ssel() as usize) {
+            self.load_offers(self.ui.get_ssel() as usize);
+        }
         let pad = input::last_pad() as i32;
         if self.ui.global::<Pad>().get_kind() != pad {
             self.ui.global::<Pad>().set_kind(pad);
@@ -576,4 +619,109 @@ fn hue_of(name: &str) -> slint::Color {
     };
     let m = v - c;
     slint::Color::from_rgb_u8(((r + m) * 255.0) as u8, ((g + m) * 255.0) as u8, ((b + m) * 255.0) as u8)
+}
+
+fn hero_of(g: &Game) -> slint::Image {
+    match stores::asset(&g.id, "hero") {
+        Some(p) => slint::Image::load_from_path(&p).unwrap_or_default(),
+        None => cover_of(g),
+    }
+}
+
+/// Images des offres, téléchargées en parallèle (mises en cache sur disque).
+fn fetch_all(offers: &[stores::Offer]) -> Vec<Option<PathBuf>> {
+    let mut out = vec![None; offers.len()];
+    std::thread::scope(|sc| {
+        for (o, slots) in offers.chunks(4).zip(out.chunks_mut(4)) {
+            sc.spawn(move || {
+                for (offer, slot) in o.iter().zip(slots) {
+                    *slot = stores::fetch_image(&offer.image);
+                }
+            });
+        }
+    });
+    out
+}
+
+impl Shell {
+    fn load_offers(&self, i: usize) {
+        self.loaded_store.set(Some(i));
+        self.ui.set_osel(0);
+        self.ui.set_brow(0);
+        let name = stores::all().get(i).map(|s| s.name()).unwrap_or("");
+        self.ui.set_offers_title(format!("{} · {name}", tr("À la une")).into());
+        if let Some((offers, paths)) = self.featured.borrow().get(&i) {
+            self.apply_offers(offers, paths);
+            return;
+        }
+        self.offers.set_vec(vec![]);
+        self.offer_data.borrow_mut().clear();
+        self.ui.set_offers_state("loading".into());
+        std::thread::spawn(move || {
+            let Some(store) = stores::all().into_iter().nth(i) else { return };
+            let offers = store.featured();
+            let paths = fetch_all(&offers);
+            let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.offers_ready(i, offers, paths)));
+        });
+    }
+
+    fn offers_ready(&self, i: usize, offers: Vec<stores::Offer>, paths: Vec<Option<PathBuf>>) {
+        if self.ui.get_ssel() as usize == i {
+            self.apply_offers(&offers, &paths);
+        }
+        self.featured.borrow_mut().insert(i, (offers, paths));
+    }
+
+    fn apply_offers(&self, offers: &[stores::Offer], paths: &[Option<PathBuf>]) {
+        let rows: Vec<Offer> = offers
+            .iter()
+            .zip(paths)
+            .map(|(o, p)| Offer {
+                title: o.title.as_str().into(),
+                price: if o.price == "Gratuit" { tr("Gratuit") } else { o.price.clone() }.into(),
+                art: p.as_ref().and_then(|p| slint::Image::load_from_path(p).ok()).unwrap_or_default(),
+            })
+            .collect();
+        *self.offer_data.borrow_mut() = offers.to_vec();
+        self.ui.set_offers_state(if rows.is_empty() { "empty" } else { "" }.into());
+        self.offers.set_vec(rows);
+    }
+
+    fn show_offer(&self, i: usize) {
+        let Some(o) = self.offer_data.borrow().get(i).cloned() else { return };
+        if let Some((w, h, px)) = stores::qr::rgb(&o.url, 8) {
+            let buf = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::clone_from_slice(&px, w, h);
+            self.ui.set_qr(slint::Image::from_rgb8(buf));
+            self.ui.set_qr_title(o.title.into());
+            self.ui.set_qr_url(o.url.into());
+            self.ui.set_zone(5);
+        }
+    }
+
+    /// Télécharge en arrière-plan les visuels manquants des jeux des boutiques.
+    fn start_art(&self) {
+        let ids: Vec<(usize, String)> = self.games.iter().enumerate().filter(|(_, g)| !g.store.is_empty()).map(|(i, g)| (i, g.id.clone())).collect();
+        if ids.is_empty() {
+            return;
+        }
+        let key = i18n::pref("steamgriddb_key").or_else(|| std::env::var("HEARTH_SGDB_KEY").ok());
+        std::thread::spawn(move || {
+            let games = stores::installed();
+            for (i, id) in ids {
+                if let Some(g) = games.iter().find(|g| g.id == id) {
+                    if stores::ensure_art(g, key.as_deref()) {
+                        let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.reload_art(i)));
+                    }
+                }
+            }
+        });
+    }
+
+    fn reload_art(&self, i: usize) {
+        if let (Some(g), Some(mut t)) = (self.games.get(i), self.tiles.row_data(i)) {
+            t.cover = cover_of(g);
+            t.hero = hero_of(g);
+            self.tiles.set_row_data(i, t);
+        }
+    }
 }
