@@ -12,7 +12,7 @@ use crate::i18n::{self, tr};
 use crate::SettingRow;
 
 pub fn cats() -> Vec<String> {
-    ["Son", "Affichage", "Wi-Fi", "Bluetooth", "Manettes", "Langue", "Mises à jour", "Stockage"].iter().map(|c| tr(c)).collect()
+    ["Son", "Affichage", "Wi-Fi", "Bluetooth", "Manettes", "Langue", "Mises à jour", "Stockage", "Pilotes"].iter().map(|c| tr(c)).collect()
 }
 const CONFIRM_SECS: u32 = 15;
 
@@ -26,6 +26,8 @@ pub struct Fetched {
     wifi_err: String,
     drives: Vec<system::storage::Drive>,
     update: String,
+    update_drv: String,
+    gpus: Vec<system::drivers::Gpu>,
 }
 
 pub fn fetch(cat: i32) -> Fetched {
@@ -37,12 +39,13 @@ pub fn fetch(cat: i32) -> Fetched {
         3 => Fetched { bt_on: system::radio_ext::bluetooth_on(), ..Default::default() },
         4 => Fetched { pads: system::pads::names(), ..Default::default() },
         7 => Fetched { drives: system::storage::drives(), ..Default::default() },
+        8 => Fetched { gpus: system::drivers::gpus(), ..Default::default() },
         _ => Fetched::default(),
     }
 }
 
 pub fn needs_fetch(cat: i32) -> bool {
-    (2..=4).contains(&cat) || cat == 7
+    (2..=4).contains(&cat) || cat == 7 || cat == 8
 }
 
 /// Ce que le shell doit faire après une action.
@@ -53,7 +56,7 @@ pub enum Outcome {
     Password(String),
     Connect(String),
     LangChanged,
-    CheckUpdates,
+    CheckUpdates(bool),
 }
 
 pub enum Kb {
@@ -187,6 +190,7 @@ impl Settings {
                         row("Résolution", s.res.get(s.ri).map_or("—".into(), |r| format!("{} × {}", r.0, r.1)), s.res.len() > 1),
                         row("Fréquence", s.hzs.get(s.hi).map_or("—".into(), |z| format!("{z} Hz")), s.hzs.len() > 1),
                         row("Appliquer", String::new(), false),
+                        row("Fond animé", onoff(Some(i18n::anim())), false),
                     ]
                 }
             },
@@ -217,6 +221,12 @@ impl Settings {
             5 => vec![row("Langue", i18n::LANGS[i18n::lang()].1.into(), true)],
             6 => vec![row("Windows Update", if s.loading { tr("Recherche en cours…") } else if s.data.update.is_empty() { tr("Rechercher des mises à jour") } else { s.data.update.clone() }, false)],
             7 if s.loading => vec![row("Lecture…", String::new(), false)],
+            8 if s.loading => vec![row("Détection du matériel…", String::new(), false)],
+            8 => {
+                let mut v: Vec<SettingRow> = s.data.gpus.iter().map(|g| row(&g.name, format!("{} {} {}", g.vendor, tr("pilote"), g.version), false)).collect();
+                v.push(row("Pilotes Windows Update", if s.data.update_drv.is_empty() { tr("Rechercher des mises à jour") } else { s.data.update_drv.clone() }, false));
+                v
+            }
             7 => s.data.drives.iter().map(|d| row(&d.name, format!("{} {} {} {}", gb(d.free), tr("libres sur"), gb(d.total), if d.removable { "(USB)" } else { "" }), false)).collect(),
             _ => vec![],
         };
@@ -256,6 +266,7 @@ impl Settings {
                 }
                 _ => {}
             },
+            (1, 3, 0) if s.revert.is_none() => i18n::set_anim(!i18n::anim()),
             (1, 0, 0) => s.revert = None, // garder
             (1, 1, 0) => {
                 if let Some((prev, _)) = s.revert.take() {
@@ -282,7 +293,11 @@ impl Settings {
             }
             (6, 0, 0) if !s.loading => {
                 s.loading = true;
-                out = Outcome::CheckUpdates;
+                out = Outcome::CheckUpdates(false);
+            }
+            (8, r, 0) if !s.loading && r as usize == s.data.gpus.len() => {
+                s.loading = true;
+                out = Outcome::CheckUpdates(true);
             }
             (3, 0, 0) if !s.loading => {
                 if let Some(on) = s.data.bt_on {
@@ -369,13 +384,18 @@ fn gb(bytes: u64) -> String {
 
 impl Settings {
     /// Résultat d'une recherche Windows Update (appelé sur le thread UI).
-    pub fn set_update(&self, r: Result<i32, String>) {
+    pub fn set_update(&self, drivers: bool, r: Result<i32, String>) {
         let mut s = self.state.borrow_mut();
         s.loading = false;
-        s.data.update = match r {
+        let text = match r {
             Ok(0) => tr("À jour"),
             Ok(n) => format!("{n} {}", tr("disponible(s)")),
             Err(e) => e,
         };
+        if drivers {
+            s.data.update_drv = text;
+        } else {
+            s.data.update = text;
+        }
     }
 }

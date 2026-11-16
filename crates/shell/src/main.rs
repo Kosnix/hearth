@@ -129,7 +129,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let s = shell.clone();
     let phase = Cell::new(0.0f32);
     let anim = slint::Timer::default();
-    anim.start(slint::TimerMode::Repeated, Duration::from_millis(66), move || s.animate(&phase));
+    anim.start(slint::TimerMode::Repeated, Duration::from_millis(160), move || s.animate(&phase));
 
     // Le menu guide est créé une fois puis affiché/masqué en Win32, sans jamais prendre le focus
     // (un jeu plein écran qui perd le focus se réduit et clignote).
@@ -284,13 +284,13 @@ impl Shell {
             }
             settings::Outcome::Connect(ssid) => self.connect(ssid, None),
             settings::Outcome::LangChanged => self.refresh_lang(),
-            settings::Outcome::CheckUpdates => {
+            settings::Outcome::CheckUpdates(drivers) => {
                 std::thread::spawn(move || {
-                    let r = system::updates::pending();
+                    let r = if drivers { system::updates::pending_drivers() } else { system::updates::pending() };
                     let _ = slint::invoke_from_event_loop(move || {
                         with_shell(|s| {
-                            s.settings.set_update(r);
-                            s.open_cat_keep(6);
+                            s.settings.set_update(drivers, r);
+                            s.open_cat_keep(if drivers { 8 } else { 6 });
                         })
                     });
                 });
@@ -553,8 +553,8 @@ impl Shell {
             self.ui.global::<Pad>().set_kind(pad);
             self.guide.global::<Pad>().set_kind(pad);
         }
-        if wm::find_window(MAIN_TITLE).is_some_and(|h| h == wm::foreground()) {
-            phase.set((phase.get() + 0.4) % 3600.0);
+        if i18n::anim() && self.ui.get_zone() < 3 && wm::find_window(MAIN_TITLE).is_some_and(|h| h == wm::foreground()) {
+            phase.set((phase.get() + 0.8) % 3600.0);
             self.ui.set_phase(phase.get());
         }
     }

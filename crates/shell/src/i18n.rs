@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub const LANGS: [(&str, &str); 2] = [("fr", "Français"), ("en", "English")];
 
 static LANG: AtomicUsize = AtomicUsize::new(0);
+static ANIM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 const EN: &[(&str, &str)] = &[
     ("Son", "Sound"),
@@ -37,6 +38,11 @@ const EN: &[(&str, &str)] = &[
     ("s'est fermé", "has closed"),
     ("Impossible de lancer", "Cannot launch"),
     ("Bientôt disponible", "Coming soon"),
+    ("Pilotes", "Drivers"),
+    ("pilote", "driver"),
+    ("Pilotes Windows Update", "Windows Update drivers"),
+    ("Détection du matériel…", "Detecting hardware…"),
+    ("Fond animé", "Animated background"),
     ("Windows exige l'autorisation de localisation pour lister les réseaux Wi-Fi.", "Windows requires location permission to list Wi-Fi networks."),
     ("Mises à jour", "Updates"),
     ("Stockage", "Storage"),
@@ -70,6 +76,7 @@ pub fn init() {
     let saved = std::fs::read_to_string(file())
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(s.trim_start_matches('\u{feff}')).ok())
+        .inspect(|v| ANIM.store(v["anim"].as_bool().unwrap_or(true), Ordering::Relaxed))
         .and_then(|v| v["lang"].as_str().map(String::from));
     let code = saved.unwrap_or_else(system_lang);
     set(LANGS.iter().position(|(c, _)| *c == code).unwrap_or(0), false);
@@ -87,6 +94,19 @@ pub fn set(i: usize, save: bool) {
     let r = slint::select_bundled_translation(LANGS[i].0);
     let _ = std::fs::write(file().with_file_name("lang.log"), format!("{r:?}"));
     if save {
-        let _ = std::fs::write(file(), format!("{{\"lang\":\"{}\"}}", LANGS[i].0));
+        persist();
     }
+}
+
+pub fn anim() -> bool {
+    ANIM.load(Ordering::Relaxed)
+}
+
+pub fn set_anim(on: bool) {
+    ANIM.store(on, Ordering::Relaxed);
+    persist();
+}
+
+fn persist() {
+    let _ = std::fs::write(file(), format!("{{\"lang\":\"{}\",\"anim\":{}}}", LANGS[lang()].0, anim()));
 }

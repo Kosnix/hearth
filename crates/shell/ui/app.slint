@@ -278,17 +278,17 @@ export component App inherits Window {
         background: Theme.bg;
     }
     Rectangle {
-        x: -200px + 420px * sin(phase * 1deg);
-        y: -150px + 160px * cos(phase * 1.3deg);
-        width: 1700px;
-        height: 1200px;
+        x: -100px + 220px * sin(phase * 1deg);
+        y: -100px + 120px * cos(phase * 1.3deg);
+        width: 1300px;
+        height: 950px;
         background: @radial-gradient(circle, #7d9cff48 0%, #7d9cff00 70%);
     }
     Rectangle {
-        x: parent.width - 1400px - 380px * cos(phase * 0.8deg);
-        y: parent.height - 1000px + 200px * sin(phase * 1.1deg);
-        width: 1700px;
-        height: 1200px;
+        x: parent.width - 1300px - 200px * cos(phase * 0.8deg);
+        y: parent.height - 900px + 110px * sin(phase * 1.1deg);
+        width: 1300px;
+        height: 950px;
         background: @radial-gradient(circle, #9a6bff40 0%, #9a6bff00 70%);
     }
 

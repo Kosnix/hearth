@@ -332,12 +332,21 @@ pub mod updates {
 
     /// Nombre de mises à jour logicielles en attente (Windows Update). Bloquant, parfois long.
     pub fn pending() -> Result<i32, String> {
+        search("IsInstalled=0 and Type='Software' and IsHidden=0")
+    }
+
+    /// Pilotes proposés par Windows Update (chipset, périphériques ; la carte graphique passe par les sources du constructeur).
+    pub fn pending_drivers() -> Result<i32, String> {
+        search("IsInstalled=0 and Type='Driver' and IsHidden=0")
+    }
+
+    fn search(query: &str) -> Result<i32, String> {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             let s: IUpdateSession = CoCreateInstance(&UpdateSession, None, CLSCTX_INPROC_SERVER).map_err(|e| e.to_string())?;
             let r = s
                 .CreateUpdateSearcher()
-                .and_then(|u| u.Search(&BSTR::from("IsInstalled=0 and Type='Software' and IsHidden=0")))
+                .and_then(|u| u.Search(&BSTR::from(query)))
                 .map_err(|e| e.to_string())?;
             r.Updates().and_then(|u| u.Count()).map_err(|e| e.to_string())
         }
@@ -463,5 +472,47 @@ mod netsh {
             }
         }
         false
+    }
+}
+
+pub mod drivers {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    pub struct Gpu {
+        pub name: String,
+        pub version: String,
+        pub vendor: &'static str,
+    }
+
+    fn vendor(pnp: &str) -> &'static str {
+        let p = pnp.to_uppercase();
+        if p.contains("VEN_10DE") {
+            "NVIDIA"
+        } else if p.contains("VEN_1002") {
+            "AMD"
+        } else if p.contains("VEN_8086") {
+            "Intel"
+        } else {
+            ""
+        }
+    }
+
+    /// Cartes graphiques et version de pilote installée (détection PnP via WMI).
+    pub fn gpus() -> Vec<Gpu> {
+        let script = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name + '|' + $_.DriverVersion + '|' + $_.PNPDeviceID }";
+        let out = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .creation_flags(0x0800_0000)
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        out.lines()
+            .filter_map(|l| {
+                let mut p = l.trim().split('|');
+                let (name, version, pnp) = (p.next()?, p.next()?, p.next()?);
+                (!name.is_empty()).then(|| Gpu { name: name.into(), version: version.into(), vendor: vendor(pnp) })
+            })
+            .collect()
     }
 }
