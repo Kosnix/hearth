@@ -6,7 +6,9 @@ use windows::core::{w, PCSTR};
 use windows::Gaming::Input::{GameControllerSwitchPosition as Hat, Gamepad, GamepadButtons, RawGameController};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
+use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::Input::XboxController::{XInputGetState, XINPUT_STATE};
+use windows::Win32::UI::WindowsAndMessaging::{PeekMessageW, MSG, PM_REMOVE, WM_HOTKEY};
 
 /// L'ordre (valeurs entières) est partagé avec l'UI Slint (`nav(int)`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,9 +58,13 @@ pub fn spawn(on_nav: impl Fn(Nav) + Send + 'static) {
         unsafe { RoInitialize(RO_INIT_MULTITHREADED).ok() };
         let get_state = xinput_get_state_ex().unwrap_or(xinput_get_state);
         let mut xinput = XInput { get_state, connected: [true; 4], tick: 0 };
+        register_hotkeys();
         let mut prev = 0u16;
         let mut next_repeat = Instant::now();
         loop {
+            while let Some(nav) = poll_hotkey() {
+                on_nav(nav);
+            }
             let cur = read_wgi() | read_sony() | xinput.read();
             let pressed = cur & !prev;
             for (bit, nav) in MAP {
@@ -81,6 +87,35 @@ pub fn spawn(on_nav: impl Fn(Nav) + Send + 'static) {
             thread::sleep(POLL);
         }
     });
+}
+
+/// Ctrl+Alt+Maj + touche = bouton de manette, quel que soit le focus : permet de piloter
+/// et tester la console sans manette (scripts : SendKeys "^%+{UP}", "^%+g"…).
+const HOTKEYS: [(VIRTUAL_KEY, Nav); 8] = [
+    (VK_UP, Nav::Up),
+    (VK_DOWN, Nav::Down),
+    (VK_LEFT, Nav::Left),
+    (VK_RIGHT, Nav::Right),
+    (VK_RETURN, Nav::Accept),
+    (VK_BACK, Nav::Back),
+    (VK_G, Nav::Guide),
+    (VK_M, Nav::Menu),
+];
+
+fn register_hotkeys() {
+    let mods = MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT;
+    for (i, (vk, _)) in HOTKEYS.iter().enumerate() {
+        // Rattachés à la file de messages de ce thread (pas de fenêtre).
+        let _ = unsafe { RegisterHotKey(None, i as i32, mods, vk.0 as u32) };
+    }
+}
+
+fn poll_hotkey() -> Option<Nav> {
+    let mut msg = MSG::default();
+    unsafe { PeekMessageW(&mut msg, None, WM_HOTKEY, WM_HOTKEY, PM_REMOVE) }
+        .as_bool()
+        .then(|| HOTKEYS.get(msg.wParam.0).map(|(_, n)| *n))
+        .flatten()
 }
 
 /// XInputGetStateEx (ordinal 100, non documenté) expose le bouton guide.

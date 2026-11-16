@@ -181,7 +181,16 @@ impl Shell {
                 self.home();
             }
             Some((tile, false)) => self.open_guide(tile),
-            None => self.home(),
+            None => {
+                // Depuis la console, avec un jeu en arrière-plan : son menu (le seul moyen de
+                // fermer un jeu en plein écran exclusif, qui n'a pas d'overlay).
+                let in_console = wm::find_window(MAIN_TITLE).is_some_and(|h| h == fg);
+                let last = self.running.borrow().last().map(|r| r.tile);
+                match last {
+                    Some(tile) if in_console => self.open_guide(tile),
+                    _ => self.home(),
+                }
+            }
         }
     }
 

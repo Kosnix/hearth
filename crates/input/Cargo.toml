@@ -10,5 +10,7 @@ features = [
   "Gaming_Input",
   "Win32_System_LibraryLoader",
   "Win32_System_WinRT",
+  "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_Input_XboxController",
+  "Win32_UI_WindowsAndMessaging",
 ]
