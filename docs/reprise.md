@@ -7,9 +7,9 @@
 - UI : `crates/shell/ui/app.slint` (Theme, accueil façon PS5, Réglages zone 3, clavier virtuel zone 4, GuideMenu). Logique des réglages : `crates/shell/src/settings.rs`. Langues : `crates/shell/src/i18n.rs` + `crates/shell/lang/*/LC_MESSAGES/hearth-shell.po` (les `@tr` Slint ont pour contexte le nom du composant : `App`, `GameTile`, `GuideMenu` ; ajouter chaque nouveau texte aux trois contextes).
 - Rendu Slint logiciel forcé ; animation du fond ~22 % d'un cœur sur l'Optiplex.
 
-## Outillage de test (important)
+## Outillage de test
 - Raccourcis de test : Ctrl+Alt+Maj+F1..F8 (`Press up/down/left/right/enter/back/g/m`).
-- Un ancien `hearth.exe`/`hearth-shell.exe` administrateur (lancé pendant les tests SSH) tourne encore, verrouille `app\hearth-shell.exe` et masque notre fenêtre. Je ne peux pas l'arrêter (élévation refusée). `Dev` (dans `tools/dev.ps1`) compile et lance `target\release\hearth-shell.exe` avec `HEARTH_DEV_TOPMOST=1` pour contourner. **Après une déconnexion/redémarrage de l'utilisateur**, ces processus disparaissent : refaire `target\release\hearth.exe install` puis `Deploy`.
+
 
 ## Limites connues
 - Wi-Fi : Windows 11 exige l'autorisation de localisation pour toute lecture Wi-Fi (WinRT et `netsh`) ; sans elle la liste est vide et un message l'explique. Activer les services de localisation = réglage système à faire avec l'accord de l'utilisateur (ou à l'installation).

@@ -69,6 +69,8 @@ fn main() -> Result<(), slint::PlatformError> {
         .iter()
         .map(|g| Tile {
             name: g.name.as_str().into(),
+            initial: g.name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default().into(),
+            hue: hue_of(&g.name),
             cover: cover_of(g),
             running: false,
         })
@@ -558,4 +560,20 @@ impl Shell {
             self.ui.set_phase(phase.get());
         }
     }
+}
+
+/// Teinte stable par jeu (bleus/violets/turquoises, en harmonie avec le thème) pour les tuiles sans visuel.
+fn hue_of(name: &str) -> slint::Color {
+    let h = name.bytes().fold(7u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
+    let hue = 190.0 + (h % 120) as f32; // 190..310°
+    let (s, v) = (0.55f32, 0.85f32);
+    let c = v * s;
+    let x = c * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
+    let (r, g, b) = match (hue / 60.0) as u32 {
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    slint::Color::from_rgb_u8(((r + m) * 255.0) as u8, ((g + m) * 255.0) as u8, ((b + m) * 255.0) as u8)
 }

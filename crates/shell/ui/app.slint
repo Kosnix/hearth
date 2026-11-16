@@ -3,6 +3,8 @@
 
 export struct Tile {
     name: string,
+    initial: string,
+    hue: color,
     cover: image,
     running: bool,
 }
@@ -83,7 +85,7 @@ component GameTile inherits Rectangle {
     Rectangle {
         border-radius: 18px;
         clip: true;
-        background: @linear-gradient(135deg, #4b63b8 0%, #2b3566 100%);
+        background: @linear-gradient(135deg, tile.hue 0%, tile.hue.darker(0.75) 100%);
         Image {
             width: 100%;
             height: 100%;
@@ -91,13 +93,22 @@ component GameTile inherits Rectangle {
             image-fit: cover;
         }
         if tile.cover.width == 0: Text {
-            width: parent.width - 32px;
+            x: parent.width - self.width - 14px;
+            y: parent.height - self.height + 18px;
+            text: tile.initial;
+            color: #ffffff30;
+            font-size: 190px;
+            font-weight: 800;
+        }
+        if tile.cover.width == 0: Text {
+            x: 20px;
+            y: 20px;
+            width: parent.width - 40px;
             text: tile.name;
             color: Theme.text;
-            font-size: 28px;
+            font-size: 26px;
             font-weight: 700;
             wrap: word-wrap;
-            horizontal-alignment: center;
         }
         if tile.running: Rectangle {
             x: 12px;
@@ -308,12 +319,27 @@ export component App inherits Window {
         height: parent.height * 0.62;
         background: @linear-gradient(90deg, #35468f 0%, #35468f00 70%);
     }
+    // Pas de visuel : grand halo teinté et initiale géante à droite.
+    if tab == 0 && games.length > 0 && games[sel].cover.width == 0: Rectangle {
+        x: parent.width * 0.50;
+        y: 60px;
+        width: 1000px;
+        height: 1000px;
+        border-radius: 500px;
+        background: @radial-gradient(circle, games[sel].hue.with-alpha(0.65) 0%, games[sel].hue.with-alpha(0) 70%);
+        Text {
+            text: games[sel].initial;
+            font-size: 560px;
+            font-weight: 800;
+            color: #ffffff1c;
+        }
+    }
     if tab == 0: Text {
         x: 80px;
         y: 260px;
-        width: parent.width * 0.5;
+        width: parent.width * 0.62;
         text: games.length > 0 ? games[sel].name : @tr("Aucun jeu");
-        font-size: 88px;
+        font-size: games.length > 0 && games[sel].name.character-count > 16 ? 64px : 88px;
         font-weight: 800;
         color: Theme.text;
         overflow: elide;
@@ -390,7 +416,8 @@ export component App inherits Window {
         width: stores.length * 440px;
         height: 300px;
         for s[i] in stores: StoreCard {
-            x: i * 440px;
+            x: i * 440px + (i > ssel && zone == 0 ? 40px : 0px);
+            animate x { duration: 120ms; }
             y: i == ssel && zone == 0 ? 0px : 15px;
             store: s;
             selected: zone == 0 && i == ssel;
@@ -532,7 +559,14 @@ export component App inherits Window {
             background: i != cat ? transparent : sfocus == 0 ? Theme.accent : Theme.glass;
             animate background { duration: 100ms; }
             Text {
-                x: 28px;
+                x: 26px;
+                text: ["\u{E767}", "\u{E7F4}", "\u{E701}", "\u{E702}", "\u{E7FC}", "\u{E774}", "\u{E895}", "\u{EDA2}", "\u{E950}"][i];
+                font-family: Theme.icons;
+                font-size: 28px;
+                color: i == cat ? Theme.text : Theme.dim;
+            }
+            Text {
+                x: 84px;
                 text: c;
                 font-size: 28px;
                 color: i == cat ? Theme.text : Theme.dim;

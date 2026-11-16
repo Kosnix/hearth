@@ -94,12 +94,17 @@ fn install() -> Result<String, String> {
     }
     let exe = dst.join("hearth.exe");
     set_string(WINLOGON, "Shell", &exe.to_string_lossy()).map_err(|e| e.to_string())?;
-    let ps = format!(
-        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Desktop')+'\\Mode console.lnk');\
-         $s.TargetPath='{}';$s.Arguments='console';$s.Save()",
-        exe.display()
-    );
-    let _ = Command::new("powershell").args(["-NoProfile", "-Command", &ps]).status();
+    let script = data_dir().join("shortcut.ps1");
+    // BOM : PowerShell 5.1 lit sinon le script en ANSI.
+    fs::write(&script, format!("\u{feff}{}", include_str!("shortcut.ps1"))).map_err(|e| e.to_string())?;
+    let _ = Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .arg("-Exe")
+        .arg(&exe)
+        .arg("-Icon")
+        .arg(data_dir().join("hearth.ico"))
+        .status();
     Ok(format!("Installé dans {}. Actif à la prochaine ouverture de session.", dst.display()))
 }
 
