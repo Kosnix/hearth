@@ -308,7 +308,8 @@ fn games_file() -> PathBuf {
 // ponytail: liste manuelle en attendant les connecteurs de boutiques (phase 5).
 fn load_games() -> Vec<Game> {
     if let Ok(s) = std::fs::read_to_string(games_file()) {
-        if let Ok(games) = serde_json::from_str(&s) {
+        // Notepad et PowerShell ajoutent souvent un BOM, que serde_json refuse.
+        if let Ok(games) = serde_json::from_str(s.trim_start_matches('\u{feff}')) {
             return games;
         }
     }
