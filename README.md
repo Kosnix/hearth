@@ -18,7 +18,35 @@ Shell console de jeu pour Windows 10/11 : remplace `explorer.exe` et transforme 
 cargo build --release
 ```
 
-Les instructions d'installation et de retour au bureau seront ajoutées avec la phase 1.
+Binaires produits dans `target\release\` :
+
+| Binaire | Rôle |
+|---|---|
+| `hearth.exe` | Superviseur, déclaré comme shell Windows. Lance `hearth-shell.exe` et le relance s'il plante (5 plantages en 60 s : repli sur le bureau). |
+| `hearth-shell.exe` | Interface console plein écran (Slint). |
+
+## Installer / désinstaller (utilisateur courant)
+
+```
+hearth.exe install     # copie dans %LOCALAPPDATA%\Hearth\app et remplace explorer pour cet utilisateur
+hearth.exe uninstall   # rétablit explorer
+```
+
+Effet à la prochaine ouverture de session. Fonctionne sur Famille/Pro (clé `HKCU\...\Winlogon\Shell`).
+Secours si l'interface ne s'affiche pas : Ctrl+Alt+Suppr → Gestionnaire des tâches → Exécuter `explorer`.
+
+## Utilisation
+
+- Manette : croix/stick = naviguer, A = valider, B = retour, Guide = accueil. Clavier : flèches, Entrée, Échap, Début.
+- **Bureau** (icône du bas) : ouvre le bureau Windows. Le raccourci « Mode console » du bureau (`hearth.exe console`) ramène à la console.
+- Jeux (provisoire, avant les boutiques) : `%LOCALAPPDATA%\Hearth\games.json`
+
+```json
+[{ "name": "Mon jeu", "exe": "C:\\Jeux\\jeu.exe", "args": [], "cover": "C:\\Jeux\\cover.png" }]
+```
+
+- Journal du superviseur : `%LOCALAPPDATA%\Hearth\supervisor.log`.
+- Style : toutes les couleurs et tailles sont dans `Theme` (`crates/shell/ui/app.slint`).
 
 ## Machine de test (dev)
 

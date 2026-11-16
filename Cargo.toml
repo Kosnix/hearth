@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/input", "crates/shell", "crates/supervisor"]
+
+[workspace.dependencies]
+windows = "0.62"
+input = { path = "crates/input" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort" # le superviseur relance le shell
