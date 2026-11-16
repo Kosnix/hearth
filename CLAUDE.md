@@ -28,3 +28,5 @@ Hearth est installé comme shell de ce compte (`hearth.exe install`) : pas d'exp
 - Un jeu qui change la résolution (SDL/OpenGL `--fullscreen`) n'est pas signalé « D3D plein écran » : détecté via `EnumDisplaySettings` courant ≠ registre (`wm::exclusive_fullscreen`).
 - L'overlay du guide ne doit jamais prendre le focus (WS_EX_NOACTIVATE, affichage par `SetWindowPos` + `SWP_NOACTIVATE`) : sinon le jeu plein écran se réduit et clignote.
 - `games.json` peut contenir un BOM (PowerShell/Notepad) : il est retiré avant `serde_json`.
+- Slint : avec le design actuel, le rendu femtovg (GPU) ne se redessine plus après la première image sur l'Optiplex ; le shell force `SLINT_BACKEND=winit-software`.
+- `tools/dev.ps1` : ne pas écrire `Deploy | Select -First n` (le pipeline interrompt le déploiement) ; `Press` ne doit pas être enchaîné deux fois sur « enter » sur une tuile déjà lancée.

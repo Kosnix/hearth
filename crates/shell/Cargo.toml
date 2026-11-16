@@ -10,7 +10,7 @@ serde_json.workspace = true
 system.workspace = true
 wm.workspace = true
 slint = { version = "1.19", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "renderer-software", "accessibility"] }
-windows = { workspace = true, features = ["Win32_System_Power"] }
+windows = { workspace = true, features = ["Win32_System_Power", "Win32_System_SystemInformation"] }
 
 [build-dependencies]
 slint-build = "1.19"

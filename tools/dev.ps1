@@ -47,6 +47,7 @@ function Deploy {
 }
 
 function Press([string]$key, [int]$wait = 600) {
+    if ($key -eq 'back') { $key = 'backspace' }
     $k = if ($key.Length -eq 1) { $key } else { "{$($key.ToUpper())}" }
     $script:Ws.SendKeys("^%+$k")
     Start-Sleep -Milliseconds $wait

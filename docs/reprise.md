@@ -1,18 +1,19 @@
-# Reprise – état au 16/11/2026, 20 h 50
+# Reprise – état au 16/11/2026, 21 h 45
 
-Note de passage entre sessions Claude. À lire après `CLAUDE.md` et `PHASES.md`.
+À lire après `CLAUDE.md` et `PHASES.md`.
 
 ## Où on en est
-- Phases 1 et 2 codées et validées. Phase 2 validée sur SuperTuxKart (tuiles `--windowed` et `--fullscreen`) en test autonome : lancement, PS → overlay sans perte de focus, Reprendre, Accueil, PS sur la console, Fermer → retour console.
-- Jeu de test : SuperTuxKart 1.5 dans `C:\Games\SuperTuxKart\...\build-x86_64\bin\supertuxkart.exe` ; `%LOCALAPPDATA%\Hearth\games.json` a 3 tuiles (SuperTuxKart, SuperTuxKart plein écran natif, mintty).
-- Raccourcis Ctrl+Alt+Maj (`Press` dans `tools/dev.ps1`) : ils fonctionnaient ; la vraie cause des échecs était la fenêtre du guide non masquée au démarrage (elle captait la navigation). Corrigé dans `shell/src/main.rs` (timer de réessai).
-- Piège outillage : ne pas écrire `Deploy | Select -First n` (le pipeline interrompt le déploiement). Ne pas enchaîner deux `Press enter` sur une tuile en cours (ça refocalise le jeu).
+- Phases 1 et 2 validées. Design de référence appliqué (`docs/design.md`).
+- Phase 3a/3b faites : écran Réglages (Son : sortie audio, volume ; Affichage : résolution, fréquence, confirmation 15 s avec retour automatique). Code : `crates/shell/src/settings.rs`, `crates/system/src/lib.rs` (audio, display), `app.slint` (zone 3).
+- Rendu logiciel Slint forcé (femtovg ne se redessinait plus).
+
+## À faire ensuite
+1. Phase 3c : Wi-Fi (liste, connexion avec clavier virtuel manette), Bluetooth, manettes. Ne jamais couper le Wi-Fi de la machine.
+2. 3d : alimentation, Windows Update contrôlé. 3e : stockage.
+3. Valider avec l'utilisateur le rendu visuel (l'image de référence d'origine n'est connue que par les notes de `docs/design.md`).
 
 ## Problèmes ouverts
-1. Un ancien `hearth.exe` administrateur verrouille `app\hearth.exe` (disparaît à la déconnexion) ; `Deploy` ne remplace que `hearth-shell.exe`.
-2. Le volume lu dans le menu guide affichait 0 % lors d'un test (100 % avant) : à vérifier.
-3. Bande d'environ 22 px en haut où la console ne couvre pas la fenêtre derrière (vue sur captures).
-4. Pas encore testé : jeu avec anti-triche, vrai plein écran exclusif.
-
-## Ensuite
-Proposer le plan de la phase 3 (réglages système) et attendre la validation de l'utilisateur.
+- Ancien `hearth.exe` administrateur verrouillant `app\hearth.exe` (disparaît à la déconnexion).
+- Volume système à 0 % observé (réglé par les tests) : à remettre à un niveau normal si besoin.
+- Bascule de sortie audio non testée (une seule sortie). Anti-triche et plein écran exclusif réel non testés.
+- Le menu guide (GuideMenu) n'est pas encore restylé en détail (seulement les couleurs du Theme).

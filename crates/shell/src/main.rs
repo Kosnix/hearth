@@ -9,6 +9,8 @@ use std::time::Duration;
 use input::Nav;
 use slint::{ComponentHandle, Model, SharedString, VecModel};
 
+mod settings;
+
 slint::include_modules!();
 
 /// Code de sortie lu par le superviseur : ouvrir le bureau Windows.
@@ -46,11 +48,14 @@ struct Shell {
     notes: Rc<VecModel<SharedString>>,
     running: RefCell<Vec<Running>>,
     guide_tile: Cell<usize>,
+    settings: Rc<settings::Settings>,
 }
 
 fn main() -> Result<(), slint::PlatformError> {
     // set_fullscreen() avant run() est ignoré par winit : plein écran dès la création.
     std::env::set_var("SLINT_FULLSCREEN", "1");
+    // ponytail: femtovg cesse de se redessiner avec ce design (constaté sur l'Optiplex) ; rendu logiciel.
+    std::env::set_var("SLINT_BACKEND", "winit-software");
     let games = load_games();
     let tiles: Vec<Tile> = games
         .iter()
@@ -68,9 +73,19 @@ fn main() -> Result<(), slint::PlatformError> {
         notes: Rc::new(VecModel::default()),
         running: RefCell::new(Vec::new()),
         guide_tile: Cell::new(0),
+        settings: settings::Settings::new(),
     });
     shell.ui.set_games(shell.tiles.clone().into());
     shell.guide.set_notes(shell.notes.clone().into());
+    shell.ui.set_cats(Rc::new(VecModel::from(settings::CATS.map(SharedString::from).to_vec())).into());
+    shell.ui.set_rows(shell.settings.rows.clone().into());
+    shell.ui.set_user(std::env::var("USERNAME").unwrap_or_default().into());
+    shell.set_clock();
+
+    let s = shell.clone();
+    shell.ui.on_open_cat(move|c| s.open_cat(c));
+    let s = shell.clone();
+    shell.ui.on_setting(move|c, r, d| s.setting(c, r, d));
 
     let s = shell.clone();
     shell.ui.on_launch(move |i| s.launch(i as usize));
@@ -198,6 +213,37 @@ impl Shell {
         }
     }
 
+    fn open_cat(&self, cat: i32) {
+        let hint = self.settings.open(cat);
+        self.ui.set_shint(hint.into());
+    }
+
+    fn setting(&self, cat: i32, row: i32, delta: i32) {
+        if self.settings.act(cat, row, delta) {
+            self.display_changed();
+        }
+        self.open_cat_keep(cat);
+    }
+
+    /// Rafraîchit les lignes sans recharger les données (garde les choix en cours).
+    fn open_cat_keep(&self, cat: i32) {
+        let hint = self.settings.refresh(cat);
+        self.ui.set_shint(hint.into());
+        let max = self.settings.row_count().saturating_sub(1) as i32;
+        self.ui.set_srow(self.ui.get_srow().min(max));
+    }
+
+    fn display_changed(&self) {
+        if let Some(h) = wm::find_window(MAIN_TITLE) {
+            wm::fit_to_monitor(h);
+        }
+    }
+
+    fn set_clock(&self) {
+        let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+        self.ui.set_clock(format!("{:02}:{:02}", t.wHour, t.wMinute).into());
+    }
+
     fn home(&self) {
         if let Some(h) = wm::find_window(MAIN_TITLE) {
             // Un jeu qui a changé la résolution a pu rétrécir notre fenêtre : on la recale.
@@ -287,6 +333,13 @@ impl Shell {
 
     /// Chaque seconde : jeux terminés, et ré-application du sans-bordure (certains jeux le retirent).
     fn tick(&self) {
+        self.set_clock();
+        if self.settings.tick() {
+            self.display_changed();
+            self.open_cat_keep(self.ui.get_cat());
+        } else if self.settings.confirming() {
+            self.open_cat_keep(self.ui.get_cat());
+        }
         let ended: Vec<usize> = {
             let mut running = self.running.borrow_mut();
             let ended = running.iter().filter(|r| !r.session.alive()).map(|r| r.tile).collect();

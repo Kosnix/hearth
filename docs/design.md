@@ -1,6 +1,6 @@
 # Direction visuelle (référence fournie le 2026-11-16)
 
-Image de référence : style « TV launcher » épuré. À appliquer quand le design sera traité (pas en phase 1).
+Image de référence : style « TV launcher » épuré. Appliqué le 2026-11-16 dans `crates/shell/ui/app.slint` (Theme).
 
 - Fond : dégradé vertical bleu (#3d5a99 environ en haut) vers indigo/violet foncé (#2a2166 environ en bas). Plat, sans texture.
 - En-tête : avatar rond + nom du profil à gauche ; icône Wi-Fi + heure à droite. Texte blanc, petite taille.
