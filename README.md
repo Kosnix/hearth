@@ -19,3 +19,8 @@ cargo build --release
 ```
 
 Les instructions d'installation et de retour au bureau seront ajoutées avec la phase 1.
+
+## Machine de test (dev)
+
+- `tools/enable-ssh.cmd` : à double-cliquer une fois sur la machine de test (active OpenSSH, autorise la clé de dev).
+- Le code est poussé dans un dépôt nu `C:\dev\hearth.git` (remote `optiplex`) ; copie de travail : `C:\dev\hearth`.
