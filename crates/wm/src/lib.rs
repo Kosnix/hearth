@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 
 use windows::core::{HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, LPARAM, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+use windows::Win32::Graphics::Gdi::{
+    EnumDisplaySettingsW, GetMonitorInfoW, MonitorFromWindow, DEVMODEW, ENUM_CURRENT_SETTINGS, ENUM_REGISTRY_SETTINGS,
+    MONITORINFO, MONITOR_DEFAULTTONEAREST,
+};
 use windows::Win32::System::JobObjects::*;
 use windows::Win32::System::Threading::*;
 use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
@@ -166,17 +169,29 @@ pub fn make_borderless(h: HWND) {
         if r.right - r.left < MIN_W || r.bottom - r.top < MIN_H {
             return;
         }
-        let m = monitor_rect(h);
+        // Seules la barre de titre et la bordure comptent : un jeu plein écran garde souvent
+        // WS_MINIMIZEBOX/WS_SYSMENU sur une fenêtre WS_POPUP, et il ne faut pas y toucher.
         let style = GetWindowLongPtrW(h, GWL_STYLE) as u32;
-        let frame = (WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX).0;
-        let same = (r.left, r.top, r.right, r.bottom) == (m.left, m.top, m.right, m.bottom);
-        if style & frame == 0 && same {
+        if style & (WS_CAPTION | WS_THICKFRAME).0 == 0 {
             return;
         }
+        let frame = (WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX).0;
         let ex = GetWindowLongPtrW(h, GWL_EXSTYLE) as u32;
         let ex_frame = (WS_EX_DLGMODALFRAME | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_WINDOWEDGE).0;
         SetWindowLongPtrW(h, GWL_STYLE, (style & !frame) as isize);
         SetWindowLongPtrW(h, GWL_EXSTYLE, (ex & !ex_frame) as isize);
+        fit(h, SWP_FRAMECHANGED);
+    }
+}
+
+/// Cale la fenêtre sur tout son écran (sans toucher à son style).
+pub fn fit_to_monitor(h: HWND) {
+    fit(h, SET_WINDOW_POS_FLAGS(0));
+}
+
+fn fit(h: HWND, extra: SET_WINDOW_POS_FLAGS) {
+    let m = monitor_rect(h);
+    unsafe {
         let _ = SetWindowPos(
             h,
             None,
@@ -184,23 +199,73 @@ pub fn make_borderless(h: HWND) {
             m.top,
             m.right - m.left,
             m.bottom - m.top,
-            SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOOWNERZORDER,
+            extra | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE,
         );
     }
 }
 
-/// Un jeu Direct3D est en plein écran exclusif : ni modification ni overlay possibles.
+/// Le jeu a pris l'écran pour lui : Direct3D exclusif, ou résolution de l'écran changée
+/// (OpenGL/SDL « plein écran » classique). Ni modification ni overlay dans ce cas.
 pub fn exclusive_fullscreen() -> bool {
-    unsafe { SHQueryUserNotificationState() }.is_ok_and(|s| s == QUNS_RUNNING_D3D_FULL_SCREEN)
+    unsafe { SHQueryUserNotificationState() }.is_ok_and(|s| s == QUNS_RUNNING_D3D_FULL_SCREEN) || display_mode_changed()
+}
+
+fn display_mode_changed() -> bool {
+    let mode = |which| {
+        let mut dm = DEVMODEW { dmSize: size_of::<DEVMODEW>() as u16, ..Default::default() };
+        unsafe { EnumDisplaySettingsW(PCWSTR::null(), which, &mut dm) }.as_bool().then_some((dm.dmPelsWidth, dm.dmPelsHeight))
+    };
+    match (mode(ENUM_CURRENT_SETTINGS), mode(ENUM_REGISTRY_SETTINGS)) {
+        (Some(cur), Some(reg)) => cur != reg,
+        _ => false,
+    }
 }
 
 pub fn foreground() -> HWND {
     unsafe { GetForegroundWindow() }
 }
 
-// ponytail: recherche par titre exact ; suffisant tant que le shell n'a que deux fenêtres.
+/// Fenêtre de notre propre processus portant ce titre.
 pub fn find_window(title: &str) -> Option<HWND> {
-    unsafe { FindWindowW(PCWSTR::null(), &HSTRING::from(title)) }.ok()
+    let me = std::process::id();
+    top_windows().into_iter().find(|&h| {
+        let mut pid = 0;
+        unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
+        let mut buf = [0u16; 128];
+        let n = unsafe { GetWindowTextW(h, &mut buf) } as usize;
+        pid == me && String::from_utf16_lossy(&buf[..n]) == title
+    })
+}
+
+/// Overlay : style d'une fenêtre qui ne prend jamais le focus et n'apparaît pas dans Alt+Tab.
+pub fn make_overlay(h: HWND) {
+    unsafe {
+        let ex = GetWindowLongPtrW(h, GWL_EXSTYLE) as u32;
+        SetWindowLongPtrW(h, GWL_EXSTYLE, (ex | (WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST).0) as isize);
+    }
+}
+
+/// Affiche l'overlay par-dessus tout sans voler le focus au jeu.
+pub fn show_overlay(h: HWND, x: i32, y: i32, w: i32, height: i32) {
+    unsafe {
+        let _ = SetWindowPos(h, Some(HWND_TOPMOST), x, y, w, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+}
+
+pub fn hide(h: HWND) {
+    unsafe {
+        let _ = ShowWindow(h, SW_HIDE);
+    }
+}
+
+pub fn is_visible(h: HWND) -> bool {
+    unsafe { IsWindowVisible(h).as_bool() }
+}
+
+/// Rectangle de l'écran principal (pixels physiques).
+pub fn primary_monitor() -> (i32, i32, i32, i32) {
+    let m = monitor_rect(unsafe { GetDesktopWindow() });
+    (m.left, m.top, m.right - m.left, m.bottom - m.top)
 }
 
 /// Windows refuse SetForegroundWindow à un processus en arrière-plan, sauf s'il vient

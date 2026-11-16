@@ -98,6 +98,19 @@ fn main() -> Result<(), slint::PlatformError> {
     let tick = slint::Timer::default();
     tick.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || s.tick());
 
+    // Le menu guide est créé une fois puis affiché/masqué en Win32, sans jamais prendre le focus
+    // (un jeu plein écran qui perd le focus se réduit et clignote).
+    shell.guide.show()?;
+    slint::Timer::single_shot(Duration::ZERO, || {
+        if let Some(h) = wm::find_window(GUIDE_TITLE) {
+            wm::make_overlay(h);
+            wm::hide(h);
+        }
+        if let Some(h) = wm::find_window(MAIN_TITLE) {
+            wm::focus(h);
+        }
+    });
+
     // Rc n'est pas Send : le thread manette retrouve le Shell via un thread_local du thread UI.
     SHELL.with(|s| *s.borrow_mut() = Some(shell.clone()));
     input::spawn(|nav| {
@@ -139,7 +152,7 @@ impl Shell {
     }
 
     fn on_nav(&self, nav: Nav) {
-        if self.guide.window().is_visible() {
+        if wm::find_window(GUIDE_TITLE).is_some_and(wm::is_visible) {
             if nav == Nav::Guide {
                 self.guide_action(-1, 0);
             } else {
@@ -148,7 +161,11 @@ impl Shell {
             return;
         }
         if nav != Nav::Guide {
-            self.ui.invoke_nav(nav as i32);
+            // La manette est lue même en arrière-plan : n'agir que si la console est visible
+            // au premier plan, sinon on navigue à l'aveugle (jusqu'à « Veille »…).
+            if wm::find_window(MAIN_TITLE).is_some_and(|h| h == wm::foreground()) {
+                self.ui.invoke_nav(nav as i32);
+            }
             return;
         }
         let fg = wm::foreground();
@@ -170,6 +187,8 @@ impl Shell {
 
     fn home(&self) {
         if let Some(h) = wm::find_window(MAIN_TITLE) {
+            // Un jeu qui a changé la résolution a pu rétrécir notre fenêtre : on la recale.
+            wm::fit_to_monitor(h);
             wm::focus(h);
         }
         self.ui.invoke_nav(Nav::Guide as i32);
@@ -182,16 +201,12 @@ impl Shell {
         self.guide.set_closing(closing);
         self.guide.set_sel(0);
         self.guide.set_volume(system::audio::volume().map_or(-1, |v| v as i32));
-        let scale = self.ui.window().scale_factor();
-        let height = self.ui.window().size().height;
-        self.guide.window().set_position(slint::PhysicalPosition::new(0, 0));
-        self.guide.window().set_size(slint::PhysicalSize::new((GUIDE_WIDTH * scale) as u32, height));
-        let _ = self.guide.show();
-        slint::Timer::single_shot(Duration::from_millis(50), || {
-            if let Some(h) = wm::find_window(GUIDE_TITLE) {
-                wm::focus(h);
-            }
-        });
+        if let Some(h) = wm::find_window(GUIDE_TITLE) {
+            let (x, y, _, height) = wm::primary_monitor();
+            let width = (GUIDE_WIDTH * self.ui.window().scale_factor()) as i32;
+            wm::show_overlay(h, x, y, width, height);
+            self.guide.window().request_redraw();
+        }
         // DDC/CI et WinRT sont lents : lecture en arrière-plan.
         let g = self.guide.as_weak();
         std::thread::spawn(move || {
@@ -209,20 +224,20 @@ impl Shell {
         let game = || self.running.borrow().iter().find(|r| r.tile == tile).and_then(|r| r.session.main_window());
         match (item, delta) {
             (-1, _) | (0, 0) => {
-                let _ = self.guide.hide();
+                self.hide_guide();
                 if let Some(h) = game() {
                     wm::focus(h);
                 }
             }
             (1, 0) => {
-                let _ = self.guide.hide();
+                self.hide_guide();
                 if let Some(h) = game() {
                     wm::minimize(h);
                 }
                 self.home();
             }
             (2, 0) => {
-                let _ = self.guide.hide();
+                self.hide_guide();
                 let mut running = self.running.borrow_mut();
                 if let Some(r) = running.iter_mut().find(|r| r.tile == tile) {
                     if r.closing {
@@ -271,7 +286,7 @@ impl Shell {
         }
         if !ended.is_empty() {
             if ended.contains(&self.guide_tile.get()) {
-                let _ = self.guide.hide();
+                self.hide_guide();
             }
             let fg = wm::foreground();
             if !self.running.borrow().iter().any(|r| r.session.owns(fg)) {
@@ -282,6 +297,12 @@ impl Shell {
         let fix = self.running.borrow().iter().any(|r| !r.hands_off && r.session.owns(fg));
         if fix && wm::is_main_window(fg) && !wm::exclusive_fullscreen() {
             wm::make_borderless(fg);
+        }
+    }
+
+    fn hide_guide(&self) {
+        if let Some(h) = wm::find_window(GUIDE_TITLE) {
+            wm::hide(h);
         }
     }
 
