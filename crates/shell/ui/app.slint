@@ -3,11 +3,13 @@
 export struct Tile {
     name: string,
     cover: image,
+    running: bool,
 }
 
 export global Theme {
     out property <color> bg: #0b0d12;
     out property <color> panel: #161a22e6;
+    out property <color> panel-solid: #161a22;
     out property <color> tile: #222834;
     out property <color> accent: #4c8dff;
     out property <color> text: #f2f4f8;
@@ -40,6 +42,19 @@ component GameTile inherits Rectangle {
         font-size: 22px;
         wrap: word-wrap;
         horizontal-alignment: center;
+    }
+    if tile.running: Rectangle {
+        x: 10px;
+        y: 10px;
+        width: badge.preferred-width + 16px;
+        height: 28px;
+        border-radius: 14px;
+        background: Theme.accent;
+        badge := Text {
+            text: "En cours";
+            font-size: 14px;
+            color: Theme.text;
+        }
     }
     Rectangle {
         border-radius: 10px;
@@ -75,6 +90,21 @@ component SysButton inherits Rectangle {
     }
     TouchArea {
         clicked => { root.clicked(); }
+    }
+}
+
+// Clavier (debug) -> mêmes actions que la manette.
+component NavKeys inherits FocusScope {
+    callback nav(int);
+    key-pressed(e) => {
+        if (e.text == Key.UpArrow) { root.nav(0); return accept; }
+        if (e.text == Key.DownArrow) { root.nav(1); return accept; }
+        if (e.text == Key.LeftArrow) { root.nav(2); return accept; }
+        if (e.text == Key.RightArrow) { root.nav(3); return accept; }
+        if (e.text == Key.Return) { root.nav(4); return accept; }
+        if (e.text == Key.Escape) { root.nav(5); return accept; }
+        if (e.text == Key.Home) { root.nav(6); return accept; }
+        reject
     }
 }
 
@@ -118,17 +148,8 @@ export component App inherits Window {
         }
     }
 
-    keys := FocusScope {
-        key-pressed(e) => {
-            if (e.text == Key.UpArrow) { root.nav(0); return accept; }
-            if (e.text == Key.DownArrow) { root.nav(1); return accept; }
-            if (e.text == Key.LeftArrow) { root.nav(2); return accept; }
-            if (e.text == Key.RightArrow) { root.nav(3); return accept; }
-            if (e.text == Key.Return) { root.nav(4); return accept; }
-            if (e.text == Key.Escape) { root.nav(5); return accept; }
-            if (e.text == Key.Home) { root.nav(6); return accept; }
-            reject
-        }
+    keys := NavKeys {
+        nav(a) => { root.nav(a); }
     }
 
     // Fond dynamique : jaquette du jeu sélectionné.
@@ -220,6 +241,88 @@ export component App inherits Window {
                     }
                 }
             }
+        }
+    }
+}
+
+// Menu guide : panneau latéral affiché par-dessus le jeu.
+export component GuideMenu inherits Window {
+    in property <string> game;
+    in property <bool> closing;
+    in property <int> volume: -1; // %, -1 = indisponible
+    in property <int> brightness: -1;
+    in property <int> wifi: -1; // -1 indisponible, 0 coupé, 1 actif
+    in property <[string]> notes;
+    in-out property <int> sel: 0;
+    // item (0 reprendre, 1 accueil, 2 fermer, 3 volume, 4 luminosité, 5 wifi ; -1 = fermer le menu),
+    // delta : 0 valider, -1/+1 gauche/droite
+    callback action(int, int);
+
+    title: "Hearth Guide";
+    no-frame: true;
+    always-on-top: true;
+    background: Theme.panel-solid;
+    forward-focus: keys;
+
+    public function nav(a: int) {
+        if (a == 0) { sel = max(0, sel - 1); }
+        else if (a == 1) { sel = min(5, sel + 1); }
+        else if (a == 2) { action(sel, -1); }
+        else if (a == 3) { action(sel, 1); }
+        else if (a == 4) { action(sel, 0); }
+        else if (a == 5 || a == 6) { action(-1, 0); }
+    }
+
+    keys := NavKeys {
+        nav(a) => { root.nav(a); }
+    }
+
+    VerticalLayout {
+        padding: 32px;
+        spacing: 10px;
+        Text {
+            text: game;
+            font-size: 28px;
+            font-weight: 600;
+            color: Theme.text;
+            wrap: word-wrap;
+        }
+        Rectangle { height: 12px; }
+        for item[i] in [
+            "Reprendre",
+            "Accueil",
+            closing ? "Forcer la fermeture" : "Fermer le jeu",
+            "Volume  ‹ " + (volume < 0 ? "—" : volume + " %") + " ›",
+            "Luminosité  ‹ " + (brightness < 0 ? "—" : brightness + " %") + " ›",
+            "Wi-Fi : " + (wifi < 0 ? "—" : wifi == 1 ? "activé" : "coupé"),
+        ]: Rectangle {
+            height: 56px;
+            border-radius: 10px;
+            background: i == sel ? Theme.accent : transparent;
+            Text {
+                x: 16px;
+                text: item;
+                font-size: 20px;
+                color: Theme.text;
+            }
+            TouchArea {
+                clicked => {
+                    root.sel = i;
+                    root.action(i, 0);
+                }
+            }
+        }
+        Rectangle { }
+        Text {
+            text: "Notifications";
+            font-size: 16px;
+            color: Theme.dim;
+        }
+        for n in notes: Text {
+            text: n;
+            font-size: 15px;
+            color: Theme.text;
+            wrap: word-wrap;
         }
     }
 }

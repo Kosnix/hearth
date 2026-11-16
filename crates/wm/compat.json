@@ -1,0 +1,20 @@
+{
+  "FortniteClient-Win64-Shipping.exe": { "anticheat": true },
+  "r5apex.exe": { "anticheat": true },
+  "r5apex_dx12.exe": { "anticheat": true },
+  "VALORANT-Win64-Shipping.exe": { "anticheat": true },
+  "League of Legends.exe": { "anticheat": true },
+  "RainbowSix.exe": { "anticheat": true },
+  "RainbowSix_BE.exe": { "anticheat": true },
+  "TslGame.exe": { "anticheat": true },
+  "EscapeFromTarkov.exe": { "anticheat": true },
+  "destiny2.exe": { "anticheat": true },
+  "eldenring.exe": { "anticheat": true },
+  "DeadByDaylight-Win64-Shipping.exe": { "anticheat": true },
+  "GTA5.exe": { "anticheat": true },
+  "GTA5_Enhanced.exe": { "anticheat": true },
+  "FallGuys_client_game.exe": { "anticheat": true },
+  "Overwatch.exe": { "anticheat": true },
+  "cod.exe": { "anticheat": true },
+  "cs2.exe": { "anticheat": true }
+}
