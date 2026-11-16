@@ -36,7 +36,7 @@ $script:Ws = New-Object -ComObject WScript.Shell
 
 function Deploy {
     cargo build --release 2>&1 | Select-String '^error|^warning|-->|Finished'
-    Get-Process hearth-shell -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-Process hearth, hearth-shell -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Get-CimInstance Win32_Process -Filter "Name like 'hearth%'" | Where-Object ExecutablePath |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     for ($i = 0; $i -lt 20 -and (Get-Process hearth-shell -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 250 }
@@ -48,9 +48,14 @@ function Deploy {
 }
 
 function Press([string]$key, [int]$wait = 600) {
-    $map = @{ up = 'F1'; down = 'F2'; left = 'F3'; right = 'F4'; enter = 'F5'; back = 'F6'; g = 'F7'; m = 'F8' }
-    $k = "{$($map[$key])}"
-    $script:Ws.SendKeys("^%+$k")
+    $idx = @{ up = 0; down = 1; left = 2; right = 3; enter = 4; back = 5; g = 6; m = 7 }[$key]
+    # F1..F8 (0x70..) ; instance de dev : F13..F20 (0x7C..), que SendKeys ne sait pas envoyer.
+    $base = 0x70; if ($env:HEARTH_DEV_TOPMOST) { $base = 0x7C }
+    $vk = $base + $idx
+    foreach ($m in 0x11, 0x12, 0x10) { [HearthDev]::keybd_event($m, 0, 0, [UIntPtr]::Zero) }
+    [HearthDev]::keybd_event($vk, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 40
+    [HearthDev]::keybd_event($vk, 0, 2, [UIntPtr]::Zero)
+    foreach ($m in 0x10, 0x12, 0x11) { [HearthDev]::keybd_event($m, 0, 2, [UIntPtr]::Zero) }
     Start-Sleep -Milliseconds $wait
 }
 

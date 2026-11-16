@@ -40,6 +40,7 @@ fn supervise() {
     let event = unsafe { CreateEventW(None, false, false, CONSOLE_EVENT) }.expect("CreateEventW");
     let mut crashes: Vec<Instant> = Vec::new();
     loop {
+        apply_staged();
         let code = Command::new(&shell).status().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
         if code == EXIT_DESKTOP {
             log("retour au bureau demandé");
@@ -169,5 +170,17 @@ fn log(msg: &str) {
     if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(data_dir().join("supervisor.log")) {
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let _ = writeln!(f, "{t} {msg}");
+    }
+}
+
+/// Met à jour le shell depuis `app\staged\` (déposé par `deploy`) : la copie se fait ici, avant le lancement,
+/// car un shell en cours d'exécution verrouille son exécutable.
+fn apply_staged() {
+    let staged = data_dir().join("app").join("staged").join(SHELL_EXE);
+    if staged.exists() {
+        match fs::rename(&staged, exe_dir().join(SHELL_EXE)).or_else(|_| fs::copy(&staged, exe_dir().join(SHELL_EXE)).map(|_| ()).and_then(|_| fs::remove_file(&staged))) {
+            Ok(()) => log("shell mis à jour depuis staged"),
+            Err(e) => log(&format!("mise à jour du shell impossible : {e}")),
+        }
     }
 }

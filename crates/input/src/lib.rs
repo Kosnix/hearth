@@ -113,10 +113,12 @@ const HOTKEYS: [(VIRTUAL_KEY, Nav); 8] = [
 ];
 
 fn register_hotkeys() {
+    // Test : HEARTH_DEV_TOPMOST décale les raccourcis sur F13..F20 (une autre instance peut garder F1..F8).
+    let shift = if std::env::var_os("HEARTH_DEV_TOPMOST").is_some() { 12 } else { 0 };
     let mods = MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT;
     for (i, (vk, _)) in HOTKEYS.iter().enumerate() {
         // Rattachés à la file de messages de ce thread (pas de fenêtre).
-        if let Err(e) = unsafe { RegisterHotKey(None, i as i32 + 1, mods, vk.0 as u32) } {
+        if let Err(e) = unsafe { RegisterHotKey(None, i as i32 + 1, mods, vk.0 as u32 + shift) } {
             let dir = std::env::var("LOCALAPPDATA").unwrap_or_default();
             let _ = std::fs::write(format!("{dir}\\Hearth\\hotkey-{i}.log"), format!("{e}"));
         }

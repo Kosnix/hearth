@@ -519,7 +519,7 @@ export component App inherits Window {
             height: on ? 420px : 360px;
             animate x, y, width, height { duration: 120ms; easing: ease-out; }
             Rectangle {
-                height: parent.height - 70px;
+                height: parent.height - 76px;
                 border-radius: 16px;
                 clip: true;
                 background: Theme.tile;
@@ -536,7 +536,7 @@ export component App inherits Window {
                 }
             }
             Text {
-                y: parent.height - 62px;
+                y: parent.height - 66px;
                 width: parent.width;
                 text: o.title;
                 font-size: 22px;
@@ -545,7 +545,7 @@ export component App inherits Window {
                 overflow: elide;
             }
             Text {
-                y: parent.height - 30px;
+                y: parent.height - 34px;
                 text: o.price;
                 font-size: 22px;
                 color: Theme.accent;

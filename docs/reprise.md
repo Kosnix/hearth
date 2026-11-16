@@ -21,3 +21,10 @@
 - Phase 5 : connecteurs Steam/Epic/GOG (QR code), SteamGridDB pour les visuels, file de téléchargements.
 - Phase 6 (profils : crée des comptes Windows locaux) : demander l'accord de l'utilisateur avant.
 - Phases 7 (portables) et 8 (mise à jour du shell).
+
+## Intégrations boutiques (17/11)
+- `crates/stores` : `Store` (detected/installed/featured), `http` (WinHTTP), `steam`/`epic`/`gog`, `art` (visuels + cache), `qr`. Sonde réseau : `cargo run -p stores --example probe`.
+- Shell : jeux des boutiques ajoutés à `load_games` (champs `id`, `store`, `uri`), téléchargement des visuels en tâche de fond (`start_art`), onglet Boutique (`load_offers`, `show_offer`, zone 5 = QR).
+- À tester avec de vrais clients installés : lecture des manifestes Steam/Epic, registre GOG, lancement `steam://`, SteamGridDB (clé à mettre dans `settings.json`). Connexion aux comptes (QR) : pas faite, les achats se font sur téléphone via le QR de la page produit.
+- Dev : `HEARTH_DEV_TOPMOST` décale aussi les raccourcis de test sur F13..F20 (`Press` s'adapte) ; des processus `hearth` élevés réapparaissent parfois et gardent F1..F8.
+- À la reprise : la copie installée (`%LOCALAPPDATA%\Hearth\app`) est l'ancienne version (des processus `hearth` élevés la verrouillaient à l'extinction du 17/11). Les binaires récents sont dans `app\staged\` ; après le redémarrage, lancer `Deploy` (ou `target\release\hearth.exe install` après arrêt des processus). Le superviseur récent applique aussi `app\staged\hearth-shell.exe` au démarrage.
