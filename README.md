@@ -45,6 +45,8 @@ Secours si l'interface ne s'affiche pas : Ctrl+Alt+Suppr → Gestionnaire des t�
 [{ "name": "Mon jeu", "exe": "C:\\Jeux\\jeu.exe", "args": [], "cover": "C:\\Jeux\\cover.png" }]
 ```
 
+- Pendant un jeu, **Guide/PS** ouvre le menu guide (reprendre, accueil, fermer le jeu, son, luminosité, Wi-Fi, notifications). Jeux anti-triche ou en plein écran exclusif : le jeu est réduit et la console revient, sans overlay.
+- Compatibilité par jeu : `crates/wm/compat.json` (`args`, `borderless`, `anticheat`, `ini`) ; dans `games.json`, `"anticheat": true` force le mode sans modification.
 - Journal du superviseur : `%LOCALAPPDATA%\Hearth\supervisor.log`.
 - Style : toutes les couleurs et tailles sont dans `Theme` (`crates/shell/ui/app.slint`).
 
