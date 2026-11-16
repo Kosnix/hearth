@@ -58,12 +58,10 @@ pub fn spawn(on_nav: impl Fn(Nav) + Send + 'static) {
         unsafe { RoInitialize(RO_INIT_MULTITHREADED).ok() };
         let get_state = xinput_get_state_ex().unwrap_or(xinput_get_state);
         let mut xinput = XInput { get_state, connected: [true; 4], tick: 0 };
-        register_hotkeys();
-        let mut prev = 0u16;
+        register_hotkeys();        let mut prev = 0u16;
         let mut next_repeat = Instant::now();
         loop {
-            while let Some(nav) = poll_hotkey() {
-                on_nav(nav);
+            while let Some(nav) = poll_hotkey() {                on_nav(nav);
             }
             let cur = read_wgi() | read_sony() | xinput.read();
             let pressed = cur & !prev;
@@ -106,7 +104,10 @@ fn register_hotkeys() {
     let mods = MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT;
     for (i, (vk, _)) in HOTKEYS.iter().enumerate() {
         // Rattachés à la file de messages de ce thread (pas de fenêtre).
-        let _ = unsafe { RegisterHotKey(None, i as i32, mods, vk.0 as u32) };
+        if let Err(e) = unsafe { RegisterHotKey(None, i as i32 + 1, mods, vk.0 as u32) } {
+            let dir = std::env::var("LOCALAPPDATA").unwrap_or_default();
+            let _ = std::fs::write(format!("{dir}\\Hearth\\hotkey-{i}.log"), format!("{e}"));
+        }
     }
 }
 
@@ -114,7 +115,7 @@ fn poll_hotkey() -> Option<Nav> {
     let mut msg = MSG::default();
     unsafe { PeekMessageW(&mut msg, None, WM_HOTKEY, WM_HOTKEY, PM_REMOVE) }
         .as_bool()
-        .then(|| HOTKEYS.get(msg.wParam.0).map(|(_, n)| *n))
+        .then(|| HOTKEYS.get(msg.wParam.0.wrapping_sub(1)).map(|(_, n)| *n))
         .flatten()
 }
 

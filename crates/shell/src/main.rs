@@ -101,13 +101,17 @@ fn main() -> Result<(), slint::PlatformError> {
     // Le menu guide est créé une fois puis affiché/masqué en Win32, sans jamais prendre le focus
     // (un jeu plein écran qui perd le focus se réduit et clignote).
     shell.guide.show()?;
-    slint::Timer::single_shot(Duration::ZERO, || {
+    // Les fenêtres natives n'existent pas forcément dès le premier tour : on réessaie.
+    let setup = Rc::new(slint::Timer::default());
+    let t = setup.clone();
+    setup.start(slint::TimerMode::Repeated, Duration::from_millis(50), move || {
         if let Some(h) = wm::find_window(GUIDE_TITLE) {
             wm::make_overlay(h);
             wm::hide(h);
-        }
-        if let Some(h) = wm::find_window(MAIN_TITLE) {
-            wm::focus(h);
+            if let Some(m) = wm::find_window(MAIN_TITLE) {
+                wm::focus(m);
+            }
+            t.stop();
         }
     });
 
