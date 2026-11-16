@@ -3,8 +3,8 @@
 | Phase | Sujet | État |
 |---|---|---|
 | 0 | Chaîne d'outils sur l'Optiplex, dépôt | ✅ Terminé |
-| 1 | Cœur du shell | Implémenté, testé à la manette (DualSense) ; reste le test en vraie session |
-| 2 | Encapsulation des fenêtres, menu guide | — |
+| 1 | Cœur du shell | ✅ Terminé |
+| 2 | Encapsulation des fenêtres, menu guide | Plan proposé, en attente de validation |
 | 3 | Réglages système | — |
 | 4 | Pilotes | — |
 | 5 | Bibliothèque et boutiques | — |
@@ -18,3 +18,4 @@
 - 2026-11-16 : chaîne d'outils installée sur l'Optiplex (Win 11 Pro Éducation 26200, Intel UHD 630) : Git 2.56, VS 2022 Build Tools (C++, ARM64), Rust 1.100 stable MSVC, cibles x86_64 et aarch64 validées par compilation.
 - 2026-11-16 : phase 1 implémentée (crates `input`, `shell`, `supervisor`). Mesuré sur l'Optiplex : démarrage ~100 ms jusqu'à la fenêtre, 31 Mo de mémoire privée, binaires sans warning. Validés : plein écran, relance après plantage, repli sur le bureau après 5 plantages, `hearth console`, install/uninstall, clés Game Bar. Reportés : Shell Launcher (Enterprise/IoT).
 - 2026-11-16 : DualSense prise en charge (RawGameController, bouton PS = guide) ; le guide ramène le shell au premier plan. Validé à la manette sur l'Optiplex.
+- 2026-11-16 : test en vraie session validé : Hearth remplace explorer à l'ouverture de session, « Bureau » ouvre le bureau complet (barre des tâches), « Mode console » ramène à la console. **Phase 1 terminée.**
