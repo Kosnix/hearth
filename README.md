@@ -37,7 +37,7 @@ Secours si l'interface ne s'affiche pas : Ctrl+Alt+Suppr → Gestionnaire des t�
 
 ## Utilisation
 
-- Manette : croix/stick = naviguer, A = valider, B = retour, Guide = accueil. Clavier : flèches, Entrée, Échap, Début.
+- Manette Xbox : croix/stick = naviguer, A = valider, B = retour, Guide = accueil. DualSense/DualShock 4 : ✕ = valider, ○ = retour, PS = accueil. Clavier : flèches, Entrée, Échap, Début.
 - **Bureau** (icône du bas) : ouvre le bureau Windows. Le raccourci « Mode console » du bureau (`hearth.exe console`) ramène à la console.
 - Jeux (provisoire, avant les boutiques) : `%LOCALAPPDATA%\Hearth\games.json`
 

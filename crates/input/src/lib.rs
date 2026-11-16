@@ -3,7 +3,7 @@
 use std::thread;
 use std::time::{Duration, Instant};
 use windows::core::{w, PCSTR};
-use windows::Gaming::Input::{Gamepad, GamepadButtons};
+use windows::Gaming::Input::{GameControllerSwitchPosition as Hat, Gamepad, GamepadButtons, RawGameController};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 use windows::Win32::UI::Input::XboxController::{XInputGetState, XINPUT_STATE};
@@ -59,7 +59,7 @@ pub fn spawn(on_nav: impl Fn(Nav) + Send + 'static) {
         let mut prev = 0u16;
         let mut next_repeat = Instant::now();
         loop {
-            let cur = read_wgi() | xinput.read();
+            let cur = read_wgi() | read_sony() | xinput.read();
             let pressed = cur & !prev;
             for (bit, nav) in MAP {
                 if pressed & bit != 0 {
@@ -118,6 +118,53 @@ fn read_wgi() -> u16 {
         bits |= stick(r.LeftThumbstickX, r.LeftThumbstickY);
     }
     bits
+}
+
+const SONY: u16 = 0x054C;
+
+/// DualShock 4 / DualSense (HID) : boutons 0 Carré, 1 Croix, 2 Rond, 9 Options, 12 PS ; chapeau 0 = croix ; axes 0/1 = stick gauche (0..1).
+// ponytail: seul le schéma Sony est mappé ; autres manettes HID en phase 4.
+fn read_sony() -> u16 {
+    let Ok(raws) = RawGameController::RawGameControllers() else { return 0 };
+    let mut bits = 0;
+    for raw in raws {
+        if raw.HardwareVendorId() != Ok(SONY) {
+            continue;
+        }
+        let (Ok(nb), Ok(ns), Ok(na)) = (raw.ButtonCount(), raw.SwitchCount(), raw.AxisCount()) else { continue };
+        let mut b = vec![false; nb as usize];
+        let mut s = vec![Hat::Center; ns as usize];
+        let mut a = vec![0.5; na as usize];
+        if raw.GetCurrentReading(&mut b, &mut s, &mut a).is_err() {
+            continue;
+        }
+        for (i, bit) in [(1, A), (2, B), (9, START), (12, GUIDE)] {
+            if b.get(i) == Some(&true) {
+                bits |= bit;
+            }
+        }
+        if let Some(h) = s.first() {
+            bits |= hat(*h);
+        }
+        if a.len() >= 2 {
+            bits |= stick((a[0] - 0.5) * 2.0, (0.5 - a[1]) * 2.0);
+        }
+    }
+    bits
+}
+
+fn hat(h: Hat) -> u16 {
+    match h {
+        Hat::Up => UP,
+        Hat::UpRight => UP | RIGHT,
+        Hat::Right => RIGHT,
+        Hat::DownRight => DOWN | RIGHT,
+        Hat::Down => DOWN,
+        Hat::DownLeft => DOWN | LEFT,
+        Hat::Left => LEFT,
+        Hat::UpLeft => UP | LEFT,
+        _ => 0,
+    }
 }
 
 struct XInput {

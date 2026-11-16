@@ -60,6 +60,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = weak.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = weak.upgrade() {
+                if nav == input::Nav::Guide {
+                    bring_to_front();
+                }
                 ui.invoke_nav(nav as i32);
             }
         });
@@ -85,4 +88,26 @@ fn load_games() -> Vec<Game> {
         .zip(["Bloc-notes", "Calculatrice", "Paint"])
         .map(|(exe, name)| Game { name: name.into(), exe: exe.into(), args: vec![], cover: String::new() })
         .collect()
+}
+
+/// Windows refuse SetForegroundWindow à un processus en arrière-plan, sauf s'il vient
+/// d'injecter une entrée : on maintient Alt le temps de l'appel.
+// ponytail: recherche par titre ; remplacée par le gestionnaire de fenêtres en phase 2.
+fn bring_to_front() {
+    use windows::core::w;
+    use windows::Win32::UI::Input::KeyboardAndMouse::*;
+    use windows::Win32::UI::WindowsAndMessaging::*;
+    unsafe {
+        let Ok(hwnd) = FindWindowW(None, w!("Hearth")) else { return };
+        let key = |flags| INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VK_MENU, dwFlags: flags, ..Default::default() } },
+        };
+        SendInput(&[key(KEYBD_EVENT_FLAGS(0))], size_of::<INPUT>() as i32);
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+        }
+        let _ = SetForegroundWindow(hwnd);
+        SendInput(&[key(KEYEVENTF_KEYUP)], size_of::<INPUT>() as i32);
+    }
 }
