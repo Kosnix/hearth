@@ -156,6 +156,7 @@ const EN: &[(&str, &str)] = &[
     ("Mise à jour disponible", "Update available"),
     ("Terminé", "Done"),
     ("Mo/s", "MB/s"),
+    ("Préparation de Steam…", "Preparing Steam…"),
     ("Démarrage de Steam…", "Starting Steam…"),
     ("Connectez-vous dans la fenêtre Steam (une seule fois), puis relancez le jeu", "Sign in in the Steam window (one time only), then launch the game again"),
     ("restant", "left"),

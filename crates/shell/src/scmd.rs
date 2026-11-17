@@ -385,7 +385,8 @@ fn active_status(d: &Dl) -> String {
 
 impl Shell {
     /// Les jeux installés par SteamCMD utilisent l'API Steam : ils plantent si le client n'est pas lancé et connecté.
-    /// Renvoie vrai si on peut lancer tout de suite ; sinon démarre Steam et relance le jeu quand il est prêt.
+    /// Renvoie vrai si on peut lancer tout de suite ; sinon prépare Steam (démarrage, superposition désactivée une fois)
+    /// et relance le jeu quand il est prêt.
     pub fn steam_ready(&self, i: usize, g: &crate::Game) -> bool {
         if let (Some(id), Some(dir)) = (g.id.strip_prefix("steam-"), std::path::Path::new(&g.exe).parent()) {
             let f = dir.join("steam_appid.txt");
@@ -393,17 +394,22 @@ impl Shell {
                 let _ = std::fs::write(f, id);
             }
         }
-        if stores::steam_client_user() != 0 {
+        let overlay_done = i18n::pref("steam_overlay_off").is_some();
+        if stores::steam_client_user() != 0 && overlay_done {
             self.steam_keep(30);
             return true;
         }
         if self.steam_wait.replace(true) {
             return false;
         }
-        stores::steam_client_start(true);
-        self.steam_keep(120);
-        self.push_notif("Steam", &tr("Démarrage de Steam…"));
+        self.push_notif("Steam", &tr("Préparation de Steam…"));
+        self.steam_keep(180);
         std::thread::spawn(move || {
+            // Une fois : on coupe la superposition Steam (elle s'ouvre avec le bouton guide en même temps que le menu de Hearth).
+            let patched = !overlay_done && stores::steam_disable_overlay();
+            if stores::steam_client_user() == 0 {
+                stores::steam_client_start(true);
+            }
             let ok = (0..40).any(|_| {
                 std::thread::sleep(Duration::from_secs(1));
                 stores::steam_client_user() != 0
@@ -411,6 +417,9 @@ impl Shell {
             let _ = slint::invoke_from_event_loop(move || {
                 with_shell(|s| {
                     s.steam_wait.set(false);
+                    if patched {
+                        i18n::set_pref("steam_overlay_off", "1");
+                    }
                     if ok {
                         s.launch(i);
                     } else {
@@ -424,6 +433,7 @@ impl Shell {
         false
     }
 }
+
 
 impl Shell {
     /// Pendant `secs` secondes, réduit la fenêtre du client Steam dès qu'il est connecté (il prend sinon le focus du jeu).

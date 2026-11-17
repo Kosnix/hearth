@@ -201,3 +201,4 @@ pub fn download(url: &str) -> Option<Vec<u8>> {
 }
 
 pub use steam::{client_start as steam_client_start, client_user as steam_client_user};
+pub use steam::disable_overlay as steam_disable_overlay;

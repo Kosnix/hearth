@@ -1,5 +1,6 @@
 //! Steam : bibliothèque installée via les manifestes locaux, catalogue via l'API publique de la boutique.
 
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
@@ -205,4 +206,62 @@ pub fn client_start(silent: bool) -> bool {
         c.arg("-silent");
     }
     c.spawn().is_ok()
+}
+
+fn steam_running() -> bool {
+    std::process::Command::new("tasklist")
+        .args(["/fi", "imagename eq steam.exe", "/nh"])
+        .creation_flags(0x0800_0000)
+        .output()
+        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).to_lowercase().contains("steam.exe"))
+}
+
+/// Désactive la superposition Steam en jeu (elle s'ouvre avec le bouton guide en même temps que le menu de Hearth).
+/// Steam réécrit sa configuration en se fermant : on l'arrête proprement, on modifie, l'appelant le relance. Bloquant.
+/// Renvoie faux si aucun compte n'a encore de configuration locale.
+pub fn disable_overlay() -> bool {
+    let Some(r) = root() else { return false };
+    let files: Vec<PathBuf> = std::fs::read_dir(r.join("userdata"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path().join("config").join("localconfig.vdf"))
+        .filter(|p| p.exists())
+        .collect();
+    if files.is_empty() {
+        return false;
+    }
+    if steam_running() {
+        let _ = std::process::Command::new(r.join("steam.exe")).arg("-shutdown").creation_flags(0x0800_0000).status();
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            if !steam_running() {
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+    for f in files {
+        let Ok(text) = std::fs::read_to_string(&f) else { continue };
+        if let Some(new) = patch_overlay(&text) {
+            let _ = std::fs::copy(&f, f.with_extension("vdf.hearth-bak"));
+            let _ = std::fs::write(&f, new);
+        }
+    }
+    true
+}
+
+/// Ajoute/force `"EnableGameOverlay" "0"` dans le bloc `"system"` de localconfig.vdf.
+fn patch_overlay(text: &str) -> Option<String> {
+    if let Some(i) = text.find("\"EnableGameOverlay\"") {
+        let line_end = text[i..].find('\n').map_or(text.len(), |n| i + n);
+        let line = &text[i..line_end];
+        if line.trim_end().ends_with("\"0\"") {
+            return None;
+        }
+        return Some(format!("{}\"EnableGameOverlay\"\t\t\"0\"{}", &text[..i], &text[line_end..]));
+    }
+    let key = text.to_lowercase().find("\"system\"")?;
+    let brace = key + text[key..].find('{')?;
+    Some(format!("{}\n\t\t\"EnableGameOverlay\"\t\t\"0\"{}", &text[..=brace], &text[brace + 1..]))
 }
