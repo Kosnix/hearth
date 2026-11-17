@@ -399,3 +399,31 @@ msgctxt "Splash"
 msgid "Lancement…"
 msgstr "Launching…"
 
+
+msgctxt "App"
+msgid "Aucun jeu installé"
+msgstr "No installed games"
+
+msgctxt "App"
+msgid "Ajoutez un jeu avec le bouton + en haut, ou installez-en un depuis la Bibliothèque ou la Boutique."
+msgstr "Add a game with the + button at the top, or install one from the Library or the Store."
+
+msgctxt "App"
+msgid "Bibliothèque"
+msgstr "Library"
+
+msgctxt "App"
+msgid "Aucun jeu à installer. Connectez vos comptes (Réglages > Comptes) pour retrouver vos achats."
+msgstr "No games to install. Sign in to your accounts (Settings > Accounts) to find your purchases."
+
+msgctxt "App"
+msgid "Options"
+msgstr "Options"
+
+msgctxt "App"
+msgid "Disponible sur"
+msgstr "Available on"
+
+msgctxt "App"
+msgid "Acheter (QR code)"
+msgstr "Buy (QR code)"

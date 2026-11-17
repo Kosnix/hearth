@@ -38,8 +38,8 @@ pub fn record(key: &str, secs: u64) {
 }
 
 /// « 12 h de jeu · dernière partie hier ».
-pub fn label(key: &str) -> String {
-    let Some(e) = load().get(key).copied() else { return String::new() };
+pub fn label_in(map: &HashMap<String, Entry>, key: &str) -> String {
+    let Some(e) = map.get(key).copied() else { return String::new() };
     if e.last == 0 {
         return String::new();
     }
@@ -55,6 +55,7 @@ pub fn label(key: &str) -> String {
 }
 
 /// Date de dernière partie (0 = jamais), pour trier la bibliothèque.
+#[allow(dead_code)]
 pub fn last(key: &str, map: &HashMap<String, Entry>) -> u64 {
     map.get(key).map_or(0, |e| e.last)
 }

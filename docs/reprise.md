@@ -22,3 +22,10 @@ Phases 1 à 3 faites, phase 4 (détection pilotes) faite, phase 5 largement avan
 - Installation des clients par winget : demande une confirmation d'administrateur (UAC) ; non lancée sur cette machine.
 - Phase 4 : sources NVIDIA/AMD/Intel et installation de pilotes. Phase 6 (comptes Windows locaux) : accord de l'utilisateur nécessaire. Phases 7 et 8 : à faire.
 - Volume système laissé à 20 % après les tests.
+
+## Mise à jour du 17/11 (soir)
+- Rendu Skia par défaut (`crates/shell/Cargo.toml` : `renderer-skia`). Repli logiciel : `HEARTH_BACKEND=winit-software`.
+- Onglets : 0 Jeux (installés), 1 Bibliothèque (possédés à installer), 2 Boutique. Barre du haut : `top` 0-2 onglets, 3 « + », 4 notifications, 5 réglages, 6 alimentation. Zones ajoutées : 7 fiche boutique, 9 menu contextuel.
+- `menus.rs` (options d'un jeu, menu « + »), `prefs.rs` (`overrides.json` : nom, caché), `Shell::rebuild()` reconstruit les deux listes de tuiles (le gid d'une tuile = indice dans `Shell::games`).
+- Assistant administrateur : `crates/system/src/admin.rs` (côté shell) + `setup-admin` / `elevated` dans `crates/supervisor/src/main.rs`. **Non testé** : demande une confirmation UAC la première fois (Réglages > Comptes > Autorisation administrateur, ou au premier « installer le client »).
+- Installer un jeu Steam : `steam://install/<id>` ouvre la fenêtre Steam, à valider à la souris (pas de mode silencieux).

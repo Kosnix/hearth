@@ -14,7 +14,7 @@ impl Store for Epic {
     }
 
     fn detected(&self) -> bool {
-        Path::new(MANIFESTS).exists()
+        Path::new(MANIFESTS).exists() || Path::new(r"C:\Program Files (x86)\Epic Games\Launcher").exists() || Path::new(r"C:\Program Files\Epic Games\Launcher").exists()
     }
 
     fn installed(&self) -> Vec<Game> {
@@ -46,7 +46,7 @@ impl Store for Epic {
 
     fn search(&self, query: &str) -> Vec<Offer> {
         let body = serde_json::json!({
-            "query": "query q($k:String,$c:String!,$l:String){Catalog{searchStore(keywords:$k,country:$c,locale:$l,count:20,category:\"games/edition/base|bundles/games|editors\"){elements{title productSlug urlSlug keyImages{type url} price(country:$c){totalPrice{discountPrice}}}}}}",
+            "query": "query q($k:String,$c:String!,$l:String){Catalog{searchStore(keywords:$k,country:$c,locale:$l,count:20,category:\"games/edition/base|bundles/games|editors\"){elements{title description productSlug urlSlug keyImages{type url} price(country:$c){totalPrice{discountPrice}}}}}}",
             "variables": { "k": query, "c": "FR", "l": "fr" }
         });
         let Some(j) = http::post_json("https://store.epicgames.com/graphql", &[], &body.to_string()) else { return vec![] };
@@ -75,5 +75,6 @@ fn offer(e: &serde_json::Value) -> Option<Offer> {
         .iter()
         .filter_map(|t| e["keyImages"].as_array()?.iter().find(|k| k["type"] == *t)?["url"].as_str().map(String::from))
         .collect();
-    Some(Offer { title, price, cents: fin, store: "Epic".into(), images, heroes, url })
+    let desc = e["description"].as_str().unwrap_or("").to_string();
+    Some(Offer { title, price, cents: fin, store: "Epic".into(), images, heroes, url, desc, ..Default::default() })
 }

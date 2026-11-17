@@ -11,7 +11,7 @@ mod steam;
 pub mod account;
 pub mod qr;
 
-pub use art::{asset, ensure_art, fetch_first, save_art};
+pub use art::{asset, clear_art, ensure_art, ensure_art_for, fetch_first, save_art};
 
 /// Façon de lancer un jeu.
 #[derive(Clone, Debug)]
@@ -58,6 +58,28 @@ pub struct Offer {
     pub heroes: Vec<String>,
     /// Page de la boutique (encodée en QR code pour l'achat sur téléphone).
     pub url: String,
+    /// Description et genres/date, quand la boutique les donne dans ses listes.
+    pub desc: String,
+    pub meta: String,
+    /// Une entrée par boutique qui le propose (renseigné par la fusion), la moins chère d'abord.
+    pub deals: Vec<Deal>,
+}
+
+/// Prix d'un jeu dans une boutique donnée.
+#[derive(Clone, Debug, Default)]
+pub struct Deal {
+    pub store: String,
+    pub price: String,
+    pub cents: Option<i64>,
+    pub url: String,
+}
+
+/// Fiche détaillée d'un jeu (récupérée à la demande).
+#[derive(Clone, Debug, Default)]
+pub struct Details {
+    pub desc: String,
+    pub meta: String,
+    pub shots: Vec<String>,
 }
 
 pub trait Store: Send + Sync {
@@ -81,11 +103,15 @@ pub fn installed() -> Vec<Game> {
 }
 
 fn norm(title: &str) -> String {
-    title.chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect()
+    let mut t = title.to_lowercase();
+    for w in ["standard edition", "deluxe edition", "ultimate edition", "gold edition", "complete edition", "definitive edition", "game of the year edition", "goty edition", "digital edition"] {
+        t = t.replace(w, "");
+    }
+    t.chars().filter(|c| c.is_alphanumeric()).collect()
 }
 
-/// Fusionne les listes de plusieurs boutiques : alternance des sources, doublons regroupés
-/// (même titre) avec la boutique la moins chère pour le lien d'achat.
+/// Fusionne les listes de plusieurs boutiques : alternance des sources, un seul résultat par jeu
+/// (même titre) avec le détail du prix dans chaque boutique, la moins chère en premier.
 fn merge(lists: Vec<Vec<Offer>>) -> Vec<Offer> {
     let mut out: Vec<Offer> = vec![];
     let mut keys: Vec<String> = vec![];
@@ -93,25 +119,60 @@ fn merge(lists: Vec<Vec<Offer>>) -> Vec<Offer> {
     for i in 0..longest {
         for list in &lists {
             let Some(o) = list.get(i) else { continue };
+            let deal = Deal { store: o.store.clone(), price: o.price.clone(), cents: o.cents, url: o.url.clone() };
             let k = norm(&o.title);
             match keys.iter().position(|x| *x == k) {
                 Some(p) => {
                     let e = &mut out[p];
-                    e.store = format!("{} · {}", e.store, o.store);
-                    if o.cents.is_some_and(|c| e.cents.is_none_or(|ec| c < ec)) {
-                        e.cents = o.cents;
-                        e.price = o.price.clone();
-                        e.url = o.url.clone();
+                    if e.deals.iter().any(|d| d.store == deal.store) {
+                        continue;
+                    }
+                    e.deals.push(deal);
+                    if e.heroes.is_empty() {
+                        e.heroes = o.heroes.clone();
+                    }
+                    if e.desc.is_empty() {
+                        e.desc = o.desc.clone();
+                    }
+                    if e.meta.is_empty() {
+                        e.meta = o.meta.clone();
                     }
                 }
                 None => {
                     keys.push(k);
-                    out.push(o.clone());
+                    let mut e = o.clone();
+                    e.deals = vec![deal];
+                    out.push(e);
                 }
             }
         }
     }
+    for e in &mut out {
+        e.deals.sort_by_key(|d| d.cents.unwrap_or(i64::MAX));
+        if let Some(d) = e.deals.first() {
+            e.price = d.price.clone();
+            e.cents = d.cents;
+            e.url = d.url.clone();
+        }
+        e.store = e.deals.iter().map(|d| d.store.as_str()).collect::<Vec<_>>().join(" · ");
+    }
     out
+}
+
+/// Fiche détaillée : description, genres, captures (Steam à la demande ; sinon ce que la liste donnait).
+pub fn details(o: &Offer) -> Details {
+    let mut d = Details { desc: o.desc.clone(), meta: o.meta.clone(), shots: vec![] };
+    for deal in &o.deals {
+        if let Some(id) = deal.url.strip_prefix("https://store.steampowered.com/app/") {
+            steam::details(id.trim_end_matches('/'), &mut d);
+        }
+    }
+    d
+}
+
+/// Visuels Steam d'un jeu par son appid.
+pub fn steam_art(appid: &str) -> Art {
+    steam::art(appid)
 }
 
 fn collect(f: impl Fn(&dyn Store) -> Vec<Offer> + Sync) -> Vec<Offer> {
@@ -131,10 +192,4 @@ pub fn catalog() -> Vec<Offer> {
 /// Recherche unifiée dans toutes les boutiques.
 pub fn search(query: &str) -> Vec<Offer> {
     collect(|s| s.search(query))
-}
-
-/// Enregistre une jaquette (première URL téléchargeable) sous `id`, pour les jeux possédés non installés.
-pub fn save_cover(id: &str, urls: &[String]) -> bool {
-    let offer = Offer { images: urls.to_vec(), ..Default::default() };
-    save_art(id, &offer)
 }

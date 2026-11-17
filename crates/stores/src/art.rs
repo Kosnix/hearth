@@ -8,6 +8,18 @@ fn assets_dir() -> PathBuf {
     PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("Hearth").join("assets")
 }
 
+/// Supprime les visuels en cache d'un jeu (avant d'en télécharger de nouveaux).
+pub fn clear_art(id: &str) {
+    if id.is_empty() {
+        return;
+    }
+    for kind in ["cover", "hero", "logo"] {
+        for ext in ["png", "jpg", "jpeg"] {
+            let _ = std::fs::remove_file(assets_dir().join(id).join(format!("{kind}.{ext}")));
+        }
+    }
+}
+
 /// Chemin d'un visuel (`cover`, `hero` ou `logo`) s'il est déjà en cache.
 pub fn asset(id: &str, kind: &str) -> Option<PathBuf> {
     if id.is_empty() {
@@ -49,18 +61,23 @@ fn download(url: &str) -> Option<(Vec<u8>, &'static str)> {
 
 /// Télécharge les visuels manquants du jeu. Renvoie vrai si au moins un fichier a été ajouté (bloquant).
 pub fn ensure_art(game: &Game, sgdb_key: Option<&str>) -> bool {
+    ensure_art_for(&game.id, &game.title, &game.art, sgdb_key)
+}
+
+/// Idem pour un identifiant et des URLs quelconques (jeux possédés non installés).
+pub fn ensure_art_for(id: &str, title: &str, art: &crate::Art, sgdb_key: Option<&str>) -> bool {
     let mut added = false;
-    for (kind, urls) in [("cover", &game.art.cover), ("hero", &game.art.hero), ("logo", &game.art.logo)] {
-        if asset(&game.id, kind).is_some() {
+    for (kind, urls) in [("cover", &art.cover), ("hero", &art.hero), ("logo", &art.logo)] {
+        if asset(id, kind).is_some() {
             continue;
         }
         let mut candidates: Vec<String> = urls.iter().filter_map(|u| if u.starts_with("gog-api:") { gog::resolve(u) } else { Some(u.clone()) }).collect();
         if kind == "cover" && candidates.is_empty() {
-            candidates.extend(sgdb_key.and_then(|k| steamgriddb(&game.title, k)));
+            candidates.extend(sgdb_key.and_then(|k| steamgriddb(title, k)));
         }
         for url in candidates {
             if let Some((data, ext)) = download(&url) {
-                let dir = assets_dir().join(&game.id);
+                let dir = assets_dir().join(id);
                 if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(dir.join(format!("{kind}.{ext}")), data).is_ok() {
                     added = true;
                     break;

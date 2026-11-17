@@ -14,7 +14,9 @@ mod addgame;
 mod accounts;
 mod addflow;
 mod i18n;
+mod menus;
 mod playtime;
+mod prefs;
 mod settings;
 
 slint::include_modules!();
@@ -27,7 +29,7 @@ const SPLASH_TITLE: &str = "Hearth Splash";
 const GUIDE_WIDTH: f32 = 460.0; // px logiques
 const MAX_NOTES: usize = 5;
 
-#[derive(serde::Deserialize, serde::Serialize, Clone)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Default)]
 struct Game {
     name: String,
     #[serde(default)]
@@ -45,9 +47,11 @@ struct Game {
     store: String,
     #[serde(skip)]
     install: bool,
+    #[serde(skip)]
+    hidden: bool,
 }
 
-/// Jeu en cours, lancé depuis la tuile `tile`.
+/// Jeu en cours : `tile` est l'indice du jeu dans `Shell::games`.
 struct Running {
     tile: usize,
     session: wm::Session,
@@ -61,7 +65,21 @@ struct Shell {
     guide: GuideMenu,
     splash: Splash,
     games: RefCell<Vec<Game>>,
+    /// Onglet Jeux (installés, non cachés) et onglet Bibliothèque (possédés à installer).
     tiles: Rc<VecModel<Tile>>,
+    library: Rc<VecModel<Tile>>,
+    art_cache: RefCell<std::collections::HashMap<String, (slint::Image, slint::Image, slint::Image)>>,
+    overrides: RefCell<std::collections::HashMap<String, prefs::Override>>,
+    owned: RefCell<Vec<(stores::account::Owned, String)>>,
+    menu_acts: RefCell<Vec<menus::Act>>,
+    rename_id: RefCell<Option<String>>,
+    pick_ids: RefCell<Vec<String>>,
+    identify_target: RefCell<Option<String>>,
+    deals: Rc<VecModel<Deal>>,
+    det_shots: Rc<VecModel<slint::Image>>,
+    det_deals: RefCell<Vec<stores::Deal>>,
+    det_title: RefCell<String>,
+    det_gen: Cell<u32>,
     notes: Rc<VecModel<SharedString>>,
     running: RefCell<Vec<Running>>,
     guide_tile: Cell<usize>,
@@ -85,6 +103,7 @@ struct Shell {
     guess_title: RefCell<String>,
     notifs: Rc<VecModel<Notif>>,
     toast_gen: Cell<u32>,
+    rebuild_pending: Cell<bool>,
     splash_timer: slint::Timer,
     splash_start: Cell<Option<std::time::Instant>>,
     splash_uri: Cell<bool>,
@@ -98,18 +117,28 @@ fn main() -> Result<(), slint::PlatformError> {
     // set_fullscreen() avant run() est ignoré par winit : plein écran dès la création.
     std::env::set_var("SLINT_FULLSCREEN", "1");
     // ponytail: femtovg cesse de se redessiner avec ce design (constaté sur l'Optiplex) ; rendu logiciel.
-    std::env::set_var("SLINT_BACKEND", "winit-software");
-    let mut games = load_games();
-    let pt = playtime::load();
-    games.sort_by_key(|g| std::cmp::Reverse(playtime::last(&playtime_key(g), &pt)));
-    let mut tiles: Vec<Tile> = games.iter().map(tile_of).collect();
-    tiles.push(add_tile());
+    std::env::set_var("SLINT_BACKEND", std::env::var("HEARTH_BACKEND").unwrap_or_else(|_| "winit-skia".into()));
+    let overrides = prefs::load();
+    let games = load_games(stores::installed(), &overrides);
     let shell = Rc::new(Shell {
         ui: App::new()?,
         guide: GuideMenu::new()?,
         splash: Splash::new()?,
         games: RefCell::new(games),
-        tiles: Rc::new(VecModel::from(tiles)),
+        tiles: Rc::new(VecModel::default()),
+        library: Rc::new(VecModel::default()),
+        art_cache: RefCell::new(Default::default()),
+        overrides: RefCell::new(overrides),
+        owned: RefCell::new(vec![]),
+        menu_acts: RefCell::new(vec![]),
+        rename_id: RefCell::new(None),
+        pick_ids: RefCell::new(vec![]),
+        identify_target: RefCell::new(None),
+        deals: Rc::new(VecModel::default()),
+        det_shots: Rc::new(VecModel::default()),
+        det_deals: RefCell::new(vec![]),
+        det_title: RefCell::new(String::new()),
+        det_gen: Cell::new(0),
         notes: Rc::new(VecModel::default()),
         running: RefCell::new(Vec::new()),
         guide_tile: Cell::new(0),
@@ -132,11 +161,16 @@ fn main() -> Result<(), slint::PlatformError> {
         guess_title: RefCell::new(String::new()),
         notifs: Rc::new(VecModel::default()),
         toast_gen: Cell::new(0),
+        rebuild_pending: Cell::new(false),
         splash_timer: slint::Timer::default(),
         splash_start: Cell::new(None),
         splash_uri: Cell::new(false),
     });
     shell.ui.set_games(shell.tiles.clone().into());
+    shell.ui.set_library(shell.library.clone().into());
+    shell.ui.set_deals(shell.deals.clone().into());
+    shell.ui.set_det_shots(shell.det_shots.clone().into());
+    shell.rebuild();
     shell.guide.set_notes(shell.notes.clone().into());
     *shell.store_status.borrow_mut() = stores::all().iter().map(|s| (s.name().to_string(), s.detected(), shell.games.borrow().iter().filter(|g| g.store == s.name()).count())).collect();
     i18n::init();
@@ -160,6 +194,16 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let s = shell.clone();
     shell.ui.on_launch(move |i| s.launch(i as usize));
+    let s = shell.clone();
+    shell.ui.on_game_menu(move |i| s.game_menu(i as usize));
+    let s = shell.clone();
+    shell.ui.on_add_menu(move || s.add_menu());
+    let s = shell.clone();
+    shell.ui.on_menu_pick(move |i| s.menu_pick(i as usize));
+    let s = shell.clone();
+    shell.ui.on_deal_pick(move |i| s.deal_pick(i as usize));
+    let s = shell.clone();
+    shell.ui.on_kb_char(move |t| s.kb_char(t.as_str()));
     let s = shell.clone();
     shell.ui.on_pick(move |i| s.pick(i as usize));
     let s = shell.clone();
@@ -195,6 +239,10 @@ fn main() -> Result<(), slint::PlatformError> {
     let s = shell.clone();
     let tick = slint::Timer::default();
     tick.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || s.tick());
+
+    let s = shell.clone();
+    let poll = slint::Timer::default();
+    poll.start(slint::TimerMode::Repeated, Duration::from_secs(20), move || s.poll_installed());
 
     let s = shell.clone();
     let phase = Cell::new(0.0f32);
@@ -249,10 +297,6 @@ thread_local! {
 
 impl Shell {
     fn launch(&self, i: usize) {
-        if i == self.games.borrow().len() {
-            self.add_open();
-            return;
-        }
         if let Some(h) = self.running.borrow().iter().find(|r| r.tile == i).and_then(|r| r.session.main_window()) {
             wm::focus(h);
             return;
@@ -276,7 +320,7 @@ impl Shell {
             Ok(session) => {
                 let hands_off = g.anticheat || compat.anticheat || !compat.borderless;
                 self.running.borrow_mut().push(Running { tile: i, session, hands_off, closing: false, started: std::time::Instant::now() });
-                self.set_running(i, true);
+                self.rebuild();
             }
             Err(e) => {
                 self.hide_splash();
@@ -384,6 +428,23 @@ impl Shell {
             settings::Outcome::Connect(ssid) => self.connect(ssid, None),
             settings::Outcome::LangChanged => self.refresh_lang(),
             settings::Outcome::InstallClient(store) => self.account_install_client(store),
+            settings::Outcome::Admin => {
+                self.push_notif(&tr("Autorisation administrateur"), &tr("Autorisation administrateur requise : acceptez la fenêtre Windows (une seule fois)"));
+                std::thread::spawn(|| {
+                    let r = system::admin::setup();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        with_shell(|s| {
+                            match r {
+                                Ok(()) => s.push_notif(&tr("Autorisation administrateur"), &tr("Activée")),
+                                Err(e) => s.push_notif(&tr("Autorisation administrateur"), &e),
+                            }
+                            if s.ui.get_zone() == 3 && s.ui.get_cat() == 12 {
+                                s.open_cat(12);
+                            }
+                        })
+                    });
+                });
+            }
             settings::Outcome::Login(store) => self.begin_login(store),
             settings::Outcome::Logout(store) => self.logout(&store),
             settings::Outcome::BtScan => {
@@ -455,14 +516,40 @@ impl Shell {
     }
 
     fn kb_press(&self, x: i32, y: i32) {
-        match self.settings.kb_press(x, y) {
+        let k = self.settings.kb_press(x, y);
+        self.kb_apply(k);
+    }
+
+    /// Saisie au clavier physique.
+    fn kb_char(&self, t: &str) {
+        let k = self.settings.kb_char(t);
+        self.kb_apply(k);
+    }
+
+    fn kb_apply(&self, k: settings::Kb) {
+        self.ui.set_kb_acc(self.settings.kb_acc());
+        match k {
             settings::Kb::Continue => self.kb_refresh(),
             settings::Kb::Cancel => {
-                let back = if self.kb_search.replace(false) { 0 } else if self.kb_identify.replace(false) { 6 } else if self.kb_login.replace(false) { 5 } else { 3 };
+                let back = if self.kb_search.replace(false) {
+                    0
+                } else if self.kb_identify.replace(false) {
+                    6
+                } else if self.kb_login.replace(false) {
+                    5
+                } else if self.rename_id.borrow_mut().take().is_some() {
+                    0
+                } else {
+                    3
+                };
                 self.ui.set_zone(back);
             }
             settings::Kb::Done(ssid, text) => {
-                if self.kb_login.replace(false) {
+                let renaming = self.rename_id.borrow_mut().take();
+                if let Some(id) = renaming {
+                    self.ui.set_zone(0);
+                    self.rename_game(&id, text.trim());
+                } else if self.kb_login.replace(false) {
                     self.ui.set_zone(5);
                     self.login_exchange(text);
                 } else if self.kb_identify.replace(false) {
@@ -530,7 +617,7 @@ impl Shell {
         self.guide_tile.set(tile);
         let closing = self.running.borrow().iter().any(|r| r.tile == tile && r.closing);
         self.guide.set_game(self.games.borrow()[tile].name.as_str().into());
-        self.guide.set_art(self.tiles.row_data(tile).map(|t| t.cover).unwrap_or_default());
+        self.guide.set_art(self.tile_for(tile).map(|t| t.cover).unwrap_or_default());
         self.guide.set_closing(closing);
         self.guide.set_sel(0);
         self.guide.set_volume(system::audio::volume().map_or(-1, |v| v as i32));
@@ -623,9 +710,10 @@ impl Shell {
         for &(tile, secs) in &ended {
             let key = playtime_key(&self.games.borrow()[tile]);
             playtime::record(&key, secs);
-            self.refresh_sub(tile);
-            self.set_running(tile, false);
             self.notify(format!("{} {}", self.games.borrow()[tile].name, tr("s'est fermé")));
+        }
+        if !ended.is_empty() {
+            self.rebuild();
         }
         if !ended.is_empty() {
             if ended.iter().any(|(t, _)| *t == self.guide_tile.get()) {
@@ -646,13 +734,6 @@ impl Shell {
     fn hide_guide(&self) {
         if let Some(h) = wm::find_window(GUIDE_TITLE) {
             wm::hide(h);
-        }
-    }
-
-    fn set_running(&self, tile: usize, on: bool) {
-        if let Some(mut t) = self.tiles.row_data(tile) {
-            t.running = on;
-            self.tiles.set_row_data(tile, t);
         }
     }
 
@@ -720,15 +801,20 @@ fn games_file() -> PathBuf {
     Path::new(&base).join("Hearth").join("games.json")
 }
 
-// ponytail: liste manuelle en attendant les connecteurs de boutiques (phase 5).
-fn load_games() -> Vec<Game> {
+/// Jeux manuels (games.json) puis jeux installés des boutiques, avec noms/masquage personnalisés.
+fn load_games(installed: Vec<stores::Game>, overrides: &std::collections::HashMap<String, prefs::Override>) -> Vec<Game> {
     let mut games: Vec<Game> = std::fs::read_to_string(games_file())
         // Notepad et PowerShell ajoutent souvent un BOM, que serde_json refuse.
         .ok()
         .and_then(|s| serde_json::from_str(s.trim_start_matches('\u{feff}')).ok())
         .unwrap_or_default();
+    for g in &mut games {
+        if g.id.is_empty() {
+            g.id = format!("custom-{:08x}", name_hash(&g.exe));
+        }
+    }
     // Jeux installés des boutiques (Steam, Epic, GOG), sans doublon avec games.json.
-    for g in stores::installed() {
+    for g in installed {
         if games.iter().any(|m| m.id == g.id) {
             continue;
         }
@@ -736,17 +822,30 @@ fn load_games() -> Vec<Game> {
             stores::Launch::Exe { path, args } => (path, args, None),
             stores::Launch::Uri(u) => (String::new(), vec![], Some(u)),
         };
-        games.push(Game { name: g.title, id: g.id, exe, args, cover: String::new(), anticheat: false, uri, store: g.store.into(), install: false });
+        games.push(Game { name: g.title, id: g.id, exe, args, uri, store: g.store.into(), ..Default::default() });
     }
     if games.is_empty() {
         games = ["notepad.exe", "calc.exe", "mspaint.exe"]
             .into_iter()
             .zip(["Bloc-notes", "Calculatrice", "Paint"])
-            .map(|(exe, name)| Game { name: name.into(), id: format!("demo-{exe}"), exe: exe.into(), args: vec![], cover: String::new(), anticheat: false, uri: None, store: String::new(), install: false })
+            .map(|(exe, name)| Game { name: name.into(), id: format!("demo-{exe}"), exe: exe.into(), ..Default::default() })
             .collect();
+    }
+    for g in &mut games {
+        if let Some(o) = overrides.get(&g.id) {
+            if let Some(n) = o.name.as_ref().filter(|n| !n.is_empty()) {
+                g.name = n.clone();
+            }
+            g.hidden = o.hidden;
+        }
     }
     games
 }
+
+fn name_hash(s: &str) -> u32 {
+    s.to_lowercase().bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3)) as u32
+}
+
 fn with_shell(f: impl FnOnce(&Shell)) {
     SHELL.with(|s| {
         if let Some(s) = s.borrow().as_ref() {
@@ -774,7 +873,7 @@ impl Shell {
 
     /// Fond animé (arrêté quand la console n'est pas devant : économise le CPU en jeu) et pictogrammes.
     fn animate(&self, phase: &Cell<f32>) {
-        if self.ui.get_tab() == 1 && !self.catalog_started.get() {
+        if self.ui.get_tab() == 2 && !self.catalog_started.get() {
             self.load_catalog(None);
         }
         let pad = match std::env::var("HEARTH_PAD").as_deref() {
@@ -809,11 +908,13 @@ fn hue_of(name: &str) -> slint::Color {
     slint::Color::from_rgb_u8(((r + m) * 255.0) as u8, ((g + m) * 255.0) as u8, ((b + m) * 255.0) as u8)
 }
 
+/// Grand visuel du jeu, s'il en existe un (sinon rien : une jaquette agrandie serait floue).
 fn hero_of(g: &Game) -> slint::Image {
-    match stores::asset(&g.id, "hero") {
-        Some(p) => slint::Image::load_from_path(&p).unwrap_or_default(),
-        None => cover_of(g),
-    }
+    stores::asset(&g.id, "hero").and_then(|p| slint::Image::load_from_path(&p).ok()).unwrap_or_default()
+}
+
+fn logo_of(g: &Game) -> slint::Image {
+    stores::asset(&g.id, "logo").and_then(|p| slint::Image::load_from_path(&p).ok()).unwrap_or_default()
 }
 
 /// Images des offres, téléchargées en parallèle (mises en cache sur disque).
@@ -857,17 +958,49 @@ impl Shell {
                 Some(q) => stores::search(q),
                 None => stores::catalog(),
             };
-            let paths = fetch_all(&offers);
-            let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.offers_ready(gen, query.is_none(), offers, paths)));
+            let featured = query.is_none();
+            let listed = offers.clone();
+            let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.offers_listed(gen, featured, listed)));
+            // Les images arrivent ensuite, en parallèle, et remplissent les cartes au fur et à mesure.
+            let jobs: Vec<(usize, Vec<String>)> = offers.iter().enumerate().map(|(i, o)| (i, o.images.clone())).collect();
+            std::thread::scope(|sc| {
+                for chunk in jobs.chunks(jobs.len().div_ceil(6).max(1)) {
+                    sc.spawn(move || {
+                        for (i, imgs) in chunk {
+                            if let Some(p) = stores::fetch_first(imgs) {
+                                let i = *i;
+                                let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.offer_art(gen, featured, i, p)));
+                            }
+                        }
+                    });
+                }
+            });
         });
     }
 
-    fn offers_ready(&self, gen: u32, featured: bool, offers: Vec<stores::Offer>, paths: Vec<Option<PathBuf>>) {
+    fn offers_listed(&self, gen: u32, featured: bool, offers: Vec<stores::Offer>) {
+        let paths = vec![None; offers.len()];
         if self.catalog_gen.get() == gen {
             self.apply_offers(&offers, &paths);
         }
         if featured {
             *self.featured.borrow_mut() = Some((offers, paths));
+        }
+    }
+
+    fn offer_art(&self, gen: u32, featured: bool, i: usize, p: PathBuf) {
+        if featured {
+            if let Some((_, paths)) = self.featured.borrow_mut().as_mut() {
+                if let Some(slot) = paths.get_mut(i) {
+                    *slot = Some(p.clone());
+                }
+            }
+        }
+        if self.catalog_gen.get() == gen {
+            if let (Some(mut row), Ok(img)) = (self.offers.row_data(i), slint::Image::load_from_path(&p)) {
+                row.art = img;
+                self.offers.set_row_data(i, row);
+            }
         }
     }
 
@@ -897,55 +1030,117 @@ impl Shell {
         self.ui.set_zone(4);
     }
 
+    /// Fiche d'un jeu de la boutique : description, captures et prix dans chaque boutique.
     fn show_offer(&self, i: usize) {
         let Some(o) = self.offer_data.borrow().get(i).cloned() else { return };
-        if let Some((w, h, px)) = stores::qr::rgb(&o.url, 8) {
+        let gen = self.det_gen.get() + 1;
+        self.det_gen.set(gen);
+        self.ui.set_det_title(o.title.as_str().into());
+        self.ui.set_det_desc(o.desc.as_str().into());
+        self.ui.set_det_meta(o.meta.as_str().into());
+        self.ui.set_det_cover(self.offers.row_data(i).map(|r| r.art).unwrap_or_default());
+        self.ui.set_det_hero(Default::default());
+        self.det_shots.set_vec(vec![]);
+        let rows: Vec<Deal> = o.deals.iter().map(|d| Deal { store: d.store.as_str().into(), price: if d.price == "Gratuit" { tr("Gratuit") } else { d.price.clone() }.into() }).collect();
+        self.deals.set_vec(rows);
+        *self.det_deals.borrow_mut() = o.deals.clone();
+        *self.det_title.borrow_mut() = o.title.clone();
+        self.ui.set_dsel(0);
+        self.ui.set_det_loading(true);
+        self.ui.set_zone(7);
+        std::thread::spawn(move || {
+            let d = stores::details(&o);
+            let hero = stores::fetch_first(&o.heroes);
+            let shots: Vec<PathBuf> = d.shots.iter().filter_map(|u| stores::fetch_first(std::slice::from_ref(u))).collect();
+            let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.details_ready(gen, d, hero, shots)));
+        });
+    }
+
+    fn details_ready(&self, gen: u32, d: stores::Details, hero: Option<PathBuf>, shots: Vec<PathBuf>) {
+        if self.det_gen.get() != gen {
+            return;
+        }
+        if !d.desc.is_empty() {
+            self.ui.set_det_desc(d.desc.into());
+        }
+        if !d.meta.is_empty() {
+            self.ui.set_det_meta(d.meta.into());
+        }
+        if let Some(h) = hero.and_then(|p| slint::Image::load_from_path(&p).ok()) {
+            self.ui.set_det_hero(h);
+        }
+        self.det_shots.set_vec(shots.iter().filter_map(|p| slint::Image::load_from_path(p).ok()).collect::<Vec<_>>());
+        self.ui.set_det_loading(false);
+    }
+
+    /// QR code d'achat chez la boutique choisie dans la fiche.
+    fn deal_pick(&self, i: usize) {
+        let Some(d) = self.det_deals.borrow().get(i).cloned() else { return };
+        if let Some((w, h, px)) = stores::qr::rgb(&d.url, 8) {
             let buf = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::clone_from_slice(&px, w, h);
             self.ui.set_qr(slint::Image::from_rgb8(buf));
-            self.ui.set_qr_title(o.title.into());
-            self.ui.set_qr_url(o.url.into());
+            self.ui.set_qr_title(format!("{} — {}", self.det_title.borrow(), d.store).into());
+            self.ui.set_qr_url(d.url.into());
             self.ui.set_qr_hint(tr("Scannez avec votre téléphone pour acheter").into());
             self.ui.set_qr_action("".into());
-            self.ui.set_qr_return(0);
+            self.ui.set_qr_return(7);
             self.ui.set_zone(5);
         }
     }
 
-    /// Télécharge en arrière-plan les visuels manquants des jeux des boutiques.
-    fn start_art(&self) {
-        let ids: Vec<(usize, String)> = self.games.borrow().iter().enumerate().filter(|(_, g)| !g.store.is_empty()).map(|(i, g)| (i, g.id.clone())).collect();
-        if ids.is_empty() {
-            return;
-        }
+    /// Télécharge en arrière-plan les visuels manquants des jeux des boutiques (installés et possédés).
+    pub fn start_art(&self) {
         let key = i18n::pref("steamgriddb_key").or_else(|| std::env::var("HEARTH_SGDB_KEY").ok());
+        let mut jobs: Vec<(String, String, stores::Art)> =
+            self.owned.borrow().iter().map(|(o, id)| (id.clone(), o.title.clone(), stores::account::owned_art(o))).collect();
+        let installed = self.games.borrow().iter().any(|g| !g.store.is_empty() && !g.install);
         std::thread::spawn(move || {
-            let games = stores::installed();
-            for (i, id) in ids {
-                if let Some(g) = games.iter().find(|g| g.id == id) {
-                    if stores::ensure_art(g, key.as_deref()) {
-                        let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.reload_art(i)));
-                    }
-                }
+            if installed {
+                jobs.extend(stores::installed().into_iter().map(|g| (g.id, g.title, g.art)));
             }
+            let key = &key;
+            std::thread::scope(|sc| {
+                for chunk in jobs.chunks(jobs.len().div_ceil(6).max(1)) {
+                    sc.spawn(move || {
+                        for (id, title, art) in chunk {
+                            if stores::ensure_art_for(id, title, art, key.as_deref()) {
+                                let id = id.clone();
+                                let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.reload_art(&id)));
+                            }
+                        }
+                    });
+                }
+            });
         });
     }
 
-    fn reload_art(&self, i: usize) {
-        if let (Some(g), Some(mut t)) = (self.games.borrow().get(i).cloned(), self.tiles.row_data(i)) {
-            t.cover = cover_of(&g);
-            t.hero = hero_of(&g);
-            self.tiles.set_row_data(i, t);
+    /// Un visuel vient d'arriver : on oublie le cache de ce jeu et on reconstruit (regroupé).
+    pub fn reload_art(&self, id: &str) {
+        self.art_cache.borrow_mut().remove(id);
+        self.rebuild_soon();
+    }
+
+    pub fn rebuild_soon(&self) {
+        if self.rebuild_pending.replace(true) {
+            return;
         }
+        slint::Timer::single_shot(Duration::from_millis(500), || {
+            with_shell(|s| {
+                s.rebuild_pending.set(false);
+                s.rebuild();
+            })
+        });
     }
 }
 
 impl Shell {
     /// Écran de lancement : fenêtre superposée au jeu, qui reste le temps du chargement.
     fn start_splash(&self, i: usize, uri: bool) {
-        let Some(t) = self.tiles.row_data(i) else { return };
+        let Some(t) = self.tile_for(i) else { return };
         self.splash.set_launch_name(t.name);
         self.splash.set_launch_cover(t.cover);
-        self.splash.set_launch_art(t.hero);
+        // Un petit héros agrandi serait flou : on ne le garde que s'il est assez large.
+        self.splash.set_launch_art(if t.hero.size().width >= 1400 { t.hero } else { Default::default() });
         self.splash.set_launch_hue(t.hue);
         self.splash.set_launch_initial(t.initial);
         self.splash.set_launch_t(0.0);
@@ -986,31 +1181,6 @@ impl Shell {
     }
 }
 
-fn tile_of(g: &Game) -> Tile {
-    Tile {
-        name: g.name.as_str().into(),
-        initial: g.name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default().into(),
-        hue: hue_of(&g.name),
-        cover: cover_of(g),
-        hero: hero_of(g),
-        running: false,
-        add: false,
-        install: g.install,
-        sub: if g.install { "".into() } else { playtime::label(&playtime_key(g)).into() },
-    }
-}
-
-fn add_tile() -> Tile {
-    Tile { name: tr("Ajouter un jeu").into(), initial: "+".into(), hue: slint::Color::from_rgb_u8(90, 100, 160), cover: Default::default(), hero: Default::default(), running: false, add: true, install: false, sub: "".into() }
-}
-
-impl Shell {
-    /// Insère une tuile avant la tuile « Ajouter un jeu ».
-    fn tiles_insert(&self, idx: usize, t: Tile) {
-        self.tiles.insert(idx, t);
-    }
-}
-
 /// Clé de temps de jeu : identifiant du jeu, sinon son nom.
 fn playtime_key(g: &Game) -> String {
     if g.id.is_empty() {
@@ -1021,11 +1191,97 @@ fn playtime_key(g: &Game) -> String {
 }
 
 impl Shell {
-    fn refresh_sub(&self, tile: usize) {
-        let Some(g) = self.games.borrow().get(tile).cloned() else { return };
-        if let Some(mut t) = self.tiles.row_data(tile) {
-            t.sub = playtime::label(&playtime_key(&g)).into();
-            self.tiles.set_row_data(tile, t);
+    fn art_of(&self, g: &Game) -> (slint::Image, slint::Image, slint::Image) {
+        self.art_cache.borrow_mut().entry(g.id.clone()).or_insert_with(|| (cover_of(g), hero_of(g), logo_of(g))).clone()
+    }
+
+    fn make_tile(&self, gid: usize, g: &Game, running: bool, pt: &std::collections::HashMap<String, playtime::Entry>) -> Tile {
+        let (cover, hero, logo) = self.art_of(g);
+        Tile {
+            gid: gid as i32,
+            name: g.name.as_str().into(),
+            initial: g.name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default().into(),
+            hue: hue_of(&g.name),
+            cover,
+            hero,
+            logo,
+            running,
+            install: g.install,
+            sub: if g.install { "".into() } else { playtime::label_in(pt, &playtime_key(g)).into() },
+        }
+    }
+
+    fn tile_for(&self, gid: usize) -> Option<Tile> {
+        let games = self.games.borrow();
+        let g = games.get(gid)?;
+        Some(self.make_tile(gid, g, false, &Default::default()))
+    }
+
+    /// Reconstruit les onglets Jeux (installés, triés par dernière partie) et Bibliothèque (à installer).
+    pub fn rebuild(&self) {
+        let cur = self.tiles.row_data(self.ui.get_sel().max(0) as usize).map(|t| t.gid);
+        let cur_lib = self.library.row_data(self.ui.get_lsel().max(0) as usize).map(|t| t.gid);
+        let pt = playtime::load();
+        let running: Vec<usize> = self.running.borrow().iter().map(|r| r.tile).collect();
+        let (mut a, mut b): (Vec<(u64, Tile)>, Vec<Tile>) = (vec![], vec![]);
+        for (i, g) in self.games.borrow().iter().enumerate() {
+            if g.hidden {
+                continue;
+            }
+            let t = self.make_tile(i, g, running.contains(&i), &pt);
+            if g.install {
+                b.push(t);
+            } else {
+                a.push((playtime::last(&playtime_key(g), &pt), t));
+            }
+        }
+        a.sort_by_key(|(last, _)| std::cmp::Reverse(*last));
+        let a: Vec<Tile> = a.into_iter().map(|(_, t)| t).collect();
+        let sel = cur.and_then(|g| a.iter().position(|t| t.gid == g)).unwrap_or((self.ui.get_sel().max(0) as usize).min(a.len().saturating_sub(1)));
+        let lsel = cur_lib.and_then(|g| b.iter().position(|t| t.gid == g)).unwrap_or((self.ui.get_lsel().max(0) as usize).min(b.len().saturating_sub(1)));
+        self.tiles.set_vec(a);
+        self.library.set_vec(b);
+        self.ui.set_sel(sel as i32);
+        self.ui.set_lsel(lsel as i32);
+    }
+
+    /// Relit les jeux installés (après une installation, une désinstallation ou un changement de liste).
+    pub fn reload_games(&self, installed: Vec<stores::Game>) {
+        let old = self.games.borrow().clone();
+        let mut new = load_games(installed, &self.overrides.borrow());
+        // Les jeux en cours restent dans la liste même s'ils ont disparu des boutiques.
+        for r in self.running.borrow().iter() {
+            if let Some(g) = old.get(r.tile).filter(|g| !new.iter().any(|n| n.id == g.id)) {
+                new.push(g.clone());
+            }
+        }
+        self.append_owned(&mut new);
+        for r in self.running.borrow_mut().iter_mut() {
+            if let Some(p) = old.get(r.tile).and_then(|g| new.iter().position(|n| n.id == g.id)) {
+                r.tile = p;
+            }
+        }
+        *self.games.borrow_mut() = new;
+        self.rebuild();
+        self.refresh_store_status();
+    }
+
+    /// Toutes les 20 s : un jeu installé ou désinstallé par un client de boutique apparaît / disparaît seul.
+    pub fn poll_installed(&self) {
+        std::thread::spawn(|| {
+            let inst = stores::installed();
+            let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.installed_polled(inst)));
+        });
+    }
+
+    fn installed_polled(&self, inst: Vec<stores::Game>) {
+        let mut now: Vec<String> = inst.iter().map(|g| g.id.clone()).collect();
+        now.sort();
+        let mut cur: Vec<String> = self.games.borrow().iter().filter(|g| !g.store.is_empty() && !g.install).map(|g| g.id.clone()).collect();
+        cur.sort();
+        if now != cur {
+            self.reload_games(inst);
+            self.start_art();
         }
     }
 }

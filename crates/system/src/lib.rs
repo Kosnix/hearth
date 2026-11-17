@@ -530,5 +530,6 @@ pub mod drivers {
     }
 }
 
+pub mod admin;
 mod extra;
 pub use extra::{about, bluetooth, install, net, power};

@@ -56,7 +56,11 @@ pub fn fetch(cat: i32) -> Fetched {
         8 => Fetched { gpus: system::drivers::gpus(), ..Default::default() },
         9 => Fetched { plans: system::power::plans(), sleep_min: system::power::timeout(true), screen_min: system::power::timeout(false), ..Default::default() },
         11 => Fetched { about: system::about::info(), ..Default::default() },
-        12 => Fetched { accounts: stores::all().iter().map(|s| (s.name().to_string(), s.detected(), stores::account::session(s.name()).map(|a| a.name))).collect(), ..Default::default() },
+        12 => {
+            let mut accounts: Vec<(String, bool, Option<String>)> = stores::all().iter().map(|s| (s.name().to_string(), s.detected(), stores::account::session(s.name()).map(|a| a.name))).collect();
+            accounts.push(("@admin".into(), system::admin::enabled(), None));
+            Fetched { accounts, ..Default::default() }
+        }
         _ => Fetched::default(),
     }
 }
@@ -78,6 +82,7 @@ pub enum Outcome {
     BtPair(String, String),
     BtUnpair(String, String),
     InstallClient(String),
+    Admin,
     Login(String),
     Logout(String),
 }
@@ -104,6 +109,7 @@ struct State {
     bt_found: Vec<Dev>,
     kb_text: String,
     kb_shift: bool,
+    kb_acc: bool,
     kb_ssid: String,
     message: String,
 }
@@ -423,6 +429,7 @@ impl Settings {
             (12, r, 0) if !s.loading => {
                 out = match account_rows(&s.data.accounts).into_iter().nth(r as usize).map(|(_, _, a)| a) {
                     Some(Act::Install(n)) => Outcome::InstallClient(n),
+                    Some(Act::Admin) => Outcome::Admin,
                     Some(Act::Login(n)) => Outcome::Login(n),
                     Some(Act::Logout(n)) => Outcome::Logout(n),
                     _ => Outcome::None,
@@ -461,20 +468,35 @@ impl Settings {
         let mut s = self.state.borrow_mut();
         s.kb_text.clear();
         s.kb_shift = false;
+        s.kb_acc = false;
         s.kb_ssid = ssid.into();
+    }
+
+    /// Ouvre le clavier avec un texte de départ (renommer un jeu).
+    pub fn kb_open_text(&self, text: &str) {
+        self.kb_open("");
+        self.state.borrow_mut().kb_text = text.to_string();
     }
 
     pub fn kb_text(&self) -> String {
         self.state.borrow().kb_text.clone()
     }
 
+    pub fn kb_acc(&self) -> bool {
+        self.state.borrow().kb_acc
+    }
+
     pub fn kb_keys(&self) -> Vec<String> {
-        let up = self.state.borrow().kb_shift;
-        ["1234567890", "azertyuiop", "qsdfghjklm", "wxcvbn.-_@"]
-            .iter()
-            .flat_map(|r| r.chars())
-            .map(|c| if up { c.to_uppercase().to_string() } else { c.to_string() })
-            .collect()
+        let (up, acc) = {
+            let s = self.state.borrow();
+            (s.kb_shift, s.kb_acc)
+        };
+        let rows: [&str; 4] = if acc {
+            ["éèêëàâäùûü", "ôöîïçœæñÿ'", "@.-_,;:!?/", "+*=%€$#&()"]
+        } else {
+            ["1234567890", "azertyuiop", "qsdfghjklm", "wxcvbn.-_@"]
+        };
+        rows.iter().flat_map(|r| r.chars()).map(|c| if up { c.to_uppercase().to_string() } else { c.to_string() }).collect()
     }
 
     pub fn kb_press(&self, x: i32, y: i32) -> Kb {
@@ -491,12 +513,31 @@ impl Settings {
         }
         match x {
             0 => s.kb_shift = !s.kb_shift,
-            1 => s.kb_text.push(' '),
-            2 => {
+            1 => s.kb_acc = !s.kb_acc,
+            2 => s.kb_text.push(' '),
+            3 => {
                 s.kb_text.pop();
             }
-            3 => return Kb::Done(s.kb_ssid.clone(), s.kb_text.clone()),
+            4 => return Kb::Done(s.kb_ssid.clone(), s.kb_text.clone()),
             _ => return Kb::Cancel,
+        }
+        Kb::Continue
+    }
+
+    /// Clavier physique : un caractère, "\b" pour effacer, "\n" pour valider.
+    pub fn kb_char(&self, t: &str) -> Kb {
+        let mut s = self.state.borrow_mut();
+        match t {
+            "\n" | "\r" => return Kb::Done(s.kb_ssid.clone(), s.kb_text.clone()),
+            "\u{8}" => {
+                s.kb_text.pop();
+            }
+            _ => {
+                // Les touches de fonction arrivent en caractères privés (U+F700…) : ignorées.
+                for c in t.chars().filter(|c| !c.is_control() && !('\u{f700}'..='\u{f8ff}').contains(c)) {
+                    s.kb_text.push(c);
+                }
+            }
         }
         Kb::Continue
     }
@@ -525,6 +566,7 @@ fn gb(bytes: u64) -> String {
 /// Action associée à une ligne de la catégorie « Comptes ».
 enum Act {
     Install(String),
+    Admin,
     Login(String),
     Logout(String),
     None,
@@ -534,6 +576,11 @@ enum Act {
 fn account_rows(accounts: &[(String, bool, Option<String>)]) -> Vec<(String, String, Act)> {
     let mut v = vec![];
     for (name, detected, session) in accounts {
+        if name == "@admin" {
+            let value = if *detected { tr("Activée") } else { tr("Activer (une seule fois)") };
+            v.push((tr("Autorisation administrateur"), value, if *detected { Act::None } else { Act::Admin }));
+            continue;
+        }
         if name == "GOG" {
             let value = if *detected { tr("Bibliothèque locale") } else { tr("Client non installé") };
             v.push((name.clone(), value, Act::None));

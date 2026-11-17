@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use windows::Win32::System::Registry::HKEY_CURRENT_USER;
+use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 
 use crate::{http, reg, Art, Game, Launch, Offer, Store};
 
@@ -20,7 +20,12 @@ fn pairs(text: &str) -> Vec<(String, String)> {
 }
 
 fn root() -> Option<PathBuf> {
-    reg::string(HKEY_CURRENT_USER, r"Software\Valve\Steam", "SteamPath").map(PathBuf::from)
+    // HKCU n'existe qu'après le premier lancement de Steam : on se rabat sur l'installation système.
+    reg::string(HKEY_CURRENT_USER, r"Software\Valve\Steam", "SteamPath")
+        .filter(|p| !p.is_empty())
+        .or_else(|| reg::string(HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath"))
+        .map(PathBuf::from)
+        .filter(|p| p.join("steam.exe").exists() || p.join("Steam.exe").exists())
 }
 
 fn libraries(root: &PathBuf) -> Vec<PathBuf> {
@@ -38,7 +43,7 @@ fn libraries(root: &PathBuf) -> Vec<PathBuf> {
     v
 }
 
-fn art(id: &str) -> Art {
+pub fn art(id: &str) -> Art {
     let base = format!("https://cdn.cloudflare.steamstatic.com/steam/apps/{id}/");
     Art {
         cover: ["library_600x900_2x.jpg", "library_600x900.jpg", "header.jpg"].iter().map(|f| format!("{base}{f}")).collect(),
@@ -147,8 +152,33 @@ fn offer(id: i64, title: &str, fin: i64, disc: i64, cur: &str) -> Offer {
         price: p,
         cents: Some(fin),
         store: "Steam".into(),
-        images: vec![format!("{base}library_600x900.jpg"), format!("{base}header.jpg")],
+        images: vec![format!("{base}library_600x900_2x.jpg"), format!("{base}library_600x900.jpg"), format!("{base}header.jpg")],
         heroes: vec![format!("{base}library_hero.jpg"), format!("{base}page_bg_generated_v6b.jpg")],
         url: format!("https://store.steampowered.com/app/{id}"),
+        ..Default::default()
     }
+}
+
+/// Description, genres, date et captures depuis l'API publique de la fiche.
+pub fn details(id: &str, d: &mut crate::Details) {
+    let Some(j) = http::get_json(&format!("https://store.steampowered.com/api/appdetails?appids={id}&l=french&cc=fr"), &[]) else { return };
+    let data = &j[id]["data"];
+    if let Some(t) = data["short_description"].as_str() {
+        d.desc = t.to_string();
+    }
+    let genres: Vec<&str> = data["genres"].as_array().into_iter().flatten().filter_map(|g| g["description"].as_str()).take(3).collect();
+    let mut meta: Vec<String> = vec![];
+    if !genres.is_empty() {
+        meta.push(genres.join(", "));
+    }
+    if let Some(r) = data["release_date"]["date"].as_str().filter(|r| !r.is_empty()) {
+        meta.push(r.to_string());
+    }
+    if let Some(dev) = data["developers"][0].as_str() {
+        meta.push(dev.to_string());
+    }
+    if !meta.is_empty() {
+        d.meta = meta.join("  ·  ");
+    }
+    d.shots = data["screenshots"].as_array().into_iter().flatten().filter_map(|s| s["path_thumbnail"].as_str().map(String::from)).take(4).collect();
 }

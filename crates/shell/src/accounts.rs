@@ -4,11 +4,10 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use slint::Model;
 use stores::account::{self, Owned, Poll};
 
 use crate::i18n::tr;
-use crate::{tile_of, with_shell, Game, Shell};
+use crate::{with_shell, Game, Shell};
 
 static LOGIN_GEN: AtomicU32 = AtomicU32::new(0);
 
@@ -23,6 +22,9 @@ impl Shell {
     pub fn account_install_client(&self, store: String) {
         let Some(id) = system::install::client_id(&store) else { return };
         self.push_notif(&tr("Installation"), &format!("{} {store}…", tr("Installation du client")));
+        if !system::admin::enabled() {
+            self.push_notif(&tr("Autorisation administrateur"), &tr("Autorisation administrateur requise : acceptez la fenêtre Windows (une seule fois)"));
+        }
         std::thread::spawn(move || {
             let r = system::install::winget(id);
             let _ = slint::invoke_from_event_loop(move || {
@@ -148,7 +150,7 @@ impl Shell {
         self.refresh_owned();
     }
 
-    /// Jeux possédés des boutiques connectées, ajoutés à l'accueil avec le badge « À installer ».
+    /// Jeux possédés des boutiques connectées : onglet Bibliothèque (badge « À installer »).
     pub fn refresh_owned(&self) {
         let connected: Vec<&'static str> = ["Steam", "Epic Games"].into_iter().filter(|s| account::session(s).is_some()).collect();
         if connected.is_empty() {
@@ -158,51 +160,26 @@ impl Shell {
         std::thread::spawn(move || {
             let mut items: Vec<(Owned, String)> = vec![];
             for store in connected {
-                for o in account::library(store).into_iter().take(80) {
+                for o in account::library(store).into_iter().take(300) {
                     let slug = if store == "Steam" { "steam" } else { "epic" };
                     let id = format!("owned-{slug}-{}", o.key.replace([':', '/', '\\'], "_"));
                     items.push((o, id));
                 }
             }
-            // Jaquettes en parallèle (cache disque).
-            std::thread::scope(|sc| {
-                for chunk in items.chunks(8) {
-                    sc.spawn(move || {
-                        for (o, id) in chunk {
-                            if stores::asset(id, "cover").is_none() {
-                                stores::save_cover(id, &o.images);
-                            }
-                        }
-                    });
-                }
-            });
             let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.owned_ready(items)));
         });
     }
 
-    fn remove_installable(&self) {
-        let mut games = self.games.borrow_mut();
-        for i in (0..games.len()).rev() {
-            if games[i].install {
-                games.remove(i);
-                self.tiles.remove(i);
-                for r in self.running.borrow_mut().iter_mut() {
-                    if r.tile > i {
-                        r.tile -= 1;
-                    }
-                }
-            }
-        }
-        let n = self.tiles.row_count() as i32;
-        if self.ui.get_sel() >= n {
-            self.ui.set_sel((n - 1).max(0));
-        }
+    fn owned_ready(&self, items: Vec<(Owned, String)>) {
+        *self.owned.borrow_mut() = items;
+        self.reload_games(stores::installed());
+        self.start_art();
     }
 
-    fn owned_ready(&self, items: Vec<(Owned, String)>) {
-        self.remove_installable();
-        for (o, id) in items {
-            let installed = self.games.borrow().iter().any(|g| {
+    /// Ajoute à la liste les jeux possédés qui ne sont pas (encore) installés.
+    pub fn append_owned(&self, games: &mut Vec<Game>) {
+        for (o, id) in self.owned.borrow().iter() {
+            let installed = games.iter().any(|g| {
                 !g.install
                     && match o.store {
                         "Steam" => g.id == format!("steam-{}", o.key),
@@ -212,13 +189,13 @@ impl Shell {
             if installed {
                 continue;
             }
-            let Some(uri) = account::install_uri(&o) else { continue };
-            let game = Game { name: o.title, id, exe: String::new(), args: vec![], cover: String::new(), anticheat: false, uri: Some(uri), store: o.store.into(), install: true };
-            let idx = self.games.borrow().len();
-            self.games.borrow_mut().push(game.clone());
-            self.tiles.insert(idx, tile_of(&game));
+            let Some(uri) = account::install_uri(o) else { continue };
+            let mut game = Game { name: o.title.clone(), id: id.clone(), uri: Some(uri), store: o.store.into(), install: true, ..Default::default() };
+            if let Some(ov) = self.overrides.borrow().get(id) {
+                game.hidden = ov.hidden;
+            }
+            games.push(game);
         }
-        self.refresh_store_status();
     }
 
     /// Installe un jeu possédé via le client de sa boutique (installé au besoin).
@@ -230,7 +207,7 @@ impl Shell {
         }
         if let Some(uri) = &g.uri {
             let _ = Command::new("cmd").args(["/c", "start", "", uri]).spawn();
-            self.push_notif(&tr("Installation"), &format!("{} ({}) : {}", g.name, g.store, tr("demandée dans le client")));
+            self.push_notif(&tr("Installation"), &format!("{} ({}) : {}", g.name, g.store, tr("à valider dans la fenêtre du client")));
         }
     }
 }

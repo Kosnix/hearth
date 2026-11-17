@@ -25,6 +25,8 @@ fn main() {
     match env::args().nth(1).as_deref() {
         Some("install") => cli(install()),
         Some("uninstall") => cli(uninstall()),
+        Some("setup-admin") => cli(setup_admin()),
+        Some("elevated") => elevated(),
         Some("console") => unsafe {
             if let Ok(ev) = OpenEventW(EVENT_MODIFY_STATE, false, CONSOLE_EVENT) {
                 let _ = SetEvent(ev);
@@ -41,7 +43,12 @@ fn supervise() {
     let mut crashes: Vec<Instant> = Vec::new();
     loop {
         apply_staged();
-        let code = Command::new(&shell).status().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+        // Après un plantage, on retente avec le rendu logiciel (au cas où le rendu GPU Skia serait en cause).
+        let mut cmd = Command::new(&shell);
+        if !crashes.is_empty() {
+            cmd.env("HEARTH_BACKEND", "winit-software");
+        }
+        let code = cmd.status().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
         if code == EXIT_DESKTOP {
             log("retour au bureau demandé");
             desktop_until_console(event);
@@ -107,6 +114,62 @@ fn install() -> Result<String, String> {
         .arg(data_dir().join("hearth.ico"))
         .status();
     Ok(format!("Installé dans {}. Actif à la prochaine ouverture de session.", dst.display()))
+}
+
+const ELEVATED_TASK: &str = "HearthElevated";
+/// Seuls ces paquets winget peuvent être installés par l'assistant administrateur.
+const ALLOWED_WINGET: [&str; 3] = ["Valve.Steam", "EpicGames.EpicGamesLauncher", "GOG.Galaxy"];
+
+/// À lancer élevé (un seul consentement UAC) : copie l'assistant dans Program Files (non modifiable
+/// sans droits) et crée la tâche planifiée « privilèges maximum » qui le lance sans invite.
+fn setup_admin() -> Result<String, String> {
+    let pf = env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".into());
+    let dir = PathBuf::from(pf).join("Hearth");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dst = dir.join("hearth-helper.exe");
+    fs::copy(env::current_exe().map_err(|e| e.to_string())?, &dst).map_err(|e| format!("copie de l'assistant : {e}"))?;
+    let user = format!("{}\\{}", env::var("USERDOMAIN").unwrap_or_default(), env::var("USERNAME").unwrap_or_default());
+    let ps = format!(
+        "$a = New-ScheduledTaskAction -Execute '{}' -Argument 'elevated'; \
+         $p = New-ScheduledTaskPrincipal -UserId '{user}' -LogonType Interactive -RunLevel Highest; \
+         $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 3); \
+         Register-ScheduledTask -TaskName {ELEVATED_TASK} -Action $a -Principal $p -Settings $s -Force | Out-Null",
+        dst.display()
+    );
+    let st = Command::new("powershell").args(["-NoProfile", "-Command", &ps]).status().map_err(|e| e.to_string())?;
+    if st.success() {
+        Ok("Autorisation administrateur enregistrée.".into())
+    } else {
+        Err("création de la tâche planifiée refusée".into())
+    }
+}
+
+/// Exécuté par la tâche planifiée (élevé) : traite la requête de l'utilisateur, liste fermée d'opérations.
+fn elevated() {
+    let dir = PathBuf::from(env::var_os("LOCALAPPDATA").unwrap_or_default()).join("Hearth").join("elevated");
+    let req = fs::read_to_string(dir.join("request.txt")).unwrap_or_default();
+    let _ = fs::remove_file(dir.join("request.txt"));
+    let mut parts = req.trim_start_matches('\u{feff}').trim().splitn(2, ' ');
+    let res: Result<(), String> = match (parts.next(), parts.next()) {
+        (Some("winget"), Some(id)) if ALLOWED_WINGET.contains(&id) => {
+            let out = Command::new("winget")
+                .args(["install", "-e", "--id", id, "--silent", "--accept-package-agreements", "--accept-source-agreements"])
+                .output();
+            match out {
+                Ok(o) if o.status.success() => Ok(()),
+                // Déjà installé / aucune mise à jour applicable : pas une erreur.
+                Ok(o) if matches!(o.status.code().map(|c| c as u32), Some(0x8A15_002B | 0x8A15_0061)) => Ok(()),
+                Ok(o) => Err(String::from_utf8_lossy(&o.stdout).lines().rev().find(|l| l.trim().len() > 3).unwrap_or("échec de winget").trim().to_string()),
+                Err(e) => Err(format!("winget introuvable : {e}")),
+            }
+        }
+        _ => Err("opération refusée".into()),
+    };
+    let text = match res {
+        Ok(()) => "ok".to_string(),
+        Err(e) => format!("error: {e}"),
+    };
+    let _ = fs::write(dir.join("result.txt"), text);
 }
 
 fn uninstall() -> Result<String, String> {

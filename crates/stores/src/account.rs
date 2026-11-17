@@ -313,7 +313,7 @@ fn steam_library(s: &Session) -> Vec<Owned> {
         .filter_map(|g| {
             let id = g["appid"].as_i64()?;
             let base = format!("https://cdn.cloudflare.steamstatic.com/steam/apps/{id}/");
-            Some(Owned { store: "Steam", title: g["name"].as_str()?.to_string(), key: id.to_string(), images: vec![format!("{base}library_600x900.jpg"), format!("{base}header.jpg")] })
+            Some(Owned { store: "Steam", title: g["name"].as_str()?.to_string(), key: id.to_string(), images: vec![format!("{base}library_600x900_2x.jpg"), format!("{base}library_600x900.jpg"), format!("{base}header.jpg")] })
         })
         .collect()
 }
@@ -352,6 +352,14 @@ pub fn library(store: &str) -> Vec<Owned> {
 }
 
 /// Demande l'installation d'un jeu possédé au client de la boutique (qui doit être installé et connecté).
+/// Visuels d'un jeu possédé (Steam : jaquette, héros et logo ; Epic : jaquette de la liste).
+pub fn owned_art(o: &Owned) -> crate::Art {
+    match o.store {
+        "Steam" => crate::steam_art(&o.key),
+        _ => crate::Art { cover: o.images.clone(), ..Default::default() },
+    }
+}
+
 pub fn install_uri(o: &Owned) -> Option<String> {
     match o.store {
         "Steam" => Some(format!("steam://install/{}", o.key)),

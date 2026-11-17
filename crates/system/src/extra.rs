@@ -190,8 +190,17 @@ pub mod install {
         }
     }
 
-    /// Installe un paquet via winget, en silence (Windows peut demander une confirmation d'administrateur). Bloquant.
+    /// Installe un paquet via l'assistant administrateur (autorisation demandée une seule fois). Bloquant.
     pub fn winget(id: &str) -> Result<(), String> {
+        if !crate::admin::enabled() {
+            crate::admin::setup()?;
+        }
+        crate::admin::request(&format!("winget {id}"))
+    }
+
+    /// Installation directe (sans assistant) : Windows demande alors une confirmation à chaque fois.
+    #[allow(dead_code)]
+    pub fn winget_direct(id: &str) -> Result<(), String> {
         let out = std::process::Command::new("winget")
             .args(["install", "-e", "--id", id, "--silent", "--accept-package-agreements", "--accept-source-agreements"])
             .creation_flags(0x0800_0000)

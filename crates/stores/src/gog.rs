@@ -23,7 +23,7 @@ impl Store for Gog {
     }
 
     fn detected(&self) -> bool {
-        !reg::subkeys(HKEY_LOCAL_MACHINE, GAMES).is_empty()
+        !reg::subkeys(HKEY_LOCAL_MACHINE, GAMES).is_empty() || std::path::Path::new(r"C:\Program Files (x86)\GOG Galaxy\GalaxyClient.exe").exists()
     }
 
     fn installed(&self) -> Vec<Game> {
@@ -74,7 +74,15 @@ fn catalog(params: &str) -> Vec<Offer> {
             };
             let url = p["storeLink"].as_str().unwrap_or("https://www.gog.com/fr").to_string();
             let heroes = p["coverHorizontal"].as_str().map(|h| vec![h.to_string()]).unwrap_or_default();
-            Some(Offer { title, price, cents: amount.map(|v| (v * 100.0).round() as i64), store: "GOG".into(), images, heroes, url })
+            let genres: Vec<&str> = p["genres"].as_array().into_iter().flatten().filter_map(|g| g["name"].as_str()).take(3).collect();
+            let mut meta = vec![];
+            if !genres.is_empty() {
+                meta.push(genres.join(", "));
+            }
+            if let Some(d) = p["releaseDate"].as_str() {
+                meta.push(d.to_string());
+            }
+            Some(Offer { title, price, cents: amount.map(|v| (v * 100.0).round() as i64), store: "GOG".into(), images, heroes, url, meta: meta.join("  ·  "), ..Default::default() })
         })
         .collect()
 }
