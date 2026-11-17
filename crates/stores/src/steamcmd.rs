@@ -2,6 +2,9 @@
 //! Les jeux vont dans `%LOCALAPPDATA%\Hearth\steamcmd\steamapps\common`.
 
 use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -71,43 +74,155 @@ fn failure(out: &str) -> String {
     }
 }
 
-/// Connexion (SteamCMD garde ensuite la session : les appels suivants n'ont besoin que de l'identifiant).
-pub fn login(user: &str, pass: &str, code: Option<&str>) -> Login {
-    if let Err(e) = ensure() {
-        return Login::Failed(e);
-    }
-    let mut args = vec!["+login", user, pass];
-    if let Some(c) = code {
-        args.push(c);
-    }
-    args.push("+quit");
-    match run(&args) {
-        Ok(out) if out.contains("Logged in OK") => Login::Ok,
-        Ok(out) => {
-            let l = out.to_lowercase();
-            if code.is_none() && (l.contains("steam guard") || l.contains("two-factor") || l.contains("twofactor")) {
-                Login::NeedCode
-            } else {
-                Login::Failed(failure(&out))
+/// Processus SteamCMD interactif en attente d'un code Steam Guard.
+pub struct Pending {
+    child: std::process::Child,
+    out: Arc<Mutex<String>>,
+}
+
+fn spawn_piped(args: &[&str]) -> Result<(std::process::Child, Arc<Mutex<String>>), String> {
+    let mut child = Command::new(exe())
+        .args(args)
+        .current_dir(dir())
+        .creation_flags(NO_WINDOW)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let out = Arc::new(Mutex::new(String::new()));
+    if let Some(mut so) = child.stdout.take() {
+        let o = out.clone();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = so.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                if let Ok(mut s) = o.lock() {
+                    s.push_str(&String::from_utf8_lossy(&buf[..n]));
+                }
             }
-        }
-        Err(e) => Login::Failed(e),
+        });
     }
+    Ok((child, out))
+}
+
+fn snapshot(out: &Arc<Mutex<String>>) -> String {
+    out.lock().map(|s| s.to_lowercase()).unwrap_or_default()
+}
+
+/// Attend la réussite, un échec, ou une demande de code (jusqu'à 3 minutes : l'utilisateur peut valider sur son téléphone).
+fn await_login(mut child: std::process::Child, out: Arc<Mutex<String>>, code_sent: bool) -> Login_ {
+    let t0 = std::time::Instant::now();
+    while t0.elapsed() < std::time::Duration::from_secs(180) {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let s = snapshot(&out);
+        if s.contains("logged in ok") {
+            if let Some(mut si) = child.stdin.take() {
+                let _ = si.write_all(b"quit\n");
+            }
+            let _ = child.wait();
+            return Login_::Done(Login::Ok);
+        }
+        if s.contains("invalid password") || s.contains("rate limit") || s.contains("login failure") || s.contains("account logon denied") {
+            let msg = failure(&s);
+            let _ = child.kill();
+            return Login_::Done(Login::Failed(msg));
+        }
+        if !code_sent && (s.contains("steam guard code") || s.contains("two-factor code") || s.contains("enter the current code") || s.contains("guard code")) {
+            return Login_::Wait(Pending { child, out });
+        }
+        if code_sent && (s.contains("incorrect") || s.contains("mismatch") || s.contains("expired")) {
+            let _ = child.kill();
+            return Login_::Done(Login::Failed("code Steam Guard incorrect".into()));
+        }
+        if matches!(child.try_wait(), Ok(Some(_))) && !s.contains("logged in ok") {
+            return Login_::Done(Login::Failed(failure(&s)));
+        }
+    }
+    let _ = child.kill();
+    Login_::Done(Login::Failed("délai dépassé".into()))
+}
+
+enum Login_ {
+    Done(Login),
+    Wait(Pending),
+}
+
+/// Connexion (SteamCMD garde ensuite la session : plus de mot de passe à saisir). Renvoie le processus en attente si un code est demandé.
+pub fn login(user: &str, pass: &str) -> (Login, Option<Pending>) {
+    if let Err(e) = ensure() {
+        return (Login::Failed(e), None);
+    }
+    let (child, out) = match spawn_piped(&["+@NoPromptForPassword", "0", "+login", user, pass]) {
+        Ok(x) => x,
+        Err(e) => return (Login::Failed(e), None),
+    };
+    match await_login(child, out, false) {
+        Login_::Done(l) => (l, None),
+        Login_::Wait(p) => (Login::NeedCode, Some(p)),
+    }
+}
+
+/// Envoie le code Steam Guard au même processus (même session : pas de second essai avec le mot de passe).
+pub fn submit_code(mut p: Pending, code: &str) -> Login {
+    if let Some(si) = p.child.stdin.as_mut() {
+        let _ = si.write_all(format!("{code}\n").as_bytes());
+        let _ = si.flush();
+    }
+    match await_login(p.child, p.out, true) {
+        Login_::Done(l) => l,
+        Login_::Wait(mut p) => {
+            let _ = p.child.kill();
+            Login::Failed("code Steam Guard incorrect".into())
+        }
+    }
+}
+
+pub fn abandon(mut p: Pending) {
+    let _ = p.child.kill();
 }
 
 /// Session mémorisée par SteamCMD pour cet identifiant ?
 pub fn session_ok(user: &str) -> bool {
-    run(&["+login", user, "+quit"]).is_ok_and(|o| o.contains("Logged in OK"))
+    run(&["+@NoPromptForPassword", "1", "+login", user, "+quit"]).is_ok_and(|o| o.contains("Logged in OK"))
 }
 
-/// Installe ou met à jour un jeu (bloquant, long).
-pub fn install(user: &str, appid: &str) -> Result<(), String> {
+/// Installe ou met à jour un jeu (bloquant, long). `pid` reçoit le processus (pour annuler), `progress` le pourcentage.
+pub fn install(user: &str, appid: &str, pid: &AtomicU32, progress: impl Fn(f32)) -> Result<(), String> {
     ensure()?;
-    let out = run(&["+@NoPromptForPassword", "1", "+login", user, "+app_update", appid, "validate", "+quit"])?;
-    if out.contains("fully installed") {
+    let (mut child, out) = spawn_piped(&["+@NoPromptForPassword", "1", "+login", user, "+app_update", appid, "validate", "+quit"])?;
+    pid.store(child.id(), Ordering::SeqCst);
+    let mut last = -1.0f32;
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        let s = out.lock().map(|s| s.clone()).unwrap_or_default();
+        if let Some(i) = s.rfind("progress: ") {
+            let v: String = s[i + 10..].chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+            if let Ok(p) = v.parse::<f32>() {
+                if (p - last).abs() >= 0.3 {
+                    last = p;
+                    progress(p);
+                }
+            }
+        }
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            break;
+        }
+    }
+    pid.store(0, Ordering::SeqCst);
+    let text = out.lock().map(|s| s.clone()).unwrap_or_default();
+    if text.contains("fully installed") {
         Ok(())
     } else {
-        Err(failure(&out))
+        Err(failure(&text))
+    }
+}
+
+/// Interrompt un téléchargement en cours.
+pub fn cancel(pid: u32) {
+    if pid != 0 {
+        let _ = Command::new("taskkill").args(["/pid", &pid.to_string(), "/t", "/f"]).creation_flags(NO_WINDOW).status();
     }
 }
 

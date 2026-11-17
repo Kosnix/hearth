@@ -427,3 +427,15 @@ msgstr "Available on"
 msgctxt "App"
 msgid "Acheter (QR code)"
 msgstr "Buy (QR code)"
+
+msgctxt "App"
+msgid "Téléchargements"
+msgstr "Downloads"
+
+msgctxt "App"
+msgid "Mises à jour et téléchargements des jeux installés par Hearth"
+msgstr "Updates and downloads of games installed by Hearth"
+
+msgctxt "App"
+msgid "Aucun téléchargement en cours. Les installations depuis la Bibliothèque et les mises à jour apparaîtront ici."
+msgstr "No downloads in progress. Installs from the Library and updates will show up here."

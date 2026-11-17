@@ -78,9 +78,13 @@ struct Shell {
     scmd_user_tmp: RefCell<String>,
     scmd_pass: RefCell<String>,
     scmd_pending: RefCell<Option<String>>,
-    scmd_busy: RefCell<std::collections::HashSet<String>>,
+    dl: RefCell<Vec<scmd::Dl>>,
+    dl_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    dl_rows: Rc<VecModel<DlRow>>,
+    dl_acts: RefCell<Vec<scmd::RowAct>>,
+    scmd_proc: RefCell<Option<stores::steamcmd::Pending>>,
     updates: RefCell<Vec<String>>,
-    declined: RefCell<std::collections::HashSet<String>>,
+    prompted: RefCell<std::collections::HashSet<String>>,
     pick_ids: RefCell<Vec<String>>,
     identify_target: RefCell<Option<String>>,
     deals: Rc<VecModel<Deal>>,
@@ -144,9 +148,13 @@ fn main() -> Result<(), slint::PlatformError> {
         scmd_user_tmp: RefCell::new(String::new()),
         scmd_pass: RefCell::new(String::new()),
         scmd_pending: RefCell::new(None),
-        scmd_busy: RefCell::new(Default::default()),
+        dl: RefCell::new(vec![]),
+        dl_pid: Default::default(),
+        dl_rows: Rc::new(VecModel::default()),
+        dl_acts: RefCell::new(vec![]),
+        scmd_proc: RefCell::new(None),
         updates: RefCell::new(vec![]),
-        declined: RefCell::new(Default::default()),
+        prompted: RefCell::new(Default::default()),
         pick_ids: RefCell::new(vec![]),
         identify_target: RefCell::new(None),
         deals: Rc::new(VecModel::default()),
@@ -184,6 +192,12 @@ fn main() -> Result<(), slint::PlatformError> {
     shell.ui.set_games(shell.tiles.clone().into());
     shell.ui.set_library(shell.library.clone().into());
     shell.ui.set_deals(shell.deals.clone().into());
+    shell.ui.set_dl_rows(shell.dl_rows.clone().into());
+    shell.dl_refresh();
+    let s = shell.clone();
+    shell.ui.on_dl_pick(move |i| s.dl_pick(i as usize));
+    let s = shell.clone();
+    shell.ui.on_dl_open(move || s.dl_refresh());
     shell.ui.set_det_shots(shell.det_shots.clone().into());
     shell.rebuild();
     shell.guide.set_notes(shell.notes.clone().into());
@@ -304,7 +318,7 @@ fn main() -> Result<(), slint::PlatformError> {
     Shell::schedule_updates();
     let s = shell.clone();
     let upd = slint::Timer::default();
-    upd.start(slint::TimerMode::Repeated, Duration::from_secs(6 * 3600), move || s.check_updates());
+    upd.start(slint::TimerMode::Repeated, Duration::from_secs(6 * 3600), move || s.check_updates(false));
     shell.start_art();
     shell.refresh_owned();
     shell.ui.run()
@@ -561,9 +575,8 @@ impl Shell {
                     5
                 } else if self.rename_id.borrow_mut().take().is_some() {
                     0
-                } else if self.scmd_stage.replace(0) != 0 {
-                    *self.scmd_pass.borrow_mut() = String::new();
-                    *self.scmd_pending.borrow_mut() = None;
+                } else if self.scmd_stage.get() != 0 {
+                    self.scmd_cancel();
                     0
                 } else {
                     3

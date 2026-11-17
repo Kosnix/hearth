@@ -14,6 +14,13 @@ export struct Tile {
     sub: string,
 }
 
+export struct DlRow {
+    name: string,
+    status: string,
+    pct: int,
+    kind: int,
+}
+
 export struct Deal {
     store: string,
     price: string,
@@ -338,6 +345,11 @@ export component App inherits Window {
     in property <image> det-cover;
     in property <[image]> det-shots;
     in property <[Deal]> deals;
+    in property <[DlRow]> dl-rows;
+    in property <int> dl-badge;
+    in-out property <int> dlsel: 0;
+    callback dl-pick(int);
+    callback dl-open();
     in property <bool> det-loading;
     in-out property <int> dsel: 0;
     in property <string> user: "Joueur";
@@ -394,6 +406,11 @@ export component App inherits Window {
     public function nav(a: int) {
         if (a == 6) {
             zone = 0;
+        } else if (zone == 10) {
+            if (a == 0) { dlsel = max(0, dlsel - 1); }
+            else if (a == 1) { dlsel = max(0, min(dl-rows.length - 1, dlsel + 1)); }
+            else if (a == 4 && dl-rows.length > 0) { dl-pick(dlsel); }
+            else if (a == 5) { zone = 1; }
         } else if (zone == 9) {
             if (a == 0) { msel = max(0, msel - 1); }
             else if (a == 1) { msel = max(0, min(menu-items.length - 1, msel + 1)); }
@@ -448,13 +465,14 @@ export component App inherits Window {
             else if (a == 4) { power(pw); }
         } else if (zone == 1) {
             if (a == 2) { top = max(0, top - 1); if (top <= 2) { tab = top; } }
-            else if (a == 3) { top = min(6, top + 1); if (top <= 2) { tab = top; } }
+            else if (a == 3) { top = min(7, top + 1); if (top <= 2) { tab = top; } }
             else if (a == 1 || a == 5) { zone = 0; }
             else if (a == 4 && top <= 2) { zone = 0; }
             else if (a == 4 && top == 3) { add-menu(); }
-            else if (a == 4 && top == 4) { nsel = 0; notifs-opened(); zone = 8; }
-            else if (a == 4 && top == 5) { sfocus = 0; srow = 0; zone = 3; open-cat(cat); }
-            else if (a == 4 && top == 6) { pw = 0; zone = 2; }
+            else if (a == 4 && top == 4) { dlsel = 0; dl-open(); zone = 10; }
+            else if (a == 4 && top == 5) { nsel = 0; notifs-opened(); zone = 8; }
+            else if (a == 4 && top == 6) { sfocus = 0; srow = 0; zone = 3; open-cat(cat); }
+            else if (a == 4 && top == 7) { pw = 0; zone = 2; }
         } else {
             if (a == 7) {
                 if (tab == 0 && games.length > 0) { game-menu(games[sel].gid); }
@@ -878,9 +896,9 @@ export component App inherits Window {
         height: 72px;
         alignment: end;
         spacing: 28px;
-        for g[i] in ["\u{E710}", "bell", "\u{E713}", "\u{E7E8}"]: TopIcon {
+        for g[i] in ["\u{E710}", "\u{E896}", "bell", "\u{E713}", "\u{E7E8}"]: TopIcon {
             glyph: g;
-            badge: i == 1 ? unread : 0;
+            badge: i == 1 ? dl-badge : (i == 2 ? unread : 0);
             selected: zone == 1 && top == i + 3;
             clicked => {
                 root.top = i + 3;
@@ -1067,6 +1085,103 @@ export component App inherits Window {
             y: parent.height - 100px;
             spacing: 48px;
             Hint { btn: 0; label: @tr("Acheter (QR code)"); }
+            Hint { btn: 1; label: @tr("Retour"); }
+        }
+    }
+
+    // --- Téléchargements et mises à jour ---
+    if zone == 10: Rectangle {
+        background: Theme.bg-settings;
+        TouchArea {
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.up && (e.button == PointerEventButton.right || e.button == PointerEventButton.back)) { root.nav(5); }
+            }
+        }
+        Text {
+            x: 80px;
+            y: 100px;
+            text: @tr("Téléchargements");
+            font-size: 96px;
+            font-weight: 800;
+            color: Theme.text;
+        }
+        Text {
+            x: 84px;
+            y: 240px;
+            text: @tr("Mises à jour et téléchargements des jeux installés par Hearth");
+            font-size: 28px;
+            color: Theme.dim;
+        }
+        Rectangle {
+            x: 80px;
+            y: 320px;
+            width: parent.width - 160px;
+            height: min(dl-rows.length, 9) * 112px + 24px;
+            clip: true;
+            border-radius: 18px;
+            background: Theme.glass;
+            for r[i] in dl-rows: Rectangle {
+                x: 12px;
+                y: 12px + (i - max(0, dlsel - 8)) * 112px;
+                width: parent.width - 24px;
+                height: 104px;
+                border-radius: 14px;
+                background: i == dlsel ? Theme.accent : transparent;
+                animate background { duration: 100ms; }
+                Text {
+                    x: 32px;
+                    y: r.pct >= 0 ? 16px : (parent.height - self.height) / 2;
+                    width: parent.width - 520px;
+                    text: r.name;
+                    font-size: 30px;
+                    font-weight: r.kind == 3 ? 700 : 500;
+                    color: Theme.text;
+                    overflow: elide;
+                }
+                Text {
+                    x: parent.width - self.width - 32px;
+                    y: r.pct >= 0 ? 16px : (parent.height - self.height) / 2;
+                    text: r.status;
+                    font-size: 26px;
+                    color: i == dlsel ? Theme.text : (r.kind == 1 ? #ffd27a : Theme.dim);
+                }
+                if r.pct >= 0: Rectangle {
+                    x: 32px;
+                    y: 66px;
+                    width: parent.width - 64px;
+                    height: 14px;
+                    border-radius: 7px;
+                    background: #ffffff33;
+                    Rectangle {
+                        width: parent.width * min(r.pct, 100) / 100;
+                        border-radius: 7px;
+                        background: Theme.text;
+                    }
+                }
+                TouchArea {
+                    clicked => { root.dlsel = i; root.dl-pick(i); }
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.move) { root.dlsel = i; }
+                    }
+                    scroll-event(e) => {
+                        if (e.delta-y != 0) { root.nav(e.delta-y > 0 ? 0 : 1); return accept; }
+                        reject
+                    }
+                }
+            }
+        }
+        if dl-rows.length <= 1: Text {
+            x: 84px;
+            y: 320px + 150px;
+            text: @tr("Aucun téléchargement en cours. Les installations depuis la Bibliothèque et les mises à jour apparaîtront ici.");
+            font-size: 28px;
+            color: Theme.dim;
+        }
+        HorizontalLayout {
+            x: 80px;
+            y: parent.height - 100px;
+            spacing: 48px;
+            Hint { btn: 0; label: @tr("Valider"); }
             Hint { btn: 1; label: @tr("Retour"); }
         }
     }
