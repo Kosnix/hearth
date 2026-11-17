@@ -217,12 +217,12 @@ pub fn session_ok(user: &str) -> bool {
 }
 
 /// Installe ou met à jour un jeu (bloquant, long). `pid` reçoit le processus (pour annuler), `progress` le pourcentage.
-pub fn install(user: &str, appid: &str, pid: &AtomicU32, progress: impl Fn(f32)) -> Result<(), String> {
+pub fn install(user: &str, appid: &str, pid: &AtomicU32, progress: impl Fn(f64, f64)) -> Result<(), String> {
     ensure()?;
     let offset = console_len();
     let (mut child, out) = spawn_piped(&["+@NoPromptForPassword", "1", "+login", user, "+app_update", appid, "validate", "+quit"])?;
     pid.store(child.id(), Ordering::SeqCst);
-    let mut last = -1.0f32;
+    let mut last = -1.0f64;
     loop {
         std::thread::sleep(std::time::Duration::from_millis(1000));
         // Progression lue dans le manifeste (octets téléchargés / à télécharger).
@@ -230,10 +230,9 @@ pub fn install(user: &str, appid: &str, pid: &AtomicU32, progress: impl Fn(f32))
             let n = |k: &str| field(&m, k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
             let (total, done) = (n("BytesToDownload"), n("BytesDownloaded"));
             if total > 0.0 {
-                let p = (done / total * 100.0) as f32;
-                if (p - last).abs() >= 0.3 {
-                    last = p;
-                    progress(p.min(100.0));
+                if done != last {
+                    last = done;
+                    progress(done, total);
                 }
             }
         }

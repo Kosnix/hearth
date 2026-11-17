@@ -191,3 +191,18 @@ pub fn details(id: &str, d: &mut crate::Details) {
     }
     d.shots = data["screenshots"].as_array().into_iter().flatten().filter_map(|s| s["path_thumbnail"].as_str().map(String::from)).take(4).collect();
 }
+
+/// Compte connecté dans le client Steam (0 : client arrêté ou déconnecté).
+pub fn client_user() -> u32 {
+    reg::dword(HKEY_CURRENT_USER, r"Software\Valve\Steam\ActiveProcess", "ActiveUser").unwrap_or(0)
+}
+
+/// Démarre le client Steam (réduit dans la zone de notification si `silent`).
+pub fn client_start(silent: bool) -> bool {
+    let Some(r) = root() else { return false };
+    let mut c = std::process::Command::new(r.join("steam.exe"));
+    if silent {
+        c.arg("-silent");
+    }
+    c.spawn().is_ok()
+}

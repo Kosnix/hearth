@@ -199,3 +199,5 @@ pub fn search(query: &str) -> Vec<Offer> {
 pub fn download(url: &str) -> Option<Vec<u8>> {
     http::get(url, &[])
 }
+
+pub use steam::{client_start as steam_client_start, client_user as steam_client_user};

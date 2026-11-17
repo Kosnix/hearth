@@ -75,6 +75,7 @@ struct Shell {
     menu_acts: RefCell<Vec<menus::Act>>,
     rename_id: RefCell<Option<String>>,
     scmd_stage: Cell<u8>,
+    steam_wait: Cell<bool>,
     scmd_user_tmp: RefCell<String>,
     scmd_pass: RefCell<String>,
     scmd_pending: RefCell<Option<String>>,
@@ -145,6 +146,7 @@ fn main() -> Result<(), slint::PlatformError> {
         menu_acts: RefCell::new(vec![]),
         rename_id: RefCell::new(None),
         scmd_stage: Cell::new(0),
+        steam_wait: Cell::new(false),
         scmd_user_tmp: RefCell::new(String::new()),
         scmd_pass: RefCell::new(String::new()),
         scmd_pending: RefCell::new(None),
@@ -337,6 +339,9 @@ impl Shell {
         let Some(g) = self.games.borrow().get(i).cloned() else { return };
         if g.install {
             self.install_owned(&g);
+            return;
+        }
+        if self.is_scmd_game(&g.exe) && !self.steam_ready(i, &g) {
             return;
         }
         self.start_splash(i, g.uri.is_some());

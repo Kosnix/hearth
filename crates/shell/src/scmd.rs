@@ -26,6 +26,10 @@ pub struct Dl {
     pub appid: String,
     pub name: String,
     pub pct: f32,
+    pub done: f64,
+    pub total: f64,
+    pub speed: f64,
+    pub t: Option<std::time::Instant>,
     pub state: DlState,
 }
 
@@ -153,7 +157,7 @@ impl Shell {
         }
         self.dl.borrow_mut().retain(|d| d.appid != appid);
         let name = self.name_of(&appid);
-        self.dl.borrow_mut().push(Dl { appid, name: name.clone(), pct: 0.0, state: DlState::Queued });
+        self.dl.borrow_mut().push(Dl { appid, name: name.clone(), pct: 0.0, done: 0.0, total: 0.0, speed: 0.0, t: None, state: DlState::Queued });
         self.push_notif(&tr("Téléchargements"), &format!("{name} : {}", tr("ajouté à la file")));
         self.dl_next();
         self.dl_refresh();
@@ -174,20 +178,32 @@ impl Shell {
         let pid = self.dl_pid.clone();
         std::thread::spawn(move || {
             let id = next.clone();
-            let r = steamcmd::install(&user, &next, &pid, move |p| {
+            let r = steamcmd::install(&user, &next, &pid, move |done, total| {
                 let id = id.clone();
-                let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.dl_progress(&id, p)));
+                let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.dl_progress(&id, done, total)));
             });
             let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.dl_done(&next, r)));
         });
     }
 
-    fn dl_progress(&self, appid: &str, pct: f32) {
+    fn dl_progress(&self, appid: &str, done: f64, total: f64) {
         if let Some(d) = self.dl.borrow_mut().iter_mut().find(|d| d.appid == appid && d.state == DlState::Active) {
-            d.pct = pct;
+            let now = std::time::Instant::now();
+            if let Some(t) = d.t {
+                let dt = now.duration_since(t).as_secs_f64();
+                if dt > 0.5 && done >= d.done {
+                    let inst = (done - d.done) / dt;
+                    d.speed = if d.speed == 0.0 { inst } else { 0.7 * d.speed + 0.3 * inst };
+                }
+            }
+            d.t = Some(now);
+            d.done = done;
+            d.total = total;
+            d.pct = (done / total.max(1.0) * 100.0).min(100.0) as f32;
         }
         self.dl_refresh();
     }
+
 
     fn dl_done(&self, appid: &str, r: Result<(), String>) {
         let name = self.name_of(appid);
@@ -298,7 +314,7 @@ impl Shell {
             rows.push((row(format!("{} ({})", tr("Tout mettre à jour"), outdated.len()), String::new(), -1, 3), RowAct::UpdateAll));
         }
         for d in dl.iter().filter(|d| matches!(d.state, DlState::Active | DlState::Queued)) {
-            let (status, pct) = if d.state == DlState::Active { (format!("{:.0} %", d.pct), d.pct as i32) } else { (tr("En attente"), -1) };
+            let (status, pct) = if d.state == DlState::Active { (active_status(d), d.pct as i32) } else { (tr("En attente"), -1) };
             rows.push((row(d.name.clone(), status, pct, 0), RowAct::Item(d.appid.clone())));
         }
         for a in &outdated {
@@ -345,5 +361,63 @@ impl Shell {
             }
         }
         self.dl_refresh();
+    }
+}
+
+/// « 42 % · 12,3 Mo\/s · 8 min restantes ».
+fn active_status(d: &Dl) -> String {
+    let mut s = format!("{:.0} %", d.pct);
+    if d.speed > 1.0 {
+        let mbs = d.speed / 1_048_576.0;
+        s.push_str(&format!("  ·  {} {}", format!("{mbs:.1}").replace('.', if i18n::lang() == 1 { "." } else { "," }), tr("Mo/s")));
+        let left = ((d.total - d.done) / d.speed).max(0.0) as u64;
+        let eta = if left < 60 {
+            format!("{left} s")
+        } else if left < 3600 {
+            format!("{} min", left.div_ceil(60))
+        } else {
+            format!("{} h {:02} min", left / 3600, (left % 3600) / 60)
+        };
+        s.push_str(&format!("  ·  {eta} {}", tr("restant")));
+    }
+    s
+}
+
+impl Shell {
+    /// Les jeux installés par SteamCMD utilisent l'API Steam : ils plantent si le client n'est pas lancé et connecté.
+    /// Renvoie vrai si on peut lancer tout de suite ; sinon démarre Steam et relance le jeu quand il est prêt.
+    pub fn steam_ready(&self, i: usize, g: &crate::Game) -> bool {
+        if let (Some(id), Some(dir)) = (g.id.strip_prefix("steam-"), std::path::Path::new(&g.exe).parent()) {
+            let f = dir.join("steam_appid.txt");
+            if !f.exists() {
+                let _ = std::fs::write(f, id);
+            }
+        }
+        if stores::steam_client_user() != 0 {
+            return true;
+        }
+        if self.steam_wait.replace(true) {
+            return false;
+        }
+        stores::steam_client_start(true);
+        self.push_notif("Steam", &tr("Démarrage de Steam…"));
+        std::thread::spawn(move || {
+            let ok = (0..40).any(|_| {
+                std::thread::sleep(Duration::from_secs(1));
+                stores::steam_client_user() != 0
+            });
+            let _ = slint::invoke_from_event_loop(move || {
+                with_shell(|s| {
+                    s.steam_wait.set(false);
+                    if ok {
+                        s.launch(i);
+                    } else {
+                        stores::steam_client_start(false);
+                        s.push_notif("Steam", &tr("Connectez-vous dans la fenêtre Steam (une seule fois), puis relancez le jeu"));
+                    }
+                })
+            });
+        });
+        false
     }
 }

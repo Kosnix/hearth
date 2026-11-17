@@ -29,3 +29,11 @@ pub fn subkeys(root: HKEY, key: &str) -> Vec<String> {
     let _ = unsafe { RegCloseKey(h) };
     out
 }
+
+pub fn dword(root: HKEY, key: &str, name: &str) -> Option<u32> {
+    let (k, n) = (HSTRING::from(key), HSTRING::from(name));
+    let mut v = 0u32;
+    let mut len = 4u32;
+    let r = unsafe { RegGetValueW(root, PCWSTR(k.as_ptr()), PCWSTR(n.as_ptr()), RRF_RT_REG_DWORD, None, Some((&mut v as *mut u32).cast()), Some(&mut len)) };
+    r.is_ok().then_some(v)
+}
