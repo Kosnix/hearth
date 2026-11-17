@@ -531,4 +531,4 @@ pub mod drivers {
 }
 
 mod extra;
-pub use extra::{about, bluetooth, net, power};
+pub use extra::{about, bluetooth, install, net, power};

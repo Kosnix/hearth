@@ -176,3 +176,32 @@ pub mod about {
         ]
     }
 }
+
+pub mod install {
+    use std::os::windows::process::CommandExt;
+
+    /// Identifiant winget du client d'une boutique.
+    pub fn client_id(store: &str) -> Option<&'static str> {
+        match store {
+            "Steam" => Some("Valve.Steam"),
+            "Epic Games" => Some("EpicGames.EpicGamesLauncher"),
+            "GOG" => Some("GOG.Galaxy"),
+            _ => None,
+        }
+    }
+
+    /// Installe un paquet via winget, en silence (Windows peut demander une confirmation d'administrateur). Bloquant.
+    pub fn winget(id: &str) -> Result<(), String> {
+        let out = std::process::Command::new("winget")
+            .args(["install", "-e", "--id", id, "--silent", "--accept-package-agreements", "--accept-source-agreements"])
+            .creation_flags(0x0800_0000)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            let text = String::from_utf8_lossy(&out.stdout);
+            Err(text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("échec").trim().to_string())
+        }
+    }
+}

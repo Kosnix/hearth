@@ -21,6 +21,12 @@ pub fn post_json(url: &str, headers: &[(&str, &str)], body: &str) -> Option<serd
 }
 
 fn request(method: &str, url: &str, headers: &[(&str, &str)], body: Option<&[u8]>) -> Option<Vec<u8>> {
+    let (status, data) = request_raw(method, url, headers, body)?;
+    (status == 200).then_some(data)
+}
+
+/// Requête avec code HTTP (les flux de connexion répondent 400 tant que l'utilisateur n'a pas validé).
+fn request_raw(method: &str, url: &str, headers: &[(&str, &str)], body: Option<&[u8]>) -> Option<(u32, Vec<u8>)> {
     let rest = url.strip_prefix("https://")?;
     let (host, path) = rest.split_once('/').map_or((rest, "/".to_string()), |(h, p)| (h, format!("/{p}")));
     unsafe {
@@ -47,9 +53,6 @@ fn request(method: &str, url: &str, headers: &[(&str, &str)], body: Option<&[u8]
                 let mut status = 0u32;
                 let mut len = size_of::<u32>() as u32;
                 WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, PCWSTR::null(), Some(&mut status as *mut u32 as *mut c_void), &mut len, std::ptr::null_mut()).ok()?;
-                if status != 200 {
-                    return None;
-                }
                 let mut data = Vec::new();
                 loop {
                     let mut avail = 0u32;
@@ -62,7 +65,7 @@ fn request(method: &str, url: &str, headers: &[(&str, &str)], body: Option<&[u8]
                     WinHttpReadData(req, buf.as_mut_ptr().cast(), avail, &mut read).ok()?;
                     data.extend_from_slice(&buf[..read as usize]);
                 }
-                Some(data)
+                Some((status, data))
             })();
             if !req.is_null() {
                 let _ = WinHttpCloseHandle(req);
@@ -77,4 +80,25 @@ fn request(method: &str, url: &str, headers: &[(&str, &str)], body: Option<&[u8]
 
 pub fn get_json(url: &str, headers: &[(&str, &str)]) -> Option<serde_json::Value> {
     serde_json::from_slice(&get(url, headers)?).ok()
+}
+
+/// POST de formulaire (`application/x-www-form-urlencoded`), réponse JSON.
+pub fn post_form(url: &str, headers: &[(&str, &str)], form: &str) -> Option<serde_json::Value> {
+    let mut h = headers.to_vec();
+    h.push(("Content-Type", "application/x-www-form-urlencoded"));
+    serde_json::from_slice(&request("POST", url, &h, Some(form.as_bytes()))?).ok()
+}
+
+/// POST de formulaire, renvoie le code HTTP et le JSON (même en cas d'erreur).
+pub fn post_form_status(url: &str, headers: &[(&str, &str)], form: &str) -> Option<(u32, serde_json::Value)> {
+    let mut h = headers.to_vec();
+    h.push(("Content-Type", "application/x-www-form-urlencoded"));
+    let (status, data) = request_raw("POST", url, &h, Some(form.as_bytes()))?;
+    Some((status, serde_json::from_slice(&data).unwrap_or(serde_json::Value::Null)))
+}
+
+/// GET avec code HTTP et JSON.
+pub fn get_status(url: &str, headers: &[(&str, &str)]) -> Option<(u32, serde_json::Value)> {
+    let (status, data) = request_raw("GET", url, headers, None)?;
+    Some((status, serde_json::from_slice(&data).unwrap_or(serde_json::Value::Null)))
 }

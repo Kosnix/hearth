@@ -165,7 +165,7 @@ impl Shell {
         let name = offer.as_ref().map(|o| o.title.clone()).unwrap_or_else(|| self.guess_title.borrow().clone());
         let hash = exe.to_string_lossy().to_lowercase().bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
         let id = format!("custom-{:08x}", hash as u32);
-        let game = Game { name: name.clone(), id: id.clone(), exe: exe.to_string_lossy().into_owned(), args: vec![], cover: String::new(), anticheat: false, uri: None, store: String::new() };
+        let game = Game { name: name.clone(), id: id.clone(), exe: exe.to_string_lossy().into_owned(), args: vec![], cover: String::new(), anticheat: false, uri: None, store: String::new(), install: false };
         let idx = self.games.borrow().len();
         self.games.borrow_mut().push(game.clone());
         self.tiles_insert(idx, tile_of(&game));

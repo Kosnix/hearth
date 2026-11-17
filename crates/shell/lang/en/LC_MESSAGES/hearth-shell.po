@@ -383,3 +383,19 @@ msgctxt "App"
 msgid "Ajouter"
 msgstr "Add"
 
+msgctxt "App"
+msgid "À installer"
+msgstr "To install"
+
+msgctxt "GameTile"
+msgid "À installer"
+msgstr "To install"
+
+msgctxt "App"
+msgid "Installer"
+msgstr "Install"
+
+msgctxt "Splash"
+msgid "Lancement…"
+msgstr "Launching…"
+

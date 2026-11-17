@@ -8,6 +8,7 @@ mod http;
 mod reg;
 mod steam;
 
+pub mod account;
 pub mod qr;
 
 pub use art::{asset, ensure_art, fetch_first, save_art};
@@ -130,4 +131,10 @@ pub fn catalog() -> Vec<Offer> {
 /// Recherche unifiée dans toutes les boutiques.
 pub fn search(query: &str) -> Vec<Offer> {
     collect(|s| s.search(query))
+}
+
+/// Enregistre une jaquette (première URL téléchargeable) sous `id`, pour les jeux possédés non installés.
+pub fn save_cover(id: &str, urls: &[String]) -> bool {
+    let offer = Offer { images: urls.to_vec(), ..Default::default() };
+    save_art(id, &offer)
 }

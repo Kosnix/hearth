@@ -9,6 +9,7 @@ export struct Tile {
     hero: image,
     running: bool,
     add: bool,
+    install: bool,
 }
 
 export struct SettingRow {
@@ -202,6 +203,19 @@ component GameTile inherits Rectangle {
                 color: Theme.text;
             }
         }
+        if tile.install: Rectangle {
+            x: 12px;
+            y: 12px;
+            width: badge2.preferred-width + 20px;
+            height: 32px;
+            border-radius: 16px;
+            background: #2fa36b;
+            badge2 := Text {
+                text: @tr("À installer");
+                font-size: 16px;
+                color: Theme.text;
+            }
+        }
         Rectangle {
             border-radius: 18px;
             border-width: selected ? 5px : 0px;
@@ -278,12 +292,6 @@ export component App inherits Window {
     in property <string> pick-title;
     in property <string> pick-hint;
     in-out property <int> psel: 0;
-    in-out property <bool> launching: false;
-    in property <string> launch-name;
-    in property <image> launch-cover;
-    in property <image> launch-art;
-    in property <float> launch-t: 0; // 0..1 : progression de l'animation d'entrée
-    in property <float> launch-spin: 0; // degrés
     in property <int> unread;
     in property <string> toast-title;
     in property <string> toast-text;
@@ -294,6 +302,9 @@ export component App inherits Window {
     in property <image> qr;
     in property <string> qr-title;
     in property <string> qr-url;
+    in property <string> qr-hint;
+    in property <string> qr-action;
+    in property <int> qr-return: 0;
     in-out property <int> osel: 0;
     in-out property <int> brow: 0; // 0 boutiques, 1 offres
     in property <string> user: "Joueur";
@@ -321,6 +332,8 @@ export component App inherits Window {
     callback desktop();
     callback search-open();
     callback pick(int);
+    callback qr-act();
+    callback qr-cancel();
     callback pick-back();
     callback show-offer(int);
     callback notifs-opened();
@@ -338,10 +351,6 @@ export component App inherits Window {
 
     // a : 0 haut, 1 bas, 2 gauche, 3 droite, 4 valider, 5 retour, 6 guide, 7 menu (cf. input::Nav)
     public function nav(a: int) {
-        if (launching) {
-            if (a == 5) { launching = false; }
-            return;
-        }
         if (a == 6) {
             zone = 0;
         } else if (zone == 6) {
@@ -356,7 +365,8 @@ export component App inherits Window {
             else if (a == 7) { notif-action(-1); }
             else if (a == 5) { zone = 1; }
         } else if (zone == 5) {
-            if (a == 4 || a == 5) { zone = 0; }
+            if (a == 5) { qr-cancel(); zone = qr-return; }
+            else if (a == 4) { if (qr-action != "") { qr-act(); } else { zone = qr-return; } }
         } else if (zone == 4) {
             if (a == 0) { kby = max(0, kby - 1); }
             else if (a == 1) { kby = min(4, kby + 1); }
@@ -493,7 +503,7 @@ export component App inherits Window {
         }
         playlbl := Text {
             x: 76px;
-            text: games[sel].add ? @tr("Ajouter") : (games[sel].running ? @tr("Reprendre") : @tr("Jouer"));
+            text: games[sel].add ? @tr("Ajouter") : (games[sel].install ? @tr("Installer") : (games[sel].running ? @tr("Reprendre") : @tr("Jouer")));
             font-size: 30px;
             font-weight: 600;
             color: Theme.text;
@@ -768,7 +778,7 @@ export component App inherits Window {
             animate background { duration: 100ms; }
             Text {
                 x: 26px;
-                text: ["\u{E767}", "\u{E7F4}", "\u{E701}", "\u{E702}", "\u{E7FC}", "\u{E774}", "\u{E895}", "\u{EDA2}", "\u{E950}", "\u{E7E8}", "\u{E7ED}", "\u{E946}"][i];
+                text: ["\u{E767}", "\u{E7F4}", "\u{E701}", "\u{E702}", "\u{E7FC}", "\u{E774}", "\u{E895}", "\u{EDA2}", "\u{E950}", "\u{E7E8}", "\u{E7ED}", "\u{E946}", "\u{E77B}"][i];
                 font-family: Theme.icons;
                 font-size: 28px;
                 color: i == cat ? Theme.text : Theme.dim;
@@ -838,76 +848,6 @@ export component App inherits Window {
             spacing: 48px;
             Hint { btn: 0; label: @tr("Valider"); }
             Hint { btn: 1; label: @tr("Retour"); }
-        }
-    }
-
-    // Écran de lancement : héros du jeu qui s'ouvre en fondu, jaquette, nom et indicateur de chargement.
-    if launching: Rectangle {
-        background: #0a0c1e;
-        TouchArea { }
-        if launch-art.width > 0: Image {
-            x: -(parent.width * (0.06 - 0.06 * launch-t)) / 2;
-            y: -(parent.height * (0.06 - 0.06 * launch-t)) / 2;
-            width: parent.width * (1.06 - 0.06 * launch-t);
-            height: parent.height * (1.06 - 0.06 * launch-t);
-            source: launch-art;
-            image-fit: cover;
-            opacity: 0.55 * launch-t;
-        }
-        Rectangle {
-            background: @linear-gradient(180deg, #0a0c1e00 0%, #0a0c1ee0 100%);
-        }
-        Rectangle {
-            x: (parent.width - 520px) / 2;
-            y: 150px - 30px * (1 - launch-t);
-            width: 520px;
-            height: 640px;
-            border-radius: 28px;
-            clip: true;
-            opacity: launch-t;
-            background: Theme.tile;
-            Image {
-                width: 100%;
-                height: 100%;
-                source: launch-cover;
-                image-fit: cover;
-            }
-            if launch-cover.width == 0: Text {
-                text: launch-name;
-                font-size: 48px;
-                font-weight: 800;
-                color: Theme.text;
-                wrap: word-wrap;
-                horizontal-alignment: center;
-                width: parent.width - 60px;
-            }
-        }
-        Text {
-            x: (parent.width - self.width) / 2;
-            y: 830px;
-            text: launch-name;
-            font-size: 52px;
-            font-weight: 800;
-            color: Theme.text;
-            opacity: launch-t;
-        }
-        // Anneau de chargement : huit points qui s'estompent en tournant.
-        for i in [0, 1, 2, 3, 4, 5, 6, 7]: Rectangle {
-            x: parent.width / 2 - 8px + 40px * cos(i * 45deg);
-            y: 975px - 8px + 40px * sin(i * 45deg);
-            width: 16px;
-            height: 16px;
-            border-radius: 8px;
-            background: #ffffff;
-            opacity: 1 - mod(launch-spin / 45 - i + 16, 8) / 8;
-        }
-        Text {
-            x: (parent.width - self.width) / 2;
-            y: 1050px;
-            text: @tr("Lancement…");
-            font-size: 26px;
-            color: Theme.dim;
-            opacity: launch-t;
         }
     }
 
@@ -1144,7 +1084,7 @@ export component App inherits Window {
         Text {
             x: (parent.width - self.width) / 2;
             y: 850px;
-            text: @tr("Scannez avec votre téléphone pour acheter");
+            text: qr-hint;
             font-size: 32px;
             color: Theme.text;
         }
@@ -1154,6 +1094,20 @@ export component App inherits Window {
             text: qr-url;
             font-size: 22px;
             color: Theme.dim;
+        }
+        if qr-action != "": Rectangle {
+            x: (parent.width - 420px) / 2;
+            y: 980px;
+            width: 420px;
+            height: 84px;
+            border-radius: 42px;
+            background: Theme.accent;
+            Text {
+                text: qr-action;
+                font-size: 30px;
+                font-weight: 600;
+                color: Theme.text;
+            }
         }
         HorizontalLayout {
             x: 80px;
@@ -1427,4 +1381,82 @@ export component GuideMenu inherits Window {
         Hint { btn: 0; label: @tr("Valider"); }
         Hint { btn: 1; label: @tr("Retour"); }
     }
+}
+
+// Écran de lancement : fenêtre superposée au jeu pendant son chargement (comme le menu guide, sans prendre le focus).
+export component Splash inherits Window {
+    in property <string> launch-name;
+    in property <image> launch-cover;
+    in property <image> launch-art;
+    in property <float> launch-t: 0; // 0..1 : progression de l'animation d'entrée
+    in property <float> launch-spin: 0; // degrés
+    title: "Hearth Splash";
+    no-frame: true;
+    always-on-top: true;
+    background: #0a0c1e;
+        TouchArea { }
+        if launch-art.width > 0: Image {
+            x: -(parent.width * (0.06 - 0.06 * launch-t)) / 2;
+            y: -(parent.height * (0.06 - 0.06 * launch-t)) / 2;
+            width: parent.width * (1.06 - 0.06 * launch-t);
+            height: parent.height * (1.06 - 0.06 * launch-t);
+            source: launch-art;
+            image-fit: cover;
+            opacity: 0.55 * launch-t;
+        }
+        Rectangle {
+            background: @linear-gradient(180deg, #0a0c1e00 0%, #0a0c1ee0 100%);
+        }
+        Rectangle {
+            x: (parent.width - 520px) / 2;
+            y: 150px - 30px * (1 - launch-t);
+            width: 520px;
+            height: 640px;
+            border-radius: 28px;
+            clip: true;
+            opacity: launch-t;
+            background: Theme.tile;
+            Image {
+                width: 100%;
+                height: 100%;
+                source: launch-cover;
+                image-fit: cover;
+            }
+            if launch-cover.width == 0: Text {
+                text: launch-name;
+                font-size: 48px;
+                font-weight: 800;
+                color: Theme.text;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+                width: parent.width - 60px;
+            }
+        }
+        Text {
+            x: (parent.width - self.width) / 2;
+            y: 830px;
+            text: launch-name;
+            font-size: 52px;
+            font-weight: 800;
+            color: Theme.text;
+            opacity: launch-t;
+        }
+        // Anneau de chargement : huit points qui s'estompent en tournant.
+        for i in [0, 1, 2, 3, 4, 5, 6, 7]: Rectangle {
+            x: parent.width / 2 - 8px + 40px * cos(i * 45deg);
+            y: 975px - 8px + 40px * sin(i * 45deg);
+            width: 16px;
+            height: 16px;
+            border-radius: 8px;
+            background: #ffffff;
+            opacity: 1 - mod(launch-spin / 45 - i + 16, 8) / 8;
+        }
+        Text {
+            x: (parent.width - self.width) / 2;
+            y: 1050px;
+            text: @tr("Lancement…");
+            font-size: 26px;
+            color: Theme.dim;
+            opacity: launch-t;
+        }
 }

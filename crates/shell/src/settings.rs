@@ -12,8 +12,8 @@ use system::wifi::Net;
 use crate::i18n::{self, tr};
 use crate::SettingRow;
 
-const CATS: [&str; 12] =
-    ["Son", "Affichage", "Wi-Fi", "Bluetooth", "Manettes", "Langue", "Mises à jour", "Stockage", "Pilotes", "Alimentation", "Notifications", "À propos"];
+const CATS: [&str; 13] =
+    ["Son", "Affichage", "Wi-Fi", "Bluetooth", "Manettes", "Langue", "Mises à jour", "Stockage", "Pilotes", "Alimentation", "Notifications", "À propos", "Comptes"];
 
 pub fn cats() -> Vec<String> {
     CATS.iter().map(|c| tr(c)).collect()
@@ -41,6 +41,7 @@ pub struct Fetched {
     sleep_min: Option<u32>,
     screen_min: Option<u32>,
     about: Vec<(&'static str, String)>,
+    accounts: Vec<(String, bool, Option<String>)>,
 }
 
 pub fn fetch(cat: i32) -> Fetched {
@@ -55,12 +56,13 @@ pub fn fetch(cat: i32) -> Fetched {
         8 => Fetched { gpus: system::drivers::gpus(), ..Default::default() },
         9 => Fetched { plans: system::power::plans(), sleep_min: system::power::timeout(true), screen_min: system::power::timeout(false), ..Default::default() },
         11 => Fetched { about: system::about::info(), ..Default::default() },
+        12 => Fetched { accounts: stores::all().iter().map(|s| (s.name().to_string(), s.detected(), stores::account::session(s.name()).map(|a| a.name))).collect(), ..Default::default() },
         _ => Fetched::default(),
     }
 }
 
 pub fn needs_fetch(cat: i32) -> bool {
-    (2..=4).contains(&cat) || matches!(cat, 7 | 8 | 9 | 11)
+    (2..=4).contains(&cat) || matches!(cat, 7 | 8 | 9 | 11 | 12)
 }
 
 /// Ce que le shell doit faire après une action.
@@ -75,6 +77,9 @@ pub enum Outcome {
     BtScan,
     BtPair(String, String),
     BtUnpair(String, String),
+    InstallClient(String),
+    Login(String),
+    Logout(String),
 }
 
 pub enum Kb {
@@ -292,6 +297,13 @@ impl Settings {
                 row("Extinction de l'écran après", minutes(s.data.screen_min), true),
             ],
             10 => vec![row("Afficher les bannières", onoff(Some(i18n::toasts())), false)],
+            12 if s.loading => vec![row("Lecture…", String::new(), false)],
+            12 => {
+                if hint.is_empty() {
+                    hint = tr("Connexion par QR code. Le client de la boutique s'installe tout seul quand il faut installer un jeu.");
+                }
+                account_rows(&s.data.accounts).into_iter().map(|(l, v, _)| row(&l, v, false)).collect()
+            }
             11 if s.loading => vec![row("Lecture…", String::new(), false)],
             11 => {
                 let mut v: Vec<SettingRow> = s.data.about.iter().map(|(k, val)| row(k, val.clone(), false)).collect();
@@ -408,6 +420,14 @@ impl Settings {
                 s.data.screen_min = system::power::timeout(false).or(Some(m));
             }
             (10, 0, 0) => i18n::set_toasts(!i18n::toasts()),
+            (12, r, 0) if !s.loading => {
+                out = match account_rows(&s.data.accounts).into_iter().nth(r as usize).map(|(_, _, a)| a) {
+                    Some(Act::Install(n)) => Outcome::InstallClient(n),
+                    Some(Act::Login(n)) => Outcome::Login(n),
+                    Some(Act::Logout(n)) => Outcome::Logout(n),
+                    _ => Outcome::None,
+                };
+            }
             _ => {}
         }
         out
@@ -500,4 +520,31 @@ impl Settings {
 
 fn gb(bytes: u64) -> String {
     format!("{} {}", bytes / 1_000_000_000, tr("Go"))
+}
+
+/// Action associée à une ligne de la catégorie « Comptes ».
+enum Act {
+    Install(String),
+    Login(String),
+    Logout(String),
+    None,
+}
+
+/// Lignes (libellé, valeur, action) : un compte par boutique, et l'installation du client s'il manque.
+fn account_rows(accounts: &[(String, bool, Option<String>)]) -> Vec<(String, String, Act)> {
+    let mut v = vec![];
+    for (name, detected, session) in accounts {
+        if name == "GOG" {
+            let value = if *detected { tr("Bibliothèque locale") } else { tr("Client non installé") };
+            v.push((name.clone(), value, Act::None));
+        } else if let Some(user) = session {
+            v.push((name.clone(), format!("{} · {user}", tr("Connecté")), Act::Logout(name.clone())));
+        } else {
+            v.push((name.clone(), tr("Se connecter"), Act::Login(name.clone())));
+        }
+        if !*detected {
+            v.push((format!("{} {name}", tr("Installer le client")), tr("Automatique (winget)"), Act::Install(name.clone())));
+        }
+    }
+    v
 }

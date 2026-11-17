@@ -11,6 +11,7 @@ use i18n::tr;
 use slint::{ComponentHandle, Model, SharedString, VecModel};
 
 mod addgame;
+mod accounts;
 mod addflow;
 mod i18n;
 mod settings;
@@ -21,6 +22,7 @@ slint::include_modules!();
 const EXIT_DESKTOP: i32 = 10;
 const MAIN_TITLE: &str = "Hearth";
 const GUIDE_TITLE: &str = "Hearth Guide";
+const SPLASH_TITLE: &str = "Hearth Splash";
 const GUIDE_WIDTH: f32 = 460.0; // px logiques
 const MAX_NOTES: usize = 5;
 
@@ -40,6 +42,8 @@ struct Game {
     uri: Option<String>,
     #[serde(skip)]
     store: String,
+    #[serde(skip)]
+    install: bool,
 }
 
 /// Jeu en cours, lancé depuis la tuile `tile`.
@@ -53,6 +57,7 @@ struct Running {
 struct Shell {
     ui: App,
     guide: GuideMenu,
+    splash: Splash,
     games: RefCell<Vec<Game>>,
     tiles: Rc<VecModel<Tile>>,
     notes: Rc<VecModel<SharedString>>,
@@ -68,6 +73,8 @@ struct Shell {
     catalog_gen: Cell<u32>,
     kb_search: Cell<bool>,
     kb_identify: Cell<bool>,
+    kb_login: Cell<bool>,
+    login: RefCell<Option<stores::account::Challenge>>,
     pick_mode: RefCell<addflow::PickMode>,
     pick_entries: RefCell<Vec<addgame::Entry>>,
     pick_offers: RefCell<Vec<stores::Offer>>,
@@ -96,6 +103,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let shell = Rc::new(Shell {
         ui: App::new()?,
         guide: GuideMenu::new()?,
+        splash: Splash::new()?,
         games: RefCell::new(games),
         tiles: Rc::new(VecModel::from(tiles)),
         notes: Rc::new(VecModel::default()),
@@ -110,6 +118,8 @@ fn main() -> Result<(), slint::PlatformError> {
         catalog_gen: Cell::new(0),
         kb_search: Cell::new(false),
         kb_identify: Cell::new(false),
+        kb_login: Cell::new(false),
+        login: RefCell::new(None),
         pick_mode: RefCell::new(addflow::PickMode::Root),
         pick_entries: RefCell::new(vec![]),
         pick_offers: RefCell::new(vec![]),
@@ -150,6 +160,10 @@ fn main() -> Result<(), slint::PlatformError> {
     shell.ui.on_pick(move |i| s.pick(i as usize));
     let s = shell.clone();
     shell.ui.on_pick_back(move || s.pick_back());
+    let s = shell.clone();
+    shell.ui.on_qr_act(move || s.login_code());
+    let s = shell.clone();
+    shell.ui.on_qr_cancel(move || s.login_cancel());
     shell.ui.on_power(|a| match a {
         0 => unsafe {
             let _ = windows::Win32::System::Power::SetSuspendState(false, false, false);
@@ -186,13 +200,16 @@ fn main() -> Result<(), slint::PlatformError> {
     // Le menu guide est créé une fois puis affiché/masqué en Win32, sans jamais prendre le focus
     // (un jeu plein écran qui perd le focus se réduit et clignote).
     shell.guide.show()?;
+    shell.splash.show()?;
     // Les fenêtres natives n'existent pas forcément dès le premier tour : on réessaie.
     let setup = Rc::new(slint::Timer::default());
     let t = setup.clone();
     setup.start(slint::TimerMode::Repeated, Duration::from_millis(50), move || {
-        if let Some(h) = wm::find_window(GUIDE_TITLE) {
+        if let (Some(h), Some(sp)) = (wm::find_window(GUIDE_TITLE), wm::find_window(SPLASH_TITLE)) {
             wm::make_overlay(h);
             wm::hide(h);
+            wm::make_overlay(sp);
+            wm::hide(sp);
             if let Some(m) = wm::find_window(MAIN_TITLE) {
                 wm::focus(m);
                 // Dev : un ancien shell élevé peut masquer le nôtre ; HEARTH_DEV_TOPMOST le recouvre.
@@ -218,6 +235,7 @@ fn main() -> Result<(), slint::PlatformError> {
     });
 
     shell.start_art();
+    shell.refresh_owned();
     shell.ui.run()
 }
 
@@ -236,6 +254,10 @@ impl Shell {
             return;
         }
         let Some(g) = self.games.borrow().get(i).cloned() else { return };
+        if g.install {
+            self.install_owned(&g);
+            return;
+        }
         self.start_splash(i, g.uri.is_some());
         if let Some(uri) = &g.uri {
             // Lancement par le client de la boutique : le jeu n'est pas encapsulé.
@@ -253,13 +275,19 @@ impl Shell {
                 self.set_running(i, true);
             }
             Err(e) => {
-                self.ui.set_launching(false);
+                self.hide_splash();
                 self.notify(format!("{} {} : {}", tr("Impossible de lancer"), g.name, e.message()));
             }
         }
     }
 
     fn on_nav(&self, nav: Nav) {
+        if wm::find_window(SPLASH_TITLE).is_some_and(wm::is_visible) {
+            if nav == Nav::Back {
+                self.hide_splash();
+            }
+            return;
+        }
         if wm::find_window(GUIDE_TITLE).is_some_and(wm::is_visible) {
             if nav == Nav::Guide {
                 self.guide_action(-1, 0);
@@ -319,8 +347,9 @@ impl Shell {
     }
 
     fn fetched(&self, cat: i32, f: settings::Fetched) {
-        self.settings.apply(f);
+        // Un résultat lent ne doit pas écraser les données de la catégorie affichée à présent.
         if self.ui.get_cat() == cat {
+            self.settings.apply(f);
             self.open_cat_keep(cat);
         }
     }
@@ -350,6 +379,9 @@ impl Shell {
             }
             settings::Outcome::Connect(ssid) => self.connect(ssid, None),
             settings::Outcome::LangChanged => self.refresh_lang(),
+            settings::Outcome::InstallClient(store) => self.account_install_client(store),
+            settings::Outcome::Login(store) => self.begin_login(store),
+            settings::Outcome::Logout(store) => self.logout(&store),
             settings::Outcome::BtScan => {
                 self.settings.set_message(tr("Recherche d'appareils Bluetooth…"));
                 self.open_cat_keep(3);
@@ -422,11 +454,14 @@ impl Shell {
         match self.settings.kb_press(x, y) {
             settings::Kb::Continue => self.kb_refresh(),
             settings::Kb::Cancel => {
-                let back = if self.kb_search.replace(false) { 0 } else if self.kb_identify.replace(false) { 6 } else { 3 };
+                let back = if self.kb_search.replace(false) { 0 } else if self.kb_identify.replace(false) { 6 } else if self.kb_login.replace(false) { 5 } else { 3 };
                 self.ui.set_zone(back);
             }
             settings::Kb::Done(ssid, text) => {
-                if self.kb_identify.replace(false) {
+                if self.kb_login.replace(false) {
+                    self.ui.set_zone(5);
+                    self.login_exchange(text);
+                } else if self.kb_identify.replace(false) {
                     self.ui.set_zone(6);
                     if !text.trim().is_empty() {
                         self.run_identify(text.trim().to_string());
@@ -694,13 +729,13 @@ fn load_games() -> Vec<Game> {
             stores::Launch::Exe { path, args } => (path, args, None),
             stores::Launch::Uri(u) => (String::new(), vec![], Some(u)),
         };
-        games.push(Game { name: g.title, id: g.id, exe, args, cover: String::new(), anticheat: false, uri, store: g.store.into() });
+        games.push(Game { name: g.title, id: g.id, exe, args, cover: String::new(), anticheat: false, uri, store: g.store.into(), install: false });
     }
     if games.is_empty() {
         games = ["notepad.exe", "calc.exe", "mspaint.exe"]
             .into_iter()
             .zip(["Bloc-notes", "Calculatrice", "Paint"])
-            .map(|(exe, name)| Game { name: name.into(), id: format!("demo-{exe}"), exe: exe.into(), args: vec![], cover: String::new(), anticheat: false, uri: None, store: String::new() })
+            .map(|(exe, name)| Game { name: name.into(), id: format!("demo-{exe}"), exe: exe.into(), args: vec![], cover: String::new(), anticheat: false, uri: None, store: String::new(), install: false })
             .collect();
     }
     games
@@ -862,6 +897,9 @@ impl Shell {
             self.ui.set_qr(slint::Image::from_rgb8(buf));
             self.ui.set_qr_title(o.title.into());
             self.ui.set_qr_url(o.url.into());
+            self.ui.set_qr_hint(tr("Scannez avec votre téléphone pour acheter").into());
+            self.ui.set_qr_action("".into());
+            self.ui.set_qr_return(0);
             self.ui.set_zone(5);
         }
     }
@@ -895,18 +933,30 @@ impl Shell {
 }
 
 impl Shell {
-    /// Écran de lancement : s'ouvre à l'appel, se ferme quand la fenêtre du jeu passe devant (ou après un délai).
+    /// Écran de lancement : fenêtre superposée au jeu, qui reste le temps du chargement.
     fn start_splash(&self, i: usize, uri: bool) {
         let Some(t) = self.tiles.row_data(i) else { return };
-        self.ui.set_launch_name(t.name);
-        self.ui.set_launch_cover(t.cover);
-        self.ui.set_launch_art(t.hero);
-        self.ui.set_launch_t(0.0);
-        self.ui.set_launch_spin(0.0);
-        self.ui.set_launching(true);
+        self.splash.set_launch_name(t.name);
+        self.splash.set_launch_cover(t.cover);
+        self.splash.set_launch_art(t.hero);
+        self.splash.set_launch_t(0.0);
+        self.splash.set_launch_spin(0.0);
+        if let Some(h) = wm::find_window(SPLASH_TITLE) {
+            let (x, y, w, hh) = wm::primary_monitor();
+            wm::show_overlay(h, x, y, w, hh);
+            self.splash.window().request_redraw();
+        }
         self.splash_start.set(Some(std::time::Instant::now()));
         self.splash_uri.set(uri);
         self.splash_timer.start(slint::TimerMode::Repeated, Duration::from_millis(40), || with_shell(|s| s.splash_tick()));
+    }
+
+    pub fn hide_splash(&self) {
+        if let Some(h) = wm::find_window(SPLASH_TITLE) {
+            wm::hide(h);
+        }
+        self.splash_start.set(None);
+        self.splash_timer.stop();
     }
 
     fn splash_tick(&self) {
@@ -915,15 +965,14 @@ impl Shell {
             return;
         };
         let el = t0.elapsed().as_secs_f32();
-        self.ui.set_launch_t((el / 0.9).min(1.0));
-        self.ui.set_launch_spin((el * 540.0) % 360.0);
+        self.splash.set_launch_t((el / 0.9).min(1.0));
+        self.splash.set_launch_spin((el * 540.0) % 360.0);
         let fg = wm::foreground();
         let shown = self.running.borrow().iter().any(|r| r.session.owns(fg));
-        let timeout = el > 14.0 || (self.splash_uri.get() && el > 8.0);
-        if !self.ui.get_launching() || (shown && el > 1.5) || timeout {
-            self.ui.set_launching(false);
-            self.splash_start.set(None);
-            self.splash_timer.stop();
+        // Le jeu affiche tout de suite une fenêtre noire : on garde l'écran de lancement par-dessus quelques secondes.
+        let done = (shown && el > 5.0) || el > 15.0 || (self.splash_uri.get() && el > 8.0);
+        if done || wm::find_window(SPLASH_TITLE).is_none_or(|h| !wm::is_visible(h)) {
+            self.hide_splash();
         }
     }
 }
@@ -937,11 +986,12 @@ fn tile_of(g: &Game) -> Tile {
         hero: hero_of(g),
         running: false,
         add: false,
+        install: g.install,
     }
 }
 
 fn add_tile() -> Tile {
-    Tile { name: tr("Ajouter un jeu").into(), initial: "+".into(), hue: slint::Color::from_rgb_u8(90, 100, 160), cover: Default::default(), hero: Default::default(), running: false, add: true }
+    Tile { name: tr("Ajouter un jeu").into(), initial: "+".into(), hue: slint::Color::from_rgb_u8(90, 100, 160), cover: Default::default(), hero: Default::default(), running: false, add: true, install: false }
 }
 
 impl Shell {
