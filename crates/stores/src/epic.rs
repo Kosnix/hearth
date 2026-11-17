@@ -18,9 +18,9 @@ impl Store for Epic {
     }
 
     fn installed(&self) -> Vec<Game> {
-        let Ok(dir) = std::fs::read_dir(MANIFESTS) else { return vec![] };
-        let mut games: Vec<Game> = dir
-            .flatten()
+        let entries: Vec<std::fs::DirEntry> = std::fs::read_dir(MANIFESTS).map(|d| d.flatten().collect()).unwrap_or_default();
+        let mut games: Vec<Game> = entries
+            .into_iter()
             .filter(|e| e.path().extension().is_some_and(|x| x == "item"))
             .filter_map(|e| {
                 let j: serde_json::Value = serde_json::from_str(std::fs::read_to_string(e.path()).ok()?.trim_start_matches('\u{feff}')).ok()?;
@@ -34,6 +34,11 @@ impl Store for Epic {
                 Some(Game { id: format!("epic-{app}"), store: "Epic Games", title, launch: Launch::Exe { path, args }, art: Art::default() })
             })
             .collect();
+        for g in crate::epiccmd::installed() {
+            if !games.iter().any(|x| x.id == g.id) {
+                games.push(g);
+            }
+        }
         games.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
         games
     }

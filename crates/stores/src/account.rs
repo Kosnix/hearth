@@ -407,3 +407,19 @@ pub fn epic_debug() -> String {
         None => "pas de réponse".into(),
     }
 }
+
+/// Code d'échange a usage unique pour ouvrir une session dans un autre client (Legendary), sans nouvelle saisie.
+pub fn epic_exchange_code() -> Option<String> {
+    let mut s = session("Epic Games")?;
+    let url = format!("{EPIC_OAUTH}/exchange");
+    let mut res = http::get_status(&url, &[("Authorization", &format!("bearer {}", s.access))]);
+    if !matches!(res, Some((200, _))) {
+        if let Some(n) = epic_refresh(&s) {
+            s = n;
+            store_session("Epic Games", s.clone());
+            res = http::get_status(&url, &[("Authorization", &format!("bearer {}", s.access))]);
+        }
+    }
+    let Some((200, j)) = res else { return None };
+    j["code"].as_str().map(String::from)
+}

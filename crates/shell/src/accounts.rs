@@ -141,11 +141,17 @@ impl Shell {
         if self.ui.get_zone() == 3 && self.ui.get_cat() == 12 {
             self.open_cat(12);
         }
+        if store == "Epic Games" {
+            self.epic_prepare();
+        }
         self.refresh_owned();
     }
 
     pub fn logout(&self, store: &str) {
         account::logout(store);
+        if store == "Epic Games" {
+            std::thread::spawn(stores::epiccmd::logout);
+        }
         self.push_notif(&tr("Connexion"), &format!("{store} : {}", tr("déconnecté")));
         self.refresh_owned();
     }
@@ -200,6 +206,10 @@ impl Shell {
 
     /// Installe un jeu possédé via le client de sa boutique (installé au besoin).
     pub fn install_owned(&self, g: &Game) {
+        if g.id.starts_with("owned-epic-") {
+            self.epic_install(&g.id);
+            return;
+        }
         if g.id.starts_with("owned-steam-") {
             self.steam_install(&g.id);
             return;

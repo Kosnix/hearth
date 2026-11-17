@@ -29,6 +29,7 @@ pub struct Dl {
     pub done: f64,
     pub total: f64,
     pub speed: f64,
+    pub eta: Option<u64>,
     pub t: Option<std::time::Instant>,
     pub state: DlState,
 }
@@ -141,6 +142,9 @@ impl Shell {
     }
 
     fn name_of(&self, appid: &str) -> String {
+        if let Some(d) = self.dl.borrow().iter().find(|d| d.appid == appid) {
+            return d.name.clone();
+        }
         self.games.borrow().iter().find(|g| appid_of(&g.id) == Some(appid)).map(|g| g.name.clone()).unwrap_or_else(|| appid.to_string())
     }
 
@@ -157,7 +161,7 @@ impl Shell {
         }
         self.dl.borrow_mut().retain(|d| d.appid != appid);
         let name = self.name_of(&appid);
-        self.dl.borrow_mut().push(Dl { appid, name: name.clone(), pct: 0.0, done: 0.0, total: 0.0, speed: 0.0, t: None, state: DlState::Queued });
+        self.dl.borrow_mut().push(Dl { appid, name: name.clone(), pct: 0.0, done: 0.0, total: 0.0, speed: 0.0, eta: None, t: None, state: DlState::Queued });
         self.push_notif(&tr("Téléchargements"), &format!("{name} : {}", tr("ajouté à la file")));
         self.dl_next();
         self.dl_refresh();
@@ -168,14 +172,29 @@ impl Shell {
         if self.dl.borrow().iter().any(|d| d.state == DlState::Active) {
             return;
         }
-        let Some(user) = self.scmd_user() else { return };
         let next = {
             let mut dl = self.dl.borrow_mut();
             let Some(d) = dl.iter_mut().find(|d| d.state == DlState::Queued) else { return };
+            // Steam exige une session SteamCMD ; Epic utilise Legendary (session de Hearth).
+            if !d.appid.starts_with("epic:") && self.scmd_user().is_none() {
+                return;
+            }
             d.state = DlState::Active;
             d.appid.clone()
         };
         let pid = self.dl_pid.clone();
+        if let Some(app) = next.strip_prefix("epic:").map(String::from) {
+            std::thread::spawn(move || {
+                let id = next.clone();
+                let r = stores::epiccmd::install(&app, &pid, move |pct, speed, eta| {
+                    let id = id.clone();
+                    let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.dl_progress_epic(&id, pct, speed, eta)));
+                });
+                let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.dl_done(&next, r)));
+            });
+            return;
+        }
+        let Some(user) = self.scmd_user() else { return };
         std::thread::spawn(move || {
             let id = next.clone();
             let r = steamcmd::install(&user, &next, &pid, move |done, total| {
@@ -183,6 +202,45 @@ impl Shell {
                 let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.dl_progress(&id, done, total)));
             });
             let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.dl_done(&next, r)));
+        });
+    }
+
+    fn dl_progress_epic(&self, appid: &str, pct: f32, speed: f64, eta: Option<u64>) {
+        if let Some(d) = self.dl.borrow_mut().iter_mut().find(|d| d.appid == appid && d.state == DlState::Active) {
+            d.pct = pct.min(100.0);
+            d.speed = speed;
+            d.eta = eta;
+        }
+        self.dl_refresh();
+    }
+
+    /// Met un jeu Epic dans la file (Legendary, session de Hearth : aucune saisie).
+    pub fn epic_install(&self, game_id: &str) {
+        let owned = self.owned.borrow().iter().find(|(_, id)| id == game_id).map(|(o, _)| (o.key.rsplit(':').next().unwrap_or("").to_string(), o.title.clone()));
+        let Some((app, title)) = owned.filter(|(a, _)| !a.is_empty()) else { return };
+        if stores::account::session("Epic Games").is_none() {
+            self.push_notif(&tr("Téléchargements"), &tr("Connectez-vous à Epic (Réglages > Comptes)"));
+            return;
+        }
+        let key = format!("epic:{app}");
+        if self.dl.borrow().iter().any(|d| d.appid == key && matches!(d.state, DlState::Queued | DlState::Active)) {
+            self.push_notif(&tr("Téléchargements"), &tr("Déjà dans la file"));
+            return;
+        }
+        self.dl.borrow_mut().retain(|d| d.appid != key);
+        self.dl.borrow_mut().push(Dl { appid: key, name: title.clone(), pct: 0.0, done: 0.0, total: 0.0, speed: 0.0, eta: None, t: None, state: DlState::Queued });
+        self.push_notif(&tr("Téléchargements"), &format!("{title} : {}", tr("ajouté à la file")));
+        self.dl_next();
+        self.dl_refresh();
+    }
+
+    /// Ouvre la session Legendary après la connexion Epic de Hearth (en tâche de fond).
+    pub fn epic_prepare(&self) {
+        std::thread::spawn(|| {
+            let r = stores::epiccmd::auth();
+            if let Err(e) = r {
+                let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.push_notif("Epic", &format!("{} ({e})", tr("Préparation de l'installation impossible")))));
+            }
         });
     }
 
@@ -353,7 +411,11 @@ impl Shell {
                 match state {
                     Some(DlState::Active) => {
                         self.dl.borrow_mut().retain(|d| d.appid != a);
-                        steamcmd::cancel(self.dl_pid.load(Ordering::SeqCst));
+                        if a.starts_with("epic:") {
+                            stores::epiccmd::cancel(self.dl_pid.load(Ordering::SeqCst));
+                        } else {
+                            steamcmd::cancel(self.dl_pid.load(Ordering::SeqCst));
+                        }
                         self.push_notif(&tr("Téléchargements"), &tr("Téléchargement annulé"));
                     }
                     _ => self.dl.borrow_mut().retain(|d| d.appid != a),
@@ -370,7 +432,7 @@ fn active_status(d: &Dl) -> String {
     if d.speed > 1.0 {
         let mbs = d.speed / 1_048_576.0;
         s.push_str(&format!("  ·  {} {}", format!("{mbs:.1}").replace('.', if i18n::lang() == 1 { "." } else { "," }), tr("Mo/s")));
-        let left = ((d.total - d.done) / d.speed).max(0.0) as u64;
+        let left = d.eta.unwrap_or_else(|| ((d.total - d.done) / d.speed).max(0.0) as u64);
         let eta = if left < 60 {
             format!("{left} s")
         } else if left < 3600 {

@@ -1,4 +1,5 @@
 fn main() {
-    let l = stores::account::library("Epic Games");
-    println!("{} jeux: {:?}", l.len(), l.iter().take(8).map(|o| (&o.title, o.images.len())).collect::<Vec<_>>());
+    let pid = std::sync::atomic::AtomicU32::new(0);
+    let r = stores::epiccmd::install("Hazelnut", &pid, |p, s, e| println!("{p}% {:.1} MB/s eta {e:?}", s / 1048576.0));
+    println!("{r:?}");
 }

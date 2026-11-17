@@ -170,6 +170,20 @@ impl Shell {
             self.push_notif(&tr("Jeu retiré"), &g.name);
             return;
         }
+        if std::path::Path::new(&g.exe) == stores::epiccmd::exe() {
+            let app = g.id.strip_prefix("epic-").unwrap_or_default().to_string();
+            self.push_notif(&g.name, &tr("Désinstallation en cours…"));
+            std::thread::spawn(move || {
+                let ok = stores::epiccmd::uninstall(&app);
+                let _ = slint::invoke_from_event_loop(move || {
+                    crate::with_shell(|s| {
+                        s.push_notif("Epic", &tr(if ok { "Jeu désinstallé" } else { "Désinstallation impossible" }));
+                        s.poll_installed();
+                    })
+                });
+            });
+            return;
+        }
         if self.is_scmd_game(&g.exe) {
             let ok = g.id.strip_prefix("steam-").is_some_and(stores::steamcmd::uninstall);
             self.push_notif(&g.name, &tr(if ok { "Jeu désinstallé" } else { "Désinstallation impossible" }));

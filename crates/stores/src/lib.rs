@@ -3,6 +3,7 @@
 
 mod art;
 mod epic;
+pub mod epiccmd;
 mod gog;
 mod http;
 mod reg;

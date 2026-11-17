@@ -131,6 +131,8 @@ fn main() -> Result<(), slint::PlatformError> {
     }));
     // set_fullscreen() avant run() est ignoré par winit : plein écran dès la création.
     std::env::set_var("SLINT_FULLSCREEN", "1");
+    // Legendary (jeux Epic) lit sa configuration ici, y compris quand il est lancé par le gestionnaire de fenêtres.
+    std::env::set_var("LEGENDARY_CONFIG_PATH", stores::epiccmd::config());
     // ponytail: femtovg cesse de se redessiner avec ce design (constaté sur l'Optiplex) ; rendu logiciel.
     std::env::set_var("SLINT_BACKEND", std::env::var("HEARTH_BACKEND").unwrap_or_else(|_| "winit-skia".into()));
     let overrides = prefs::load();
