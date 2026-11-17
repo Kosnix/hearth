@@ -150,18 +150,28 @@ enum Login_ {
 }
 
 /// Connexion (SteamCMD garde ensuite la session : plus de mot de passe à saisir). Renvoie le processus en attente si un code est demandé.
-pub fn login(user: &str, pass: &str) -> (Login, Option<Pending>) {
+pub fn login(user: &str, pass: &str, code: Option<&str>) -> (Login, Option<Pending>) {
     if let Err(e) = ensure() {
         return (Login::Failed(e), None);
     }
-    let (child, out) = match spawn_piped(&["+@NoPromptForPassword", "0", "+login", user, pass]) {
+    let mut args = vec!["+@NoPromptForPassword", "0", "+login", user, pass];
+    if let Some(c) = code {
+        args.push(c);
+    }
+    let (child, out) = match spawn_piped(&args) {
         Ok(x) => x,
         Err(e) => return (Login::Failed(e), None),
     };
-    match await_login(child, out, false) {
+    let log = out.clone();
+    let r = match await_login(child, out, code.is_some()) {
         Login_::Done(l) => (l, None),
         Login_::Wait(p) => (Login::NeedCode, Some(p)),
+    };
+    // Trace pour diagnostiquer les échecs de connexion (la sortie de SteamCMD ne contient pas le mot de passe).
+    if let Ok(s) = log.lock() {
+        let _ = std::fs::write(dir().join("hearth-login.log"), s.as_str());
     }
+    r
 }
 
 /// Envoie le code Steam Guard au même processus (même session : pas de second essai avec le mot de passe).

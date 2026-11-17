@@ -82,12 +82,18 @@ impl Shell {
                 self.scmd_keyboard(2, "Mot de passe Steam");
             }
             2 => {
+                *self.scmd_pass.borrow_mut() = text;
+                self.scmd_keyboard(4, "Code Steam Guard de l'application Steam (vide : validation sur le téléphone)");
+            }
+            4 => {
                 self.ui.set_zone(0);
                 self.scmd_stage.set(0);
                 let user = self.scmd_user_tmp.borrow().clone();
-                self.push_notif("Steam", &tr("Connexion à Steam…"));
+                let pass = std::mem::take(&mut *self.scmd_pass.borrow_mut());
+                let code = Some(text.trim().to_string()).filter(|c| !c.is_empty());
+                self.push_notif("Steam", &tr("Connexion à Steam… (si besoin, validez sur votre téléphone, 1 minute)"));
                 std::thread::spawn(move || {
-                    let (r, p) = steamcmd::login(&user, &text);
+                    let (r, p) = steamcmd::login(&user, &pass, code.as_deref());
                     let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.scmd_login_done(user, r, p)));
                 });
             }
