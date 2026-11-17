@@ -328,3 +328,37 @@ mod tests {
         assert_eq!(super::quote(""), r#""""#);
     }
 }
+
+/// Nom de l'exécutable (minuscules) du processus qui possède la fenêtre.
+fn exe_name(h: HWND) -> String {
+    let mut pid = 0;
+    unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
+    let Ok(p) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else { return String::new() };
+    let mut buf = [0u16; 512];
+    let mut n = buf.len() as u32;
+    let ok = unsafe { QueryFullProcessImageNameW(p, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut n) }.is_ok();
+    let _ = unsafe { CloseHandle(p) };
+    if !ok {
+        return String::new();
+    }
+    String::from_utf16_lossy(&buf[..n as usize]).rsplit('\\').next().unwrap_or("").to_lowercase()
+}
+
+/// Réduit sans prendre le focus les fenêtres visibles des processus donnés (ex. client Steam). Renvoie le nombre réduit.
+pub fn minimize_windows_of(exes: &[&str]) -> usize {
+    let mut count = 0;
+    for h in top_windows() {
+        unsafe {
+            if !IsWindowVisible(h).as_bool() || IsIconic(h).as_bool() {
+                continue;
+            }
+        }
+        if exes.contains(&exe_name(h).as_str()) {
+            unsafe {
+                let _ = ShowWindow(h, SW_SHOWMINNOACTIVE);
+            }
+            count += 1;
+        }
+    }
+    count
+}

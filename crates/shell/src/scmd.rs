@@ -394,12 +394,14 @@ impl Shell {
             }
         }
         if stores::steam_client_user() != 0 {
+            self.steam_keep(30);
             return true;
         }
         if self.steam_wait.replace(true) {
             return false;
         }
         stores::steam_client_start(true);
+        self.steam_keep(120);
         self.push_notif("Steam", &tr("Démarrage de Steam…"));
         std::thread::spawn(move || {
             let ok = (0..40).any(|_| {
@@ -413,11 +415,36 @@ impl Shell {
                         s.launch(i);
                     } else {
                         stores::steam_client_start(false);
+                        s.steam_keep(900);
                         s.push_notif("Steam", &tr("Connectez-vous dans la fenêtre Steam (une seule fois), puis relancez le jeu"));
                     }
                 })
             });
         });
         false
+    }
+}
+
+impl Shell {
+    /// Pendant `secs` secondes, réduit la fenêtre du client Steam dès qu'il est connecté (il prend sinon le focus du jeu).
+    pub fn steam_keep(&self, secs: u64) {
+        self.steam_until.set(Some(std::time::Instant::now() + Duration::from_secs(secs)));
+        if !self.steam_timer.running() {
+            self.steam_timer.start(slint::TimerMode::Repeated, Duration::from_millis(300), || with_shell(|s| s.steam_keep_tick()));
+        }
+    }
+
+    fn steam_keep_tick(&self) {
+        match self.steam_until.get() {
+            Some(t) if std::time::Instant::now() < t => {
+                if stores::steam_client_user() != 0 {
+                    wm::minimize_windows_of(&["steam.exe", "steamwebhelper.exe"]);
+                }
+            }
+            _ => {
+                self.steam_until.set(None);
+                self.steam_timer.stop();
+            }
+        }
     }
 }
