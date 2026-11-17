@@ -41,26 +41,39 @@ impl Store for Epic {
     fn featured(&self) -> Vec<Offer> {
         let url = "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=fr&country=FR&allowCountries=FR";
         let Some(j) = http::get_json(url, &[]) else { return vec![] };
-        j["data"]["Catalog"]["searchStore"]["elements"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|e| {
-                let title = e["title"].as_str()?.to_string();
-                let slug = e["productSlug"].as_str().or_else(|| e["urlSlug"].as_str()).unwrap_or("");
-                let image = ["OfferImageTall", "DieselStoreFrontTall", "Thumbnail", "OfferImageWide"]
-                    .iter()
-                    .find_map(|t| e["keyImages"].as_array()?.iter().find(|k| k["type"] == *t)?["url"].as_str())?
-                    .to_string();
-                let fin = e["price"]["totalPrice"]["discountPrice"].as_i64().unwrap_or(-1);
-                let price = match fin {
-                    0 => "Gratuit".to_string(),
-                    n if n > 0 => format!("{},{:02} €", n / 100, n % 100),
-                    _ => String::new(),
-                };
-                let url = if slug.is_empty() { "https://store.epicgames.com/fr/".into() } else { format!("https://store.epicgames.com/fr/p/{}", slug.trim_end_matches("/home")) };
-                Some(Offer { title, price, image, url })
-            })
-            .collect()
+        j["data"]["Catalog"]["searchStore"]["elements"].as_array().into_iter().flatten().filter_map(offer).collect()
     }
+
+    fn search(&self, query: &str) -> Vec<Offer> {
+        let body = serde_json::json!({
+            "query": "query q($k:String,$c:String!,$l:String){Catalog{searchStore(keywords:$k,country:$c,locale:$l,count:20,category:\"games/edition/base|bundles/games|editors\"){elements{title productSlug urlSlug keyImages{type url} price(country:$c){totalPrice{discountPrice}}}}}}",
+            "variables": { "k": query, "c": "FR", "l": "fr" }
+        });
+        let Some(j) = http::post_json("https://store.epicgames.com/graphql", &[], &body.to_string()) else { return vec![] };
+        j["data"]["Catalog"]["searchStore"]["elements"].as_array().into_iter().flatten().filter_map(offer).collect()
+    }
+}
+
+fn offer(e: &serde_json::Value) -> Option<Offer> {
+    let title = e["title"].as_str()?.to_string();
+    let slug = e["productSlug"].as_str().or_else(|| e["urlSlug"].as_str()).unwrap_or("");
+    let images: Vec<String> = ["OfferImageTall", "DieselStoreFrontTall", "Thumbnail", "OfferImageWide"]
+        .iter()
+        .filter_map(|t| e["keyImages"].as_array()?.iter().find(|k| k["type"] == *t)?["url"].as_str().map(String::from))
+        .collect();
+    if images.is_empty() {
+        return None;
+    }
+    let fin = e["price"]["totalPrice"]["discountPrice"].as_i64();
+    let price = match fin {
+        Some(0) => "Gratuit".to_string(),
+        Some(n) if n > 0 => format!("{},{:02} €", n / 100, n % 100),
+        _ => String::new(),
+    };
+    let url = if slug.is_empty() { "https://store.epicgames.com/fr/".into() } else { format!("https://store.epicgames.com/fr/p/{}", slug.trim_end_matches("/home")) };
+    let heroes: Vec<String> = ["OfferImageWide", "DieselStoreFrontWide", "featuredMedia"]
+        .iter()
+        .filter_map(|t| e["keyImages"].as_array()?.iter().find(|k| k["type"] == *t)?["url"].as_str().map(String::from))
+        .collect();
+    Some(Offer { title, price, cents: fin, store: "Epic".into(), images, heroes, url })
 }

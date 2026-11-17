@@ -1,19 +1,21 @@
-//! Sonde : affiche la bibliothèque installée et le catalogue de chaque boutique (réseau).
+//! Sonde : bibliothèque installée, catalogue unifié et recherche (réseau).
 fn main() {
     for s in stores::all() {
-        let games = s.installed();
-        println!("== {} (détecté : {}, {} jeux installés)", s.name(), s.detected(), games.len());
-        for g in games.iter().take(5) {
-            println!("  - {} [{}] {:?}", g.title, g.id, g.launch);
-        }
-        let offers = s.featured();
-        println!("  catalogue : {} offres", offers.len());
-        for o in offers.iter().take(5) {
-            println!("  * {} | {} | {} | {}", o.title, o.price, o.url, o.image);
-        }
-        if let Some(o) = offers.first() {
-            println!("  image : {:?}", stores::fetch_image(&o.image));
+        println!("== {} (détecté : {}, {} jeux installés)", s.name(), s.detected(), s.installed().len());
+    }
+    let cat = stores::catalog();
+    println!("catalogue unifié : {} offres", cat.len());
+    for o in cat.iter().take(8) {
+        println!("  * {} | {} | {} | {}", o.title, o.price, o.store, o.url);
+    }
+    for q in ["witcher", "hades"] {
+        let r = stores::search(q);
+        println!("recherche « {q} » : {} résultats", r.len());
+        for o in r.iter().take(6) {
+            println!("  * {} | {} | {}", o.title, o.price, o.store);
         }
     }
-    println!("qr : {:?}", stores::qr::rgb("https://store.steampowered.com/app/440", 6).map(|(w, h, p)| (w, h, p.len())));
+    for (name, s) in stores::all().iter().map(|s| (s.name(), s)) {
+        println!("{name}: {} résultats pour « celeste »", s.search("celeste").len());
+    }
 }

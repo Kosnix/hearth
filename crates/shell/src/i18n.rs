@@ -38,6 +38,39 @@ const EN: &[(&str, &str)] = &[
     ("s'est fermé", "has closed"),
     ("Impossible de lancer", "Cannot launch"),
     ("Bientôt disponible", "Coming soon"),
+    ("Dossier parent", "Parent folder"),
+    ("Choisissez le dossier puis l'exécutable (.exe) du jeu", "Pick the folder, then the game executable (.exe)"),
+    ("Identifier le jeu", "Identify the game"),
+    ("Recherche dans les boutiques :", "Searching the stores:"),
+    ("Saisir un autre nom…", "Type another name…"),
+    ("Recherche actuelle :", "Current search:"),
+    ("Utiliser", "Use"),
+    ("sans visuels", "without artwork"),
+    ("Nom du jeu", "Game name"),
+    ("Jeu ajouté", "Game added"),
+    ("Bureau", "Desktop"),
+    ("Téléchargements", "Downloads"),
+    ("Documents", "Documents"),
+    ("Résultats pour", "Results for"),
+    ("Rechercher un jeu", "Search for a game"),
+    ("Jamais", "Never"),
+    ("À proximité", "Nearby"),
+    ("Appairé", "Paired"),
+    ("Valider sur un appareil appairé pour l'oublier ; sur un appareil trouvé pour l'appairer.", "Select a paired device to forget it, or a found device to pair it."),
+    ("Rechercher des appareils", "Search for devices"),
+    ("Recherche d'appareils Bluetooth…", "Searching for Bluetooth devices…"),
+    ("Appairage de", "Pairing"),
+    ("appairé", "paired"),
+    ("échec de l'appairage", "pairing failed"),
+    ("oublié", "forgotten"),
+    ("Mode d'alimentation", "Power mode"),
+    ("Mise en veille après", "Sleep after"),
+    ("Extinction de l'écran après", "Turn off screen after"),
+    ("Alimentation", "Power"),
+    ("Notifications", "Notifications"),
+    ("À propos", "About"),
+    ("Afficher les bannières", "Show banners"),
+    ("Manettes", "Controllers"),
     ("À la une", "Featured"),
     ("jeux installés", "installed games"),
     ("Non détecté", "Not detected"),
@@ -80,7 +113,10 @@ pub fn init() {
     let saved = std::fs::read_to_string(file())
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(s.trim_start_matches('\u{feff}')).ok())
-        .inspect(|v| ANIM.store(v["anim"].as_bool().unwrap_or(true), Ordering::Relaxed))
+        .inspect(|v| {
+            ANIM.store(v["anim"].as_bool().unwrap_or(true), Ordering::Relaxed);
+            TOASTS.store(v["toasts"].as_bool().unwrap_or(true), Ordering::Relaxed);
+        })
         .and_then(|v| v["lang"].as_str().map(String::from));
     let code = saved.unwrap_or_else(system_lang);
     set(LANGS.iter().position(|(c, _)| *c == code).unwrap_or(0), false);
@@ -112,11 +148,28 @@ pub fn set_anim(on: bool) {
 }
 
 fn persist() {
-    let _ = std::fs::write(file(), format!("{{\"lang\":\"{}\",\"anim\":{}}}", LANGS[lang()].0, anim()));
+    // Conserve les autres clés (ex. steamgriddb_key).
+    let mut v: serde_json::Value = std::fs::read_to_string(file()).ok().and_then(|s| serde_json::from_str(s.trim_start_matches('\u{feff}')).ok()).unwrap_or_else(|| serde_json::json!({}));
+    v["lang"] = LANGS[lang()].0.into();
+    v["anim"] = anim().into();
+    v["toasts"] = toasts().into();
+    let _ = std::fs::write(file(), v.to_string());
 }
 
 /// Valeur textuelle d'une préférence de `settings.json` (ex. clé SteamGridDB).
 pub fn pref(key: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(std::fs::read_to_string(file()).ok()?.trim_start_matches('\u{feff}')).ok()?;
     v[key].as_str().map(String::from).filter(|s| !s.is_empty())
+}
+
+static TOASTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Bannières de notification activées ?
+pub fn toasts() -> bool {
+    TOASTS.load(Ordering::Relaxed)
+}
+
+pub fn set_toasts(on: bool) {
+    TOASTS.store(on, Ordering::Relaxed);
+    persist();
 }

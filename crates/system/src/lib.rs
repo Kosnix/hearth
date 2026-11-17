@@ -318,9 +318,22 @@ pub mod wifi {
 pub mod pads {
     use windows::Gaming::Input::RawGameController;
 
-    pub fn names() -> Vec<String> {
+    /// Manettes connectées avec niveau de batterie (%), si le pilote l'expose.
+    pub fn list() -> Vec<(String, Option<u32>)> {
         RawGameController::RawGameControllers()
-            .map(|l| l.into_iter().filter_map(|c| c.DisplayName().ok().map(|n| n.to_string())).collect())
+            .map(|l| {
+                l.into_iter()
+                    .filter_map(|c| {
+                        let name = c.DisplayName().ok()?.to_string();
+                        let battery = c.TryGetBatteryReport().ok().and_then(|r| {
+                            let cur = r.RemainingCapacityInMilliwattHours().ok()?.Value().ok()?;
+                            let full = r.FullChargeCapacityInMilliwattHours().ok()?.Value().ok()?;
+                            (full > 0).then(|| (cur as u32 * 100 / full as u32).min(100))
+                        });
+                        Some((name, battery))
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 }
@@ -516,3 +529,6 @@ pub mod drivers {
             .collect()
     }
 }
+
+mod extra;
+pub use extra::{about, bluetooth, net, power};

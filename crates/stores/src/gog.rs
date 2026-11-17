@@ -45,26 +45,38 @@ impl Store for Gog {
     }
 
     fn featured(&self) -> Vec<Offer> {
-        let url = "https://catalog.gog.com/v1/catalog?limit=24&order=desc:trending&productType=in:game,pack&locale=fr-FR&countryCode=FR&currencyCode=EUR";
-        let Some(j) = http::get_json(url, &[]) else { return vec![] };
-        j["products"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|p| {
-                let title = p["title"].as_str()?.to_string();
-                let image = p["coverVertical"].as_str().or_else(|| p["coverHorizontal"].as_str())?.to_string();
-                let fin = p["price"]["finalMoney"]["amount"].as_str().unwrap_or("");
-                let price = match fin.parse::<f64>() {
-                    Ok(v) if v == 0.0 => "Gratuit".to_string(),
-                    Ok(v) => format!("{v:.2} €").replace('.', ","),
-                    Err(_) => String::new(),
-                };
-                let url = p["storeLink"].as_str().unwrap_or("https://www.gog.com/fr").to_string();
-                Some(Offer { title, price, image, url })
-            })
-            .collect()
+        catalog("order=desc:trending")
     }
+
+    fn search(&self, query: &str) -> Vec<Offer> {
+        catalog(&format!("query=like:{}&order=desc:score", crate::art::encode(query)))
+    }
+}
+
+fn catalog(params: &str) -> Vec<Offer> {
+    let url = format!("https://catalog.gog.com/v1/catalog?limit=24&{params}&productType=in:game,pack&locale=fr-FR&countryCode=FR&currencyCode=EUR");
+    let Some(j) = http::get_json(&url, &[]) else { return vec![] };
+    j["products"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| {
+            let title = p["title"].as_str()?.to_string();
+            let images: Vec<String> = ["coverVertical", "coverHorizontal"].iter().filter_map(|k| p[*k].as_str().map(String::from)).collect();
+            if images.is_empty() {
+                return None;
+            }
+            let amount = p["price"]["finalMoney"]["amount"].as_str().and_then(|a| a.parse::<f64>().ok());
+            let price = match amount {
+                Some(v) if v == 0.0 => "Gratuit".to_string(),
+                Some(v) => format!("{v:.2} €").replace('.', ","),
+                None => String::new(),
+            };
+            let url = p["storeLink"].as_str().unwrap_or("https://www.gog.com/fr").to_string();
+            let heroes = p["coverHorizontal"].as_str().map(|h| vec![h.to_string()]).unwrap_or_default();
+            Some(Offer { title, price, cents: amount.map(|v| (v * 100.0).round() as i64), store: "GOG".into(), images, heroes, url })
+        })
+        .collect()
 }
 
 /// Résout `gog-api:<id>:cover|hero` en URL d'image (API publique des produits).

@@ -27,7 +27,7 @@ fn extension(data: &[u8]) -> Option<&'static str> {
     }
 }
 
-fn encode(s: &str) -> String {
+pub(crate) fn encode(s: &str) -> String {
     s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
@@ -71,8 +71,13 @@ pub fn ensure_art(game: &Game, sgdb_key: Option<&str>) -> bool {
     added
 }
 
+/// Première image téléchargeable parmi les URLs candidates (mise en cache) ; chemin local.
+pub fn fetch_first(urls: &[String]) -> Option<PathBuf> {
+    urls.iter().find_map(|u| fetch_image(u))
+}
+
 /// Image distante (offre du catalogue) mise en cache ; renvoie son chemin local.
-pub fn fetch_image(url: &str) -> Option<PathBuf> {
+fn fetch_image(url: &str) -> Option<PathBuf> {
     let hash = url.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
     let dir = assets_dir().join("_offers");
     for ext in ["jpg", "png"] {
@@ -86,4 +91,24 @@ pub fn fetch_image(url: &str) -> Option<PathBuf> {
     let p = dir.join(format!("{hash:016x}.{ext}"));
     std::fs::write(&p, data).ok()?;
     Some(p)
+}
+
+/// Enregistre jaquette et héros d'une offre pour un jeu ajouté à la main (`id` = `custom-…`). Bloquant.
+pub fn save_art(id: &str, offer: &crate::Offer) -> bool {
+    let mut added = false;
+    for (kind, urls) in [("cover", &offer.images), ("hero", &offer.heroes)] {
+        if asset(id, kind).is_some() {
+            continue;
+        }
+        for url in urls {
+            if let Some((data, ext)) = download(url) {
+                let dir = assets_dir().join(id);
+                if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(dir.join(format!("{kind}.{ext}")), data).is_ok() {
+                    added = true;
+                    break;
+                }
+            }
+        }
+    }
+    added
 }

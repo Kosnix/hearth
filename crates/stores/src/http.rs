@@ -11,6 +11,16 @@ fn wide(s: &str) -> Vec<u16> {
 
 /// GET bloquant (à appeler hors du thread UI). `headers` : lignes « Nom: valeur ».
 pub fn get(url: &str, headers: &[(&str, &str)]) -> Option<Vec<u8>> {
+    request("GET", url, headers, None)
+}
+
+pub fn post_json(url: &str, headers: &[(&str, &str)], body: &str) -> Option<serde_json::Value> {
+    let mut h = headers.to_vec();
+    h.push(("Content-Type", "application/json"));
+    serde_json::from_slice(&request("POST", url, &h, Some(body.as_bytes()))?).ok()
+}
+
+fn request(method: &str, url: &str, headers: &[(&str, &str)], body: Option<&[u8]>) -> Option<Vec<u8>> {
     let rest = url.strip_prefix("https://")?;
     let (host, path) = rest.split_once('/').map_or((rest, "/".to_string()), |(h, p)| (h, format!("/{p}")));
     unsafe {
@@ -24,13 +34,14 @@ pub fn get(url: &str, headers: &[(&str, &str)]) -> Option<Vec<u8>> {
             if conn.is_null() {
                 return None;
             }
-            let req = WinHttpOpenRequest(conn, PCWSTR(wide("GET").as_ptr()), PCWSTR(wide(&path).as_ptr()), PCWSTR::null(), PCWSTR::null(), std::ptr::null(), WINHTTP_FLAG_SECURE);
+            let req = WinHttpOpenRequest(conn, PCWSTR(wide(method).as_ptr()), PCWSTR(wide(&path).as_ptr()), PCWSTR::null(), PCWSTR::null(), std::ptr::null(), WINHTTP_FLAG_SECURE);
             let body = (|| {
                 if req.is_null() {
                     return None;
                 }
                 let hdr: Vec<u16> = headers.iter().map(|(k, v)| format!("{k}: {v}\r\n")).collect::<String>().encode_utf16().collect();
-                WinHttpSendRequest(req, if hdr.is_empty() { None } else { Some(&hdr) }, None, 0, 0, 0).ok()?;
+                let len = body.map_or(0, |b| b.len() as u32);
+                WinHttpSendRequest(req, if hdr.is_empty() { None } else { Some(&hdr) }, body.map(|b| b.as_ptr().cast::<c_void>()), len, len, 0).ok()?;
                 WinHttpReceiveResponse(req, std::ptr::null_mut()).ok()?;
                 // Code HTTP : on n'accepte que 200.
                 let mut status = 0u32;

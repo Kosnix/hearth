@@ -35,13 +35,14 @@ $script:HearthApp = "$env:LOCALAPPDATA\Hearth\app"
 $script:Ws = New-Object -ComObject WScript.Shell
 
 function Deploy {
-    cargo build --release 2>&1 | Select-String '^error|^warning|-->|Finished'
+    cargo build --release 2>&1 | Select-String '^error|-->|Finished'
     Get-Process hearth, hearth-shell -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Get-CimInstance Win32_Process -Filter "Name like 'hearth%'" | Where-Object ExecutablePath |
-        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    for ($i = 0; $i -lt 20 -and (Get-Process hearth-shell -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 250 }
+    for ($i = 0; $i -lt 20 -and (Get-Process hearth, hearth-shell -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 250 }
     Start-Sleep 1
-    Copy-Item target\release\hearth-shell.exe, target\release\hearth.exe $script:HearthApp -Force -ErrorAction SilentlyContinue
+    # install : copie les binaires, (re)crée le raccourci « Mode console » (icône, cible) du bureau.
+    & "$PSScriptRoot\..\target\release\hearth.exe" install | Out-Null
+    Start-Sleep 3
+    Remove-Item "$script:HearthApp\staged" -Recurse -Force -ErrorAction SilentlyContinue
     Start-Process "$script:HearthApp\hearth.exe"
     for ($i = 0; $i -lt 40 -and -not (Get-Process hearth-shell -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 250 }
     Start-Sleep 1

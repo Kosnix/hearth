@@ -10,6 +10,8 @@ use input::Nav;
 use i18n::tr;
 use slint::{ComponentHandle, Model, SharedString, VecModel};
 
+mod addgame;
+mod addflow;
 mod i18n;
 mod settings;
 
@@ -22,7 +24,7 @@ const GUIDE_TITLE: &str = "Hearth Guide";
 const GUIDE_WIDTH: f32 = 460.0; // px logiques
 const MAX_NOTES: usize = 5;
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize, Clone)]
 struct Game {
     name: String,
     #[serde(default)]
@@ -51,7 +53,7 @@ struct Running {
 struct Shell {
     ui: App,
     guide: GuideMenu,
-    games: Vec<Game>,
+    games: RefCell<Vec<Game>>,
     tiles: Rc<VecModel<Tile>>,
     notes: Rc<VecModel<SharedString>>,
     running: RefCell<Vec<Running>>,
@@ -60,9 +62,23 @@ struct Shell {
     offers: Rc<VecModel<Offer>>,
     /// Offres du catalogue affiché (titres, URLs) et leurs images locales.
     offer_data: RefCell<Vec<stores::Offer>>,
-    featured: RefCell<std::collections::HashMap<usize, (Vec<stores::Offer>, Vec<Option<PathBuf>>)>>,
+    featured: RefCell<Option<(Vec<stores::Offer>, Vec<Option<PathBuf>>)>>,
     store_status: RefCell<Vec<(String, bool, usize)>>,
-    loaded_store: Cell<Option<usize>>,
+    catalog_started: Cell<bool>,
+    catalog_gen: Cell<u32>,
+    kb_search: Cell<bool>,
+    kb_identify: Cell<bool>,
+    pick_mode: RefCell<addflow::PickMode>,
+    pick_entries: RefCell<Vec<addgame::Entry>>,
+    pick_offers: RefCell<Vec<stores::Offer>>,
+    pick_gen: Cell<u32>,
+    identify_exe: RefCell<Option<PathBuf>>,
+    guess_title: RefCell<String>,
+    notifs: Rc<VecModel<Notif>>,
+    toast_gen: Cell<u32>,
+    splash_timer: slint::Timer,
+    splash_start: Cell<Option<std::time::Instant>>,
+    splash_uri: Cell<bool>,
 }
 
 fn main() -> Result<(), slint::PlatformError> {
@@ -75,21 +91,12 @@ fn main() -> Result<(), slint::PlatformError> {
     // ponytail: femtovg cesse de se redessiner avec ce design (constaté sur l'Optiplex) ; rendu logiciel.
     std::env::set_var("SLINT_BACKEND", "winit-software");
     let games = load_games();
-    let tiles: Vec<Tile> = games
-        .iter()
-        .map(|g| Tile {
-            name: g.name.as_str().into(),
-            initial: g.name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default().into(),
-            hue: hue_of(&g.name),
-            cover: cover_of(g),
-            hero: hero_of(g),
-            running: false,
-        })
-        .collect();
+    let mut tiles: Vec<Tile> = games.iter().map(tile_of).collect();
+    tiles.push(add_tile());
     let shell = Rc::new(Shell {
         ui: App::new()?,
         guide: GuideMenu::new()?,
-        games,
+        games: RefCell::new(games),
         tiles: Rc::new(VecModel::from(tiles)),
         notes: Rc::new(VecModel::default()),
         running: RefCell::new(Vec::new()),
@@ -99,15 +106,34 @@ fn main() -> Result<(), slint::PlatformError> {
         offer_data: RefCell::new(vec![]),
         featured: RefCell::new(Default::default()),
         store_status: RefCell::new(vec![]),
-        loaded_store: Cell::new(None),
+        catalog_started: Cell::new(false),
+        catalog_gen: Cell::new(0),
+        kb_search: Cell::new(false),
+        kb_identify: Cell::new(false),
+        pick_mode: RefCell::new(addflow::PickMode::Root),
+        pick_entries: RefCell::new(vec![]),
+        pick_offers: RefCell::new(vec![]),
+        pick_gen: Cell::new(0),
+        identify_exe: RefCell::new(None),
+        guess_title: RefCell::new(String::new()),
+        notifs: Rc::new(VecModel::default()),
+        toast_gen: Cell::new(0),
+        splash_timer: slint::Timer::default(),
+        splash_start: Cell::new(None),
+        splash_uri: Cell::new(false),
     });
     shell.ui.set_games(shell.tiles.clone().into());
     shell.guide.set_notes(shell.notes.clone().into());
-    *shell.store_status.borrow_mut() = stores::all().iter().map(|s| (s.name().to_string(), s.detected(), shell.games.iter().filter(|g| g.store == s.name()).count())).collect();
+    *shell.store_status.borrow_mut() = stores::all().iter().map(|s| (s.name().to_string(), s.detected(), shell.games.borrow().iter().filter(|g| g.store == s.name()).count())).collect();
     i18n::init();
     shell.refresh_lang();
     shell.ui.set_rows(shell.settings.rows.clone().into());
     shell.ui.set_offers(shell.offers.clone().into());
+    shell.ui.set_notifs(shell.notifs.clone().into());
+    let s = shell.clone();
+    shell.ui.on_notifs_opened(move || s.notifs_opened());
+    let s = shell.clone();
+    shell.ui.on_notif_action(move |i| s.notif_action(i));
     shell.ui.set_user(std::env::var("USERNAME").unwrap_or_default().into());
     shell.set_clock();
 
@@ -120,6 +146,10 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let s = shell.clone();
     shell.ui.on_launch(move |i| s.launch(i as usize));
+    let s = shell.clone();
+    shell.ui.on_pick(move |i| s.pick(i as usize));
+    let s = shell.clone();
+    shell.ui.on_pick_back(move || s.pick_back());
     shell.ui.on_power(|a| match a {
         0 => unsafe {
             let _ = windows::Win32::System::Power::SetSuspendState(false, false, false);
@@ -130,7 +160,7 @@ fn main() -> Result<(), slint::PlatformError> {
     });
     shell.ui.on_desktop(|| std::process::exit(EXIT_DESKTOP));
     let s = shell.clone();
-    shell.ui.on_open_store(move |i| s.load_offers(i as usize));
+    shell.ui.on_search_open(move || s.search_open());
     let s = shell.clone();
     shell.ui.on_show_offer(move |i| s.show_offer(i as usize));
     let s = shell.clone();
@@ -197,11 +227,16 @@ thread_local! {
 
 impl Shell {
     fn launch(&self, i: usize) {
+        if i == self.games.borrow().len() {
+            self.add_open();
+            return;
+        }
         if let Some(h) = self.running.borrow().iter().find(|r| r.tile == i).and_then(|r| r.session.main_window()) {
             wm::focus(h);
             return;
         }
-        let Some(g) = self.games.get(i) else { return };
+        let Some(g) = self.games.borrow().get(i).cloned() else { return };
+        self.start_splash(i, g.uri.is_some());
         if let Some(uri) = &g.uri {
             // Lancement par le client de la boutique : le jeu n'est pas encapsulé.
             let _ = Command::new("cmd").args(["/c", "start", "", uri]).spawn();
@@ -217,7 +252,10 @@ impl Shell {
                 self.running.borrow_mut().push(Running { tile: i, session, hands_off, closing: false });
                 self.set_running(i, true);
             }
-            Err(e) => self.notify(format!("{} {} : {}", tr("Impossible de lancer"), g.name, e.message())),
+            Err(e) => {
+                self.ui.set_launching(false);
+                self.notify(format!("{} {} : {}", tr("Impossible de lancer"), g.name, e.message()));
+            }
         }
     }
 
@@ -312,6 +350,52 @@ impl Shell {
             }
             settings::Outcome::Connect(ssid) => self.connect(ssid, None),
             settings::Outcome::LangChanged => self.refresh_lang(),
+            settings::Outcome::BtScan => {
+                self.settings.set_message(tr("Recherche d'appareils Bluetooth…"));
+                self.open_cat_keep(3);
+                std::thread::spawn(|| {
+                    let found = system::bluetooth::devices(false);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        with_shell(|s| {
+                            s.settings.set_bt_found(found);
+                            s.settings.set_message(String::new());
+                            s.open_cat_keep(3);
+                        })
+                    });
+                });
+            }
+            settings::Outcome::BtPair(id, name) => {
+                self.push_notif("Bluetooth", &format!("{} {name}…", tr("Appairage de")));
+                std::thread::spawn(move || {
+                    let r = system::bluetooth::pair(&id);
+                    let fresh = settings::fetch(3);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        with_shell(|s| {
+                            match r {
+                                Ok(()) => s.push_notif("Bluetooth", &format!("{name} : {}", tr("appairé"))),
+                                Err(e) => s.push_notif("Bluetooth", &format!("{name} : {} ({e})", tr("échec de l'appairage"))),
+                            }
+                            s.settings.set_bt_found(vec![]);
+                            s.fetched(3, fresh);
+                        })
+                    });
+                });
+            }
+            settings::Outcome::BtUnpair(id, name) => {
+                std::thread::spawn(move || {
+                    let r = system::bluetooth::unpair(&id);
+                    let fresh = settings::fetch(3);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        with_shell(|s| {
+                            match r {
+                                Ok(()) => s.push_notif("Bluetooth", &format!("{name} : {}", tr("oublié"))),
+                                Err(e) => s.push_notif("Bluetooth", &format!("{name} : {e}")),
+                            }
+                            s.fetched(3, fresh);
+                        })
+                    });
+                });
+            }
             settings::Outcome::CheckUpdates(drivers) => {
                 std::thread::spawn(move || {
                     let r = if drivers { system::updates::pending_drivers() } else { system::updates::pending() };
@@ -337,10 +421,24 @@ impl Shell {
     fn kb_press(&self, x: i32, y: i32) {
         match self.settings.kb_press(x, y) {
             settings::Kb::Continue => self.kb_refresh(),
-            settings::Kb::Cancel => self.ui.set_zone(3),
-            settings::Kb::Done(ssid, pw) => {
-                self.ui.set_zone(3);
-                self.connect(ssid, Some(pw));
+            settings::Kb::Cancel => {
+                let back = if self.kb_search.replace(false) { 0 } else if self.kb_identify.replace(false) { 6 } else { 3 };
+                self.ui.set_zone(back);
+            }
+            settings::Kb::Done(ssid, text) => {
+                if self.kb_identify.replace(false) {
+                    self.ui.set_zone(6);
+                    if !text.trim().is_empty() {
+                        self.run_identify(text.trim().to_string());
+                    }
+                } else if self.kb_search.replace(false) {
+                    self.ui.set_zone(0);
+                    self.ui.set_search_query(text.clone().into());
+                    self.load_catalog(if text.trim().is_empty() { None } else { Some(text.trim().to_string()) });
+                } else {
+                    self.ui.set_zone(3);
+                    self.connect(ssid, Some(text));
+                }
             }
         }
     }
@@ -392,7 +490,7 @@ impl Shell {
     fn open_guide(&self, tile: usize) {
         self.guide_tile.set(tile);
         let closing = self.running.borrow().iter().any(|r| r.tile == tile && r.closing);
-        self.guide.set_game(self.games[tile].name.as_str().into());
+        self.guide.set_game(self.games.borrow()[tile].name.as_str().into());
         self.guide.set_art(self.tiles.row_data(tile).map(|t| t.cover).unwrap_or_default());
         self.guide.set_closing(closing);
         self.guide.set_sel(0);
@@ -485,7 +583,7 @@ impl Shell {
         };
         for &tile in &ended {
             self.set_running(tile, false);
-            self.notify(format!("{} {}", self.games[tile].name, tr("s'est fermé")));
+            self.notify(format!("{} {}", self.games.borrow()[tile].name, tr("s'est fermé")));
         }
         if !ended.is_empty() {
             if ended.contains(&self.guide_tile.get()) {
@@ -516,11 +614,62 @@ impl Shell {
         }
     }
 
+    /// Notification simple (titre « Hearth »).
     fn notify(&self, msg: String) {
-        self.notes.insert(0, msg.into());
+        self.push_notif("Hearth", &msg);
+    }
+
+    /// Ajoute une notification au centre, au menu en jeu, et l'affiche en toast quelques secondes.
+    fn push_notif(&self, title: &str, text: &str) {
+        let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+        self.notifs.insert(0, Notif { title: title.into(), text: text.into(), time: format!("{:02}:{:02}", t.wHour, t.wMinute).into(), unread: true });
+        if self.notifs.row_count() > 30 {
+            self.notifs.remove(30);
+        }
+        self.update_unread();
+        self.notes.insert(0, text.into());
         if self.notes.row_count() > MAX_NOTES {
             self.notes.remove(MAX_NOTES);
         }
+        if !i18n::toasts() {
+            return;
+        }
+        self.ui.set_toast_title(title.into());
+        self.ui.set_toast_text(text.into());
+        self.ui.set_toast_on(true);
+        let gen = self.toast_gen.get() + 1;
+        self.toast_gen.set(gen);
+        slint::Timer::single_shot(Duration::from_secs(5), move || {
+            with_shell(|s| {
+                if s.toast_gen.get() == gen {
+                    s.ui.set_toast_on(false);
+                }
+            })
+        });
+    }
+
+    fn update_unread(&self) {
+        self.ui.set_unread(self.notifs.iter().filter(|n| n.unread).count() as i32);
+    }
+
+    fn notifs_opened(&self) {
+        for i in 0..self.notifs.row_count() {
+            if let Some(mut n) = self.notifs.row_data(i) {
+                n.unread = false;
+                self.notifs.set_row_data(i, n);
+            }
+        }
+        self.update_unread();
+        self.ui.set_toast_on(false);
+    }
+
+    fn notif_action(&self, i: i32) {
+        if i < 0 {
+            self.notifs.set_vec(vec![]);
+        } else if (i as usize) < self.notifs.row_count() {
+            self.notifs.remove(i as usize);
+        }
+        self.update_unread();
     }
 }
 
@@ -551,7 +700,7 @@ fn load_games() -> Vec<Game> {
         games = ["notepad.exe", "calc.exe", "mspaint.exe"]
             .into_iter()
             .zip(["Bloc-notes", "Calculatrice", "Paint"])
-            .map(|(exe, name)| Game { name: name.into(), id: String::new(), exe: exe.into(), args: vec![], cover: String::new(), anticheat: false, uri: None, store: String::new() })
+            .map(|(exe, name)| Game { name: name.into(), id: format!("demo-{exe}"), exe: exe.into(), args: vec![], cover: String::new(), anticheat: false, uri: None, store: String::new() })
             .collect();
     }
     games
@@ -575,13 +724,6 @@ impl Shell {
     fn refresh_lang(&self) {
         let cats: Vec<SharedString> = settings::cats().into_iter().map(Into::into).collect();
         self.ui.set_cats(Rc::new(VecModel::from(cats)).into());
-        let stores: Vec<StoreEntry> = self
-            .store_status
-            .borrow()
-            .iter()
-            .map(|(n, found, count)| StoreEntry { name: n.as_str().into(), status: if *found { format!("{count} {}", tr("jeux installés")) } else { tr("Non détecté") }.into() })
-            .collect();
-        self.ui.set_stores(Rc::new(VecModel::from(stores)).into());
         // Pas avant la création de la fenêtre : COM multithread sur ce thread ferait échouer winit.
         if self.ui.get_zone() == 3 {
             self.open_cat_keep(self.ui.get_cat());
@@ -590,10 +732,14 @@ impl Shell {
 
     /// Fond animé (arrêté quand la console n'est pas devant : économise le CPU en jeu) et pictogrammes.
     fn animate(&self, phase: &Cell<f32>) {
-        if self.ui.get_tab() == 1 && self.loaded_store.get() != Some(self.ui.get_ssel() as usize) {
-            self.load_offers(self.ui.get_ssel() as usize);
+        if self.ui.get_tab() == 1 && !self.catalog_started.get() {
+            self.load_catalog(None);
         }
-        let pad = input::last_pad() as i32;
+        let pad = match std::env::var("HEARTH_PAD").as_deref() {
+            Ok("ps") => 1,
+            Ok("xbox") => 0,
+            _ => input::last_pad() as i32,
+        };
         if self.ui.global::<Pad>().get_kind() != pad {
             self.ui.global::<Pad>().set_kind(pad);
             self.guide.global::<Pad>().set_kind(pad);
@@ -635,7 +781,7 @@ fn fetch_all(offers: &[stores::Offer]) -> Vec<Option<PathBuf>> {
         for (o, slots) in offers.chunks(4).zip(out.chunks_mut(4)) {
             sc.spawn(move || {
                 for (offer, slot) in o.iter().zip(slots) {
-                    *slot = stores::fetch_image(&offer.image);
+                    *slot = stores::fetch_first(&offer.images);
                 }
             });
         }
@@ -644,32 +790,43 @@ fn fetch_all(offers: &[stores::Offer]) -> Vec<Option<PathBuf>> {
 }
 
 impl Shell {
-    fn load_offers(&self, i: usize) {
-        self.loaded_store.set(Some(i));
+    /// Charge le catalogue unifié (« à la une ») ou les résultats d'une recherche.
+    fn load_catalog(&self, query: Option<String>) {
+        self.catalog_started.set(true);
+        let gen = self.catalog_gen.get() + 1;
+        self.catalog_gen.set(gen);
         self.ui.set_osel(0);
         self.ui.set_brow(0);
-        let name = stores::all().get(i).map(|s| s.name()).unwrap_or("");
-        self.ui.set_offers_title(format!("{} · {name}", tr("À la une")).into());
-        if let Some((offers, paths)) = self.featured.borrow().get(&i) {
-            self.apply_offers(offers, paths);
-            return;
+        self.ui.set_offers_title(match &query {
+            Some(q) => format!("{} « {q} »", tr("Résultats pour")),
+            None => tr("À la une"),
+        }.into());
+        if query.is_none() {
+            if let Some((offers, paths)) = self.featured.borrow().as_ref() {
+                self.apply_offers(offers, paths);
+                return;
+            }
         }
         self.offers.set_vec(vec![]);
         self.offer_data.borrow_mut().clear();
         self.ui.set_offers_state("loading".into());
         std::thread::spawn(move || {
-            let Some(store) = stores::all().into_iter().nth(i) else { return };
-            let offers = store.featured();
+            let offers = match &query {
+                Some(q) => stores::search(q),
+                None => stores::catalog(),
+            };
             let paths = fetch_all(&offers);
-            let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.offers_ready(i, offers, paths)));
+            let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.offers_ready(gen, query.is_none(), offers, paths)));
         });
     }
 
-    fn offers_ready(&self, i: usize, offers: Vec<stores::Offer>, paths: Vec<Option<PathBuf>>) {
-        if self.ui.get_ssel() as usize == i {
+    fn offers_ready(&self, gen: u32, featured: bool, offers: Vec<stores::Offer>, paths: Vec<Option<PathBuf>>) {
+        if self.catalog_gen.get() == gen {
             self.apply_offers(&offers, &paths);
         }
-        self.featured.borrow_mut().insert(i, (offers, paths));
+        if featured {
+            *self.featured.borrow_mut() = Some((offers, paths));
+        }
     }
 
     fn apply_offers(&self, offers: &[stores::Offer], paths: &[Option<PathBuf>]) {
@@ -679,12 +836,23 @@ impl Shell {
             .map(|(o, p)| Offer {
                 title: o.title.as_str().into(),
                 price: if o.price == "Gratuit" { tr("Gratuit") } else { o.price.clone() }.into(),
+                store: o.store.as_str().into(),
                 art: p.as_ref().and_then(|p| slint::Image::load_from_path(p).ok()).unwrap_or_default(),
             })
             .collect();
         *self.offer_data.borrow_mut() = offers.to_vec();
         self.ui.set_offers_state(if rows.is_empty() { "empty" } else { "" }.into());
         self.offers.set_vec(rows);
+    }
+
+    fn search_open(&self) {
+        self.kb_search.set(true);
+        self.settings.kb_open("");
+        self.kb_refresh();
+        self.ui.set_kbx(0);
+        self.ui.set_kby(0);
+        self.ui.set_kb_title(tr("Rechercher un jeu").into());
+        self.ui.set_zone(4);
     }
 
     fn show_offer(&self, i: usize) {
@@ -700,7 +868,7 @@ impl Shell {
 
     /// Télécharge en arrière-plan les visuels manquants des jeux des boutiques.
     fn start_art(&self) {
-        let ids: Vec<(usize, String)> = self.games.iter().enumerate().filter(|(_, g)| !g.store.is_empty()).map(|(i, g)| (i, g.id.clone())).collect();
+        let ids: Vec<(usize, String)> = self.games.borrow().iter().enumerate().filter(|(_, g)| !g.store.is_empty()).map(|(i, g)| (i, g.id.clone())).collect();
         if ids.is_empty() {
             return;
         }
@@ -718,10 +886,67 @@ impl Shell {
     }
 
     fn reload_art(&self, i: usize) {
-        if let (Some(g), Some(mut t)) = (self.games.get(i), self.tiles.row_data(i)) {
-            t.cover = cover_of(g);
-            t.hero = hero_of(g);
+        if let (Some(g), Some(mut t)) = (self.games.borrow().get(i).cloned(), self.tiles.row_data(i)) {
+            t.cover = cover_of(&g);
+            t.hero = hero_of(&g);
             self.tiles.set_row_data(i, t);
         }
+    }
+}
+
+impl Shell {
+    /// Écran de lancement : s'ouvre à l'appel, se ferme quand la fenêtre du jeu passe devant (ou après un délai).
+    fn start_splash(&self, i: usize, uri: bool) {
+        let Some(t) = self.tiles.row_data(i) else { return };
+        self.ui.set_launch_name(t.name);
+        self.ui.set_launch_cover(t.cover);
+        self.ui.set_launch_art(t.hero);
+        self.ui.set_launch_t(0.0);
+        self.ui.set_launch_spin(0.0);
+        self.ui.set_launching(true);
+        self.splash_start.set(Some(std::time::Instant::now()));
+        self.splash_uri.set(uri);
+        self.splash_timer.start(slint::TimerMode::Repeated, Duration::from_millis(40), || with_shell(|s| s.splash_tick()));
+    }
+
+    fn splash_tick(&self) {
+        let Some(t0) = self.splash_start.get() else {
+            self.splash_timer.stop();
+            return;
+        };
+        let el = t0.elapsed().as_secs_f32();
+        self.ui.set_launch_t((el / 0.9).min(1.0));
+        self.ui.set_launch_spin((el * 540.0) % 360.0);
+        let fg = wm::foreground();
+        let shown = self.running.borrow().iter().any(|r| r.session.owns(fg));
+        let timeout = el > 14.0 || (self.splash_uri.get() && el > 8.0);
+        if !self.ui.get_launching() || (shown && el > 1.5) || timeout {
+            self.ui.set_launching(false);
+            self.splash_start.set(None);
+            self.splash_timer.stop();
+        }
+    }
+}
+
+fn tile_of(g: &Game) -> Tile {
+    Tile {
+        name: g.name.as_str().into(),
+        initial: g.name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default().into(),
+        hue: hue_of(&g.name),
+        cover: cover_of(g),
+        hero: hero_of(g),
+        running: false,
+        add: false,
+    }
+}
+
+fn add_tile() -> Tile {
+    Tile { name: tr("Ajouter un jeu").into(), initial: "+".into(), hue: slint::Color::from_rgb_u8(90, 100, 160), cover: Default::default(), hero: Default::default(), running: false, add: true }
+}
+
+impl Shell {
+    /// Insère une tuile avant la tuile « Ajouter un jeu ».
+    fn tiles_insert(&self, idx: usize, t: Tile) {
+        self.tiles.insert(idx, t);
     }
 }

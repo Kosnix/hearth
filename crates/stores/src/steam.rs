@@ -105,24 +105,50 @@ impl Store for Steam {
                 let cur = it["currency"].as_str().unwrap_or("EUR");
                 let fin = it["final_price"].as_i64().unwrap_or(0);
                 let disc = it["discount_percent"].as_i64().unwrap_or(0);
-                let p = if fin == 0 {
-                    "Gratuit".to_string()
-                } else if disc > 0 {
-                    format!("-{disc} % {}", price(fin, cur))
-                } else {
-                    price(fin, cur)
-                };
-                out.push(Offer {
-                    title: it["name"].as_str().unwrap_or("").into(),
-                    price: p,
-                    image: format!("https://cdn.cloudflare.steamstatic.com/steam/apps/{id}/library_600x900.jpg"),
-                    url: format!("https://store.steampowered.com/app/{id}"),
-                });
+                out.push(offer(id, it["name"].as_str().unwrap_or(""), fin, disc, cur));
                 if out.len() >= 24 {
                     return out;
                 }
             }
         }
         out
+    }
+
+    fn search(&self, query: &str) -> Vec<Offer> {
+        let url = format!("https://store.steampowered.com/api/storesearch/?term={}&l=french&cc=FR", crate::art::encode(query));
+        let Some(j) = http::get_json(&url, &[]) else { return vec![] };
+        j["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|it| {
+                let id = it["id"].as_i64()?;
+                let fin = it["price"]["final"].as_i64().unwrap_or(0);
+                let initial = it["price"]["initial"].as_i64().unwrap_or(fin);
+                let disc = if initial > fin && initial > 0 { (initial - fin) * 100 / initial } else { 0 };
+                Some(offer(id, it["name"].as_str()?, fin, disc, it["price"]["currency"].as_str().unwrap_or("EUR")))
+            })
+            .take(24)
+            .collect()
+    }
+}
+
+fn offer(id: i64, title: &str, fin: i64, disc: i64, cur: &str) -> Offer {
+    let p = if fin == 0 {
+        "Gratuit".to_string()
+    } else if disc > 0 {
+        format!("-{disc} % {}", price(fin, cur))
+    } else {
+        price(fin, cur)
+    };
+    let base = format!("https://cdn.cloudflare.steamstatic.com/steam/apps/{id}/");
+    Offer {
+        title: title.into(),
+        price: p,
+        cents: Some(fin),
+        store: "Steam".into(),
+        images: vec![format!("{base}library_600x900.jpg"), format!("{base}header.jpg")],
+        heroes: vec![format!("{base}library_hero.jpg"), format!("{base}page_bg_generated_v6b.jpg")],
+        url: format!("https://store.steampowered.com/app/{id}"),
     }
 }

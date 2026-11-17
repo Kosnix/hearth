@@ -5,47 +5,62 @@ use std::rc::Rc;
 
 use slint::{Model, VecModel};
 use system::audio::{self, Device};
+use system::bluetooth::Dev;
 use system::display::{self, Mode};
 use system::wifi::Net;
 
 use crate::i18n::{self, tr};
 use crate::SettingRow;
 
-pub fn cats() -> Vec<String> {
-    ["Son", "Affichage", "Wi-Fi", "Bluetooth", "Manettes", "Langue", "Mises à jour", "Stockage", "Pilotes"].iter().map(|c| tr(c)).collect()
-}
-const CONFIRM_SECS: u32 = 15;
+const CATS: [&str; 12] =
+    ["Son", "Affichage", "Wi-Fi", "Bluetooth", "Manettes", "Langue", "Mises à jour", "Stockage", "Pilotes", "Alimentation", "Notifications", "À propos"];
 
-/// Données lentes (WinRT), lues hors du thread UI.
+pub fn cats() -> Vec<String> {
+    CATS.iter().map(|c| tr(c)).collect()
+}
+
+const CONFIRM_SECS: u32 = 15;
+const SLEEP_CHOICES: [u32; 5] = [0, 15, 30, 60, 120];
+const SCREEN_CHOICES: [u32; 6] = [0, 5, 10, 15, 30, 60];
+
+/// Données lentes (WinRT, commandes), lues hors du thread UI.
 #[derive(Default)]
 pub struct Fetched {
     wifi_on: Option<bool>,
     nets: Vec<Net>,
+    link: Option<system::net::Link>,
     bt_on: Option<bool>,
-    pads: Vec<String>,
+    bt_paired: Vec<Dev>,
+    pads: Vec<(String, Option<u32>)>,
     wifi_err: String,
     drives: Vec<system::storage::Drive>,
     update: String,
     update_drv: String,
     gpus: Vec<system::drivers::Gpu>,
+    plans: Vec<system::power::Plan>,
+    sleep_min: Option<u32>,
+    screen_min: Option<u32>,
+    about: Vec<(&'static str, String)>,
 }
 
 pub fn fetch(cat: i32) -> Fetched {
     match cat {
         2 => {
             let nets = system::wifi::scan();
-            Fetched { wifi_on: system::radio::wifi_on(), nets, wifi_err: system::wifi::last_error(), ..Default::default() }
+            Fetched { wifi_on: system::radio::wifi_on(), nets, link: system::net::current(), wifi_err: system::wifi::last_error(), ..Default::default() }
         }
-        3 => Fetched { bt_on: system::radio_ext::bluetooth_on(), ..Default::default() },
-        4 => Fetched { pads: system::pads::names(), ..Default::default() },
+        3 => Fetched { bt_on: system::radio_ext::bluetooth_on(), bt_paired: system::bluetooth::devices(true), ..Default::default() },
+        4 => Fetched { pads: system::pads::list(), ..Default::default() },
         7 => Fetched { drives: system::storage::drives(), ..Default::default() },
         8 => Fetched { gpus: system::drivers::gpus(), ..Default::default() },
+        9 => Fetched { plans: system::power::plans(), sleep_min: system::power::timeout(true), screen_min: system::power::timeout(false), ..Default::default() },
+        11 => Fetched { about: system::about::info(), ..Default::default() },
         _ => Fetched::default(),
     }
 }
 
 pub fn needs_fetch(cat: i32) -> bool {
-    (2..=4).contains(&cat) || cat == 7 || cat == 8
+    (2..=4).contains(&cat) || matches!(cat, 7 | 8 | 9 | 11)
 }
 
 /// Ce que le shell doit faire après une action.
@@ -57,6 +72,9 @@ pub enum Outcome {
     Connect(String),
     LangChanged,
     CheckUpdates(bool),
+    BtScan,
+    BtPair(String, String),
+    BtUnpair(String, String),
 }
 
 pub enum Kb {
@@ -76,7 +94,9 @@ struct State {
     /// Mode précédent et secondes restantes avant retour automatique.
     revert: Option<(Mode, u32)>,
     loading: bool,
+    scanning: bool,
     data: Fetched,
+    bt_found: Vec<Dev>,
     kb_text: String,
     kb_shift: bool,
     kb_ssid: String,
@@ -106,6 +126,20 @@ fn onoff(v: Option<bool>) -> String {
         Some(false) => tr("Coupé"),
         None => tr("Indisponible"),
     }
+}
+
+fn minutes(m: Option<u32>) -> String {
+    match m {
+        Some(0) => tr("Jamais"),
+        Some(m) if m >= 60 => format!("{} h", m / 60),
+        Some(m) => format!("{m} min"),
+        None => "—".into(),
+    }
+}
+
+fn cycle(choices: &[u32], cur: Option<u32>, delta: i32) -> u32 {
+    let i = cur.and_then(|c| choices.iter().position(|&x| x == c)).unwrap_or(0);
+    choices[step(i, choices.len(), delta.signum())]
 }
 
 impl State {
@@ -147,6 +181,10 @@ impl Settings {
             match cat {
                 0 => s.devices = audio::devices(),
                 1 if s.revert.is_none() => s.load_display(),
+                3 => {
+                    s.bt_found.clear();
+                    s.loading = true;
+                }
                 c if needs_fetch(c) => s.loading = true,
                 _ => {}
             }
@@ -166,6 +204,13 @@ impl Settings {
 
     pub fn start_loading(&self) {
         self.state.borrow_mut().loading = true;
+    }
+
+    /// Résultat d'une recherche d'appareils Bluetooth à proximité.
+    pub fn set_bt_found(&self, found: Vec<Dev>) {
+        let mut s = self.state.borrow_mut();
+        s.scanning = false;
+        s.bt_found = found;
     }
 
     /// Reconstruit les lignes ; renvoie le texte d'aide.
@@ -196,7 +241,10 @@ impl Settings {
             },
             2 if s.loading => vec![row("Recherche des réseaux…", String::new(), false)],
             2 => {
-                if !s.data.wifi_err.is_empty() && hint.is_empty() {
+                if let Some(l) = &s.data.link {
+                    let kind = if l.wifi { "Wi-Fi" } else { "Ethernet" };
+                    hint = format!("{} : {kind} — {} {}", tr("Connecté"), l.name, l.ip);
+                } else if !s.data.wifi_err.is_empty() && hint.is_empty() {
                     hint = if s.data.nets.is_empty() { tr("Windows exige l'autorisation de localisation pour lister les réseaux Wi-Fi.") } else { s.data.wifi_err.clone() };
                 }
                 let mut v = vec![row("Wi-Fi", onoff(s.data.wifi_on), false)];
@@ -214,20 +262,42 @@ impl Settings {
                 v
             }
             3 if s.loading => vec![row("Lecture…", String::new(), false)],
-            3 => vec![row("Bluetooth", onoff(s.data.bt_on), false)],
+            3 => {
+                if hint.is_empty() {
+                    hint = tr("Valider sur un appareil appairé pour l'oublier ; sur un appareil trouvé pour l'appairer.");
+                }
+                let mut v = vec![row("Bluetooth", onoff(s.data.bt_on), false)];
+                v.extend(s.data.bt_paired.iter().map(|d| row(&d.name, if d.connected { tr("Connecté") } else { tr("Appairé") }, false)));
+                v.push(row("Rechercher des appareils", if s.scanning { tr("Recherche en cours…") } else { String::new() }, false));
+                v.extend(s.bt_found.iter().map(|d| row(&d.name, tr("À proximité"), false)));
+                v
+            }
             4 if s.loading => vec![row("Lecture…", String::new(), false)],
             4 if s.data.pads.is_empty() => vec![row("Aucune manette détectée", String::new(), false)],
-            4 => s.data.pads.iter().map(|p| row(p, tr("Connectée"), false)).collect(),
+            4 => s.data.pads.iter().map(|(p, b)| row(p, b.map_or(tr("Connectée"), |b| format!("{} · {b} %", tr("Connectée"))), false)).collect(),
             5 => vec![row("Langue", i18n::LANGS[i18n::lang()].1.into(), true)],
             6 => vec![row("Windows Update", if s.loading { tr("Recherche en cours…") } else if s.data.update.is_empty() { tr("Rechercher des mises à jour") } else { s.data.update.clone() }, false)],
             7 if s.loading => vec![row("Lecture…", String::new(), false)],
+            7 => s.data.drives.iter().map(|d| row(&d.name, format!("{} {} {} {}", gb(d.free), tr("libres sur"), gb(d.total), if d.removable { "(USB)" } else { "" }), false)).collect(),
             8 if s.loading => vec![row("Détection du matériel…", String::new(), false)],
             8 => {
                 let mut v: Vec<SettingRow> = s.data.gpus.iter().map(|g| row(&g.name, format!("{} {} {}", g.vendor, tr("pilote"), g.version), false)).collect();
                 v.push(row("Pilotes Windows Update", if s.data.update_drv.is_empty() { tr("Rechercher des mises à jour") } else { s.data.update_drv.clone() }, false));
                 v
             }
-            7 => s.data.drives.iter().map(|d| row(&d.name, format!("{} {} {} {}", gb(d.free), tr("libres sur"), gb(d.total), if d.removable { "(USB)" } else { "" }), false)).collect(),
+            9 if s.loading => vec![row("Lecture…", String::new(), false)],
+            9 => vec![
+                row("Mode d'alimentation", s.data.plans.iter().find(|p| p.active).map_or("—".into(), |p| p.name.clone()), s.data.plans.len() > 1),
+                row("Mise en veille après", minutes(s.data.sleep_min), true),
+                row("Extinction de l'écran après", minutes(s.data.screen_min), true),
+            ],
+            10 => vec![row("Afficher les bannières", onoff(Some(i18n::toasts())), false)],
+            11 if s.loading => vec![row("Lecture…", String::new(), false)],
+            11 => {
+                let mut v: Vec<SettingRow> = s.data.about.iter().map(|(k, val)| row(k, val.clone(), false)).collect();
+                v.push(row("Hearth", env!("CARGO_PKG_VERSION").into(), false));
+                v
+            }
             _ => vec![],
         };
         self.rows.set_vec(rows);
@@ -264,9 +334,9 @@ impl Settings {
                         }
                     }
                 }
+                (3, 0) => i18n::set_anim(!i18n::anim()),
                 _ => {}
             },
-            (1, 3, 0) if s.revert.is_none() => i18n::set_anim(!i18n::anim()),
             (1, 0, 0) => s.revert = None, // garder
             (1, 1, 0) => {
                 if let Some((prev, _)) = s.revert.take() {
@@ -287,6 +357,24 @@ impl Settings {
                     }
                 }
             }
+            (3, 0, 0) if !s.loading => {
+                if let Some(on) = s.data.bt_on {
+                    out = Outcome::Toggle { wifi: false, on: !on };
+                }
+            }
+            (3, r, 0) if r >= 1 && !s.loading && !s.scanning => {
+                let r = r as usize - 1;
+                let paired = s.data.bt_paired.len();
+                if r < paired {
+                    let d = &s.data.bt_paired[r];
+                    out = Outcome::BtUnpair(d.id.clone(), d.name.clone());
+                } else if r == paired {
+                    s.scanning = true;
+                    out = Outcome::BtScan;
+                } else if let Some(d) = s.bt_found.get(r - paired - 1) {
+                    out = Outcome::BtPair(d.id.clone(), d.name.clone());
+                }
+            }
             (5, 0, d) if d != 0 => {
                 i18n::set(step(i18n::lang(), i18n::LANGS.len(), d), true);
                 out = Outcome::LangChanged;
@@ -299,11 +387,27 @@ impl Settings {
                 s.loading = true;
                 out = Outcome::CheckUpdates(true);
             }
-            (3, 0, 0) if !s.loading => {
-                if let Some(on) = s.data.bt_on {
-                    out = Outcome::Toggle { wifi: false, on: !on };
+            (9, 0, d) if d != 0 && s.data.plans.len() > 1 => {
+                let i = s.data.plans.iter().position(|p| p.active).unwrap_or(0);
+                let n = step(i, s.data.plans.len(), d);
+                system::power::set_plan(&s.data.plans[n].guid);
+                for (k, p) in s.data.plans.iter_mut().enumerate() {
+                    p.active = k == n;
                 }
+                s.data.sleep_min = system::power::timeout(true);
+                s.data.screen_min = system::power::timeout(false);
             }
+            (9, 1, d) if d != 0 => {
+                let m = cycle(&SLEEP_CHOICES, s.data.sleep_min, d);
+                system::power::set_timeout(true, m);
+                s.data.sleep_min = system::power::timeout(true).or(Some(m));
+            }
+            (9, 2, d) if d != 0 => {
+                let m = cycle(&SCREEN_CHOICES, s.data.screen_min, d);
+                system::power::set_timeout(false, m);
+                s.data.screen_min = system::power::timeout(false).or(Some(m));
+            }
+            (10, 0, 0) => i18n::set_toasts(!i18n::toasts()),
             _ => {}
         }
         out
@@ -376,13 +480,7 @@ impl Settings {
         }
         Kb::Continue
     }
-}
 
-fn gb(bytes: u64) -> String {
-    format!("{} {}", bytes / 1_000_000_000, tr("Go"))
-}
-
-impl Settings {
     /// Résultat d'une recherche Windows Update (appelé sur le thread UI).
     pub fn set_update(&self, drivers: bool, r: Result<i32, String>) {
         let mut s = self.state.borrow_mut();
@@ -398,4 +496,8 @@ impl Settings {
             s.data.update = text;
         }
     }
+}
+
+fn gb(bytes: u64) -> String {
+    format!("{} {}", bytes / 1_000_000_000, tr("Go"))
 }

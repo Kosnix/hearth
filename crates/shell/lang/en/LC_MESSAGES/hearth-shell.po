@@ -351,3 +351,35 @@ msgctxt "App"
 msgid "Scannez avec votre téléphone pour acheter"
 msgstr "Scan with your phone to buy"
 
+msgctxt "App"
+msgid "Bureau Windows"
+msgstr "Windows desktop"
+
+msgctxt "App"
+msgid "Aucune notification"
+msgstr "No notifications"
+
+msgctxt "App"
+msgid "Effacer"
+msgstr "Dismiss"
+
+msgctxt "App"
+msgid "Tout effacer"
+msgstr "Clear all"
+
+msgctxt "App"
+msgid "Lancement…"
+msgstr "Launching…"
+
+msgctxt "App"
+msgid "Rechercher un jeu…"
+msgstr "Search for a game…"
+
+msgctxt "App"
+msgid "Ajouter un jeu"
+msgstr "Add a game"
+
+msgctxt "App"
+msgid "Ajouter"
+msgstr "Add"
+
