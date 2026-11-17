@@ -375,6 +375,7 @@ export component App inherits Window {
     in-out property <int> srow: 0;
     in-out property <int> sfocus: 0; // 0 catégories, 1 lignes
     property <int> cols: 10;
+    property <int> lrow: floor(lsel / cols);
     callback launch(int); // identifiant interne du jeu
     callback nav-key(int); // touche du clavier physique (le shell joue les sons puis appelle nav)
     callback game-menu(int);
@@ -724,29 +725,35 @@ export component App inherits Window {
         width: parent.width;
         height: 960px;
         clip: true;
-        for t[i] in library: Rectangle {
-            property <int> trow: floor(i / cols);
-            property <int> lrow: floor(lsel / cols);
-            x: 80px + mod(i, cols) * 236px;
-            y: 20px + trow * 330px - max(0, lrow - 1) * 330px;
-            width: 200px;
-            height: 300px;
-            animate y { duration: 150ms; easing: ease-out; }
-            // Seules les rangées proches de la sélection existent : pas de centaines de jaquettes en mémoire.
-            if trow >= lrow - 2 && trow <= lrow + 3: GameTile {
-                width: parent.width;
-                height: parent.height;
-                compact: true;
-                tile: t;
-                selected: zone == 0 && i == lsel;
-                clicked => {
-                    root.lsel = i;
-                    root.zone = 0;
-                    root.launch(t.gid);
+        // Le défilement anime un seul conteneur (et non 190 tuiles) : une seule propriété change à chaque rangée.
+        Rectangle {
+            x: 0px;
+            y: -max(0, lrow - 1) * 330px;
+            width: parent.width;
+            height: 1000px;
+            animate y { duration: 160ms; easing: ease-out; }
+            for t[i] in library: Rectangle {
+                property <int> trow: floor(i / cols);
+                x: 80px + mod(i, cols) * 236px;
+                y: 20px + trow * 330px;
+                width: 200px;
+                height: 300px;
+                // Seules les rangées proches de la sélection existent : pas de centaines de jaquettes en mémoire.
+                if trow >= lrow - 2 && trow <= lrow + 3: GameTile {
+                    width: parent.width;
+                    height: parent.height;
+                    compact: true;
+                    tile: t;
+                    selected: zone == 0 && i == lsel;
+                    clicked => {
+                        root.lsel = i;
+                        root.zone = 0;
+                        root.launch(t.gid);
+                    }
+                    options => { root.lsel = i; root.game-menu(t.gid); }
+                    hovered => { if (root.zone == 0) { root.lsel = i; } }
+                    wheel(d) => { root.nav(d > 0 ? 1 : 0); }
                 }
-                options => { root.lsel = i; root.game-menu(t.gid); }
-                hovered => { if (root.zone == 0) { root.lsel = i; } }
-                wheel(d) => { root.nav(d > 0 ? 1 : 0); }
             }
         }
     }

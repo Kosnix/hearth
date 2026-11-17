@@ -80,6 +80,7 @@ struct Shell {
     anim_n: Cell<u32>,
     lib_cover: RefCell<std::collections::HashMap<String, slint::Image>>,
     lib_last: Cell<(i32, usize)>,
+    art_pending: RefCell<std::collections::HashSet<String>>,
     lib_pending: RefCell<std::collections::HashSet<String>>,
     sfx_on: Cell<bool>,
     fg_main: Cell<bool>,
@@ -161,6 +162,7 @@ fn main() -> Result<(), slint::PlatformError> {
         anim_n: Cell::new(0),
         lib_cover: RefCell::new(Default::default()),
         lib_last: Cell::new((-1, 0)),
+        art_pending: RefCell::new(Default::default()),
         lib_pending: RefCell::new(Default::default()),
         sfx_on: Cell::new(i18n::pref("sfx").as_deref() != Some("0")),
         fg_main: Cell::new(true),
@@ -1151,13 +1153,13 @@ impl Shell {
         self.ui.set_zone(7);
         std::thread::spawn(move || {
             let d = stores::details(&o);
-            let hero = stores::fetch_first(&o.heroes);
-            let shots: Vec<PathBuf> = d.shots.iter().filter_map(|u| stores::fetch_first(std::slice::from_ref(u))).collect();
+            let hero = stores::fetch_first(&o.heroes).and_then(|p| imgload::decode(&p, 1920, 1080));
+            let shots: Vec<imgload::Buf> = d.shots.iter().filter_map(|u| stores::fetch_first(std::slice::from_ref(u))).filter_map(|p| imgload::decode(&p, 420, 240)).collect();
             let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.details_ready(gen, d, hero, shots)));
         });
     }
 
-    fn details_ready(&self, gen: u32, d: stores::Details, hero: Option<PathBuf>, shots: Vec<PathBuf>) {
+    fn details_ready(&self, gen: u32, d: stores::Details, hero: Option<imgload::Buf>, shots: Vec<imgload::Buf>) {
         if self.det_gen.get() != gen {
             return;
         }
@@ -1167,10 +1169,10 @@ impl Shell {
         if !d.meta.is_empty() {
             self.ui.set_det_meta(d.meta.into());
         }
-        if let Some(h) = hero.and_then(|p| slint::Image::load_from_path(&p).ok()) {
+        if let Some(h) = hero.as_ref().map(imgload::image) {
             self.ui.set_det_hero(h);
         }
-        self.det_shots.set_vec(shots.iter().filter_map(|p| slint::Image::load_from_path(p).ok()).collect::<Vec<_>>());
+        self.det_shots.set_vec(shots.iter().map(imgload::image).collect::<Vec<_>>());
         self.ui.set_det_loading(false);
     }
 
@@ -1221,14 +1223,11 @@ impl Shell {
         self.lib_cover.borrow_mut().remove(id);
         self.lib_last.set((-1, 0));
         let games = self.games.borrow();
-        let Some((gid, g)) = games.iter().enumerate().find(|(_, g)| g.id == id) else { return };
-        for model in [&self.tiles, &self.library] {
-            if let Some(row) = (0..model.row_count()).find(|&r| model.row_data(r).is_some_and(|t| t.gid == gid as i32)) {
-                let old = model.row_data(row).unwrap_or_default();
-                let mut t = self.make_tile(gid, g, old.running, &Default::default());
-                t.sub = old.sub;
-                model.set_row_data(row, t);
-            }
+        let Some(g) = games.iter().find(|g| g.id == id) else { return };
+        // Jeux installés : nouveau décodage en arrière-plan, l'ancien visuel reste affiché jusque-là.
+        // Bibliothèque : lib_cover est vidé et sync_library_art recharge la tuile.
+        if !g.install {
+            self.art_request(g);
         }
     }
 
@@ -1303,8 +1302,44 @@ fn playtime_key(g: &Game) -> String {
 }
 
 impl Shell {
+    /// Visuels d'un jeu installé : depuis le cache ; sinon vides le temps du décodage en arrière-plan (art_request).
     fn art_of(&self, g: &Game) -> (slint::Image, slint::Image, slint::Image) {
-        self.art_cache.borrow_mut().entry(g.id.clone()).or_insert_with(|| (cover_of(g), hero_of(g), logo_of(g))).clone()
+        if let Some(a) = self.art_cache.borrow().get(&g.id) {
+            return a.clone();
+        }
+        self.art_request(g);
+        Default::default()
+    }
+
+    fn art_request(&self, g: &Game) {
+        if !self.art_pending.borrow_mut().insert(g.id.clone()) {
+            return;
+        }
+        let id = g.id.clone();
+        let cover = if g.cover.is_empty() { stores::asset(&g.id, "cover") } else { Some(PathBuf::from(&g.cover)) };
+        let (hero, logo) = (stores::asset(&g.id, "hero"), stores::asset(&g.id, "logo"));
+        std::thread::spawn(move || {
+            let c = cover.and_then(|p| imgload::decode(&p, 600, 900));
+            let h = hero.and_then(|p| imgload::decode(&p, 1920, 1080));
+            let l = logo.and_then(|p| imgload::decode(&p, 800, 320));
+            let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.art_ready(&id, c, h, l)));
+        });
+    }
+
+    fn art_ready(&self, id: &str, c: Option<imgload::Buf>, h: Option<imgload::Buf>, l: Option<imgload::Buf>) {
+        self.art_pending.borrow_mut().remove(id);
+        let img = |b: &Option<imgload::Buf>| b.as_ref().map(imgload::image).unwrap_or_default();
+        let art = (img(&c), img(&h), img(&l));
+        self.art_cache.borrow_mut().insert(id.to_string(), art.clone());
+        let Some(gid) = self.games.borrow().iter().position(|g| g.id == id) else { return };
+        for r in 0..self.tiles.row_count() {
+            if let Some(mut t) = self.tiles.row_data(r) {
+                if t.gid == gid as i32 {
+                    (t.cover, t.hero, t.logo) = art.clone();
+                    self.tiles.set_row_data(r, t);
+                }
+            }
+        }
     }
 
     fn make_tile(&self, gid: usize, g: &Game, running: bool, pt: &std::collections::HashMap<String, playtime::Entry>) -> Tile {
