@@ -166,7 +166,8 @@ pub fn login(user: &str, pass: &str) -> (Login, Option<Pending>) {
 
 /// Envoie le code Steam Guard au même processus (même session : pas de second essai avec le mot de passe).
 pub fn submit_code(mut p: Pending, code: &str) -> Login {
-    if let Some(si) = p.child.stdin.as_mut() {
+    // Code vide : l'utilisateur valide la connexion sur son téléphone, on attend simplement.
+    if let Some(si) = p.child.stdin.as_mut().filter(|_| !code.is_empty()) {
         let _ = si.write_all(format!("{code}\n").as_bytes());
         let _ = si.flush();
     }

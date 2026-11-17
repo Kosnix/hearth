@@ -164,6 +164,7 @@ const EN: &[(&str, &str)] = &[
     ("Identifiant Steam", "Steam username"),
     ("Mot de passe Steam", "Steam password"),
     ("Code Steam Guard", "Steam Guard code"),
+    ("Code Steam Guard, ou Valider (vide) si approuvé sur le téléphone", "Steam Guard code, or Confirm (empty) if approved on your phone"),
     ("Connexion à Steam…", "Signing in to Steam…"),
     ("Connecté à Steam :", "Signed in to Steam:"),
     ("Saisissez le code Steam Guard", "Enter the Steam Guard code"),

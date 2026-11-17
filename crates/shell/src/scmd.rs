@@ -122,7 +122,7 @@ impl Shell {
             Login::NeedCode => {
                 *self.scmd_proc.borrow_mut() = proc;
                 self.push_notif("Steam", &tr("Saisissez le code Steam Guard (ou validez sur votre téléphone)"));
-                self.scmd_keyboard(3, "Code Steam Guard");
+                self.scmd_keyboard(3, "Code Steam Guard, ou Valider (vide) si approuvé sur le téléphone");
             }
             Login::Failed(e) => {
                 self.push_notif("Steam", &format!("{} : {e}", tr("Connexion refusée")));
