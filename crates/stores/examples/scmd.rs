@@ -1,4 +1,3 @@
 fn main() {
-    println!("{:?}", stores::steamcmd::ensure());
-    println!("{:?}", stores::steamcmd::installed_ids());
+    println!("session_ok = {}", stores::steamcmd::session_ok("nikosss38"));
 }

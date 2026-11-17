@@ -57,7 +57,13 @@ pub fn ensure() -> Result<(), String> {
 
 fn failure(out: &str) -> String {
     let l = out.to_lowercase();
-    if l.contains("invalid password") || l.contains("invalidpassword") {
+    if l.contains("error (timeout)") {
+        "délai dépassé (approbation non reçue, ou code Steam Guard requis)".into()
+    } else if l.contains("account logon denied") || l.contains("invalid login auth code") {
+        "code Steam Guard (e-mail) requis ou incorrect".into()
+    } else if l.contains("twofactorcodemismatch") || l.contains("two-factor code mismatch") {
+        "code Steam Guard incorrect ou expiré".into()
+    } else if l.contains("invalid password") || l.contains("invalidpassword") {
         "mot de passe incorrect".into()
     } else if l.contains("no subscription") {
         "jeu non possédé par ce compte".into()
@@ -78,6 +84,7 @@ fn failure(out: &str) -> String {
 pub struct Pending {
     child: std::process::Child,
     out: Arc<Mutex<String>>,
+    offset: u64,
 }
 
 fn spawn_piped(args: &[&str]) -> Result<(std::process::Child, Arc<Mutex<String>>), String> {
@@ -107,36 +114,48 @@ fn spawn_piped(args: &[&str]) -> Result<(std::process::Child, Arc<Mutex<String>>
     Ok((child, out))
 }
 
-fn snapshot(out: &Arc<Mutex<String>>) -> String {
-    out.lock().map(|s| s.to_lowercase()).unwrap_or_default()
+fn console_log() -> PathBuf {
+    dir().join("logs").join("console_log.txt")
+}
+
+fn console_len() -> u64 {
+    std::fs::metadata(console_log()).map(|m| m.len()).unwrap_or(0)
+}
+
+/// Journal de SteamCMD depuis `offset` : SteamCMD ne vide sa sortie standard qu'à l'arrêt, le journal est la seule trace en direct.
+fn console_since(offset: u64) -> String {
+    let Ok(bytes) = std::fs::read(console_log()) else { return String::new() };
+    let start = (offset as usize).min(bytes.len());
+    String::from_utf8_lossy(&bytes[start..]).to_lowercase()
+}
+
+fn snapshot(out: &Arc<Mutex<String>>, offset: u64) -> String {
+    let o = out.lock().map(|s| s.to_lowercase()).unwrap_or_default();
+    format!("{o}\n{}", console_since(offset))
 }
 
 /// Attend la réussite, un échec, ou une demande de code (jusqu'à 3 minutes : l'utilisateur peut valider sur son téléphone).
-fn await_login(mut child: std::process::Child, out: Arc<Mutex<String>>, code_sent: bool) -> Login_ {
+fn await_login(mut child: std::process::Child, out: Arc<Mutex<String>>, code_sent: bool, offset: u64) -> Login_ {
     let t0 = std::time::Instant::now();
     while t0.elapsed() < std::time::Duration::from_secs(180) {
-        std::thread::sleep(std::time::Duration::from_millis(400));
-        let s = snapshot(&out);
-        if s.contains("logged in ok") {
-            if let Some(mut si) = child.stdin.take() {
-                let _ = si.write_all(b"quit\n");
-            }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let s = snapshot(&out, offset);
+        // « Waiting for user info » n'apparaît qu'une fois connecté ; la session est alors mémorisée par SteamCMD.
+        if s.contains("logged in ok") || s.contains("waiting for user info") {
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            let _ = child.kill();
             let _ = child.wait();
             return Login_::Done(Login::Ok);
         }
-        if s.contains("invalid password") || s.contains("rate limit") || s.contains("login failure") || s.contains("account logon denied") {
+        if s.contains("error (") {
             let msg = failure(&s);
             let _ = child.kill();
             return Login_::Done(Login::Failed(msg));
         }
         if !code_sent && (s.contains("steam guard code") || s.contains("two-factor code") || s.contains("enter the current code") || s.contains("guard code")) {
-            return Login_::Wait(Pending { child, out });
+            return Login_::Wait(Pending { child, out, offset });
         }
-        if code_sent && (s.contains("incorrect") || s.contains("mismatch") || s.contains("expired")) {
-            let _ = child.kill();
-            return Login_::Done(Login::Failed("code Steam Guard incorrect".into()));
-        }
-        if matches!(child.try_wait(), Ok(Some(_))) && !s.contains("logged in ok") {
+        if matches!(child.try_wait(), Ok(Some(_))) {
             return Login_::Done(Login::Failed(failure(&s)));
         }
     }
@@ -158,19 +177,17 @@ pub fn login(user: &str, pass: &str, code: Option<&str>) -> (Login, Option<Pendi
     if let Some(c) = code {
         args.push(c);
     }
+    let offset = console_len();
     let (child, out) = match spawn_piped(&args) {
         Ok(x) => x,
         Err(e) => return (Login::Failed(e), None),
     };
     let log = out.clone();
-    let r = match await_login(child, out, code.is_some()) {
+    let r = match await_login(child, out, code.is_some(), offset) {
         Login_::Done(l) => (l, None),
         Login_::Wait(p) => (Login::NeedCode, Some(p)),
     };
-    // Trace pour diagnostiquer les échecs de connexion (la sortie de SteamCMD ne contient pas le mot de passe).
-    if let Ok(s) = log.lock() {
-        let _ = std::fs::write(dir().join("hearth-login.log"), s.as_str());
-    }
+    let _ = std::fs::write(dir().join("hearth-login.log"), snapshot(&log, offset));
     r
 }
 
@@ -181,7 +198,7 @@ pub fn submit_code(mut p: Pending, code: &str) -> Login {
         let _ = si.write_all(format!("{code}\n").as_bytes());
         let _ = si.flush();
     }
-    match await_login(p.child, p.out, true) {
+    match await_login(p.child, p.out, true, p.offset) {
         Login_::Done(l) => l,
         Login_::Wait(mut p) => {
             let _ = p.child.kill();
@@ -196,37 +213,47 @@ pub fn abandon(mut p: Pending) {
 
 /// Session mémorisée par SteamCMD pour cet identifiant ?
 pub fn session_ok(user: &str) -> bool {
-    run(&["+@NoPromptForPassword", "1", "+login", user, "+quit"]).is_ok_and(|o| o.contains("Logged in OK"))
+    run(&["+@NoPromptForPassword", "1", "+login", user, "+quit"]).is_ok_and(|o| o.contains("Logged in OK") || o.contains("Waiting for user info"))
 }
 
 /// Installe ou met à jour un jeu (bloquant, long). `pid` reçoit le processus (pour annuler), `progress` le pourcentage.
 pub fn install(user: &str, appid: &str, pid: &AtomicU32, progress: impl Fn(f32)) -> Result<(), String> {
     ensure()?;
+    let offset = console_len();
     let (mut child, out) = spawn_piped(&["+@NoPromptForPassword", "1", "+login", user, "+app_update", appid, "validate", "+quit"])?;
     pid.store(child.id(), Ordering::SeqCst);
     let mut last = -1.0f32;
     loop {
-        std::thread::sleep(std::time::Duration::from_millis(800));
-        let s = out.lock().map(|s| s.clone()).unwrap_or_default();
-        if let Some(i) = s.rfind("progress: ") {
-            let v: String = s[i + 10..].chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
-            if let Ok(p) = v.parse::<f32>() {
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        // Progression lue dans le manifeste (octets téléchargés / à télécharger).
+        if let Some(m) = manifest(appid) {
+            let n = |k: &str| field(&m, k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+            let (total, done) = (n("BytesToDownload"), n("BytesDownloaded"));
+            if total > 0.0 {
+                let p = (done / total * 100.0) as f32;
                 if (p - last).abs() >= 0.3 {
                     last = p;
-                    progress(p);
+                    progress(p.min(100.0));
                 }
             }
         }
         if matches!(child.try_wait(), Ok(Some(_))) {
             break;
         }
+        // Connexion refusée en cours de route : inutile d'attendre.
+        let s = console_since(offset);
+        if s.contains("error (invalid password") || s.contains("error (no cached") {
+            let _ = child.kill();
+            break;
+        }
     }
     pid.store(0, Ordering::SeqCst);
-    let text = out.lock().map(|s| s.clone()).unwrap_or_default();
-    if text.contains("fully installed") {
+    let text = format!("{}\n{}", out.lock().map(|s| s.clone()).unwrap_or_default(), console_since(offset));
+    let installed = manifest(appid).and_then(|m| field(&m, "StateFlags")).and_then(|f| f.parse::<u32>().ok()).is_some_and(|f| f & 4 != 0);
+    if installed || text.to_lowercase().contains("fully installed") {
         Ok(())
     } else {
-        Err(failure(&text))
+        Err(failure(&text.to_lowercase()))
     }
 }
 
