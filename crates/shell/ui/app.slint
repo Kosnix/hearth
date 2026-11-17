@@ -1153,7 +1153,10 @@ export component App inherits Window {
                     border-radius: 7px;
                     background: #ffffff33;
                     Rectangle {
-                        width: parent.width * min(r.pct, 100) / 100;
+                        x: 0px;
+                        y: 0px;
+                        height: parent.height;
+                        width: max(14px, parent.width * min(r.pct, 100) / 100);
                         border-radius: 7px;
                         background: Theme.text;
                     }

@@ -314,7 +314,7 @@ pub fn installed_ids() -> Vec<String> {
     rd.flatten()
         .filter_map(|e| {
             let n = e.file_name().to_string_lossy().into_owned();
-            n.strip_prefix("appmanifest_")?.strip_suffix(".acf").map(String::from)
+            n.strip_prefix("appmanifest_")?.strip_suffix(".acf").map(String::from).filter(|id| id != "228980")
         })
         .collect()
 }
