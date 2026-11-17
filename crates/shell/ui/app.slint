@@ -10,6 +10,7 @@ export struct Tile {
     running: bool,
     add: bool,
     install: bool,
+    sub: string,
 }
 
 export struct SettingRow {
@@ -511,6 +512,13 @@ export component App inherits Window {
         TouchArea {
             clicked => { root.zone = 0; root.launch(root.sel); }
         }
+    }
+    if tab == 0 && games.length > 0 && games[sel].sub != "": Text {
+        x: 84px;
+        y: 492px;
+        text: games[sel].sub;
+        font-size: 24px;
+        color: Theme.dim;
     }
     if tab == 0: Rectangle {
         x: 80px - max(0, sel - 5) * 268px;
@@ -1385,6 +1393,8 @@ export component GuideMenu inherits Window {
 
 // Écran de lancement : fenêtre superposée au jeu pendant son chargement (comme le menu guide, sans prendre le focus).
 export component Splash inherits Window {
+    in property <color> launch-hue: #4b63b8;
+    in property <string> launch-initial;
     in property <string> launch-name;
     in property <image> launch-cover;
     in property <image> launch-art;
@@ -1415,12 +1425,20 @@ export component Splash inherits Window {
             border-radius: 28px;
             clip: true;
             opacity: launch-t;
-            background: Theme.tile;
+            background: @linear-gradient(135deg, launch-hue 0%, launch-hue.darker(0.75) 100%);
             Image {
                 width: 100%;
                 height: 100%;
                 source: launch-cover;
                 image-fit: cover;
+            }
+            if launch-cover.width == 0: Text {
+                y: parent.height - self.height + 40px;
+                x: parent.width - self.width - 20px;
+                text: launch-initial;
+                font-size: 420px;
+                font-weight: 800;
+                color: #ffffff30;
             }
             if launch-cover.width == 0: Text {
                 text: launch-name;

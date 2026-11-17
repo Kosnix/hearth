@@ -14,6 +14,7 @@ mod addgame;
 mod accounts;
 mod addflow;
 mod i18n;
+mod playtime;
 mod settings;
 
 slint::include_modules!();
@@ -52,6 +53,7 @@ struct Running {
     session: wm::Session,
     hands_off: bool, // anti-triche ou plein écran sans bordure désactivé
     closing: bool,
+    started: std::time::Instant,
 }
 
 struct Shell {
@@ -97,7 +99,9 @@ fn main() -> Result<(), slint::PlatformError> {
     std::env::set_var("SLINT_FULLSCREEN", "1");
     // ponytail: femtovg cesse de se redessiner avec ce design (constaté sur l'Optiplex) ; rendu logiciel.
     std::env::set_var("SLINT_BACKEND", "winit-software");
-    let games = load_games();
+    let mut games = load_games();
+    let pt = playtime::load();
+    games.sort_by_key(|g| std::cmp::Reverse(playtime::last(&playtime_key(g), &pt)));
     let mut tiles: Vec<Tile> = games.iter().map(tile_of).collect();
     tiles.push(add_tile());
     let shell = Rc::new(Shell {
@@ -271,7 +275,7 @@ impl Shell {
         match wm::Session::launch(exe, &args) {
             Ok(session) => {
                 let hands_off = g.anticheat || compat.anticheat || !compat.borderless;
-                self.running.borrow_mut().push(Running { tile: i, session, hands_off, closing: false });
+                self.running.borrow_mut().push(Running { tile: i, session, hands_off, closing: false, started: std::time::Instant::now() });
                 self.set_running(i, true);
             }
             Err(e) => {
@@ -610,18 +614,21 @@ impl Shell {
         } else if self.settings.confirming() {
             self.open_cat_keep(self.ui.get_cat());
         }
-        let ended: Vec<usize> = {
+        let ended: Vec<(usize, u64)> = {
             let mut running = self.running.borrow_mut();
-            let ended = running.iter().filter(|r| !r.session.alive()).map(|r| r.tile).collect();
+            let ended: Vec<(usize, u64)> = running.iter().filter(|r| !r.session.alive()).map(|r| (r.tile, r.started.elapsed().as_secs())).collect();
             running.retain(|r| r.session.alive());
             ended
         };
-        for &tile in &ended {
+        for &(tile, secs) in &ended {
+            let key = playtime_key(&self.games.borrow()[tile]);
+            playtime::record(&key, secs);
+            self.refresh_sub(tile);
             self.set_running(tile, false);
             self.notify(format!("{} {}", self.games.borrow()[tile].name, tr("s'est fermé")));
         }
         if !ended.is_empty() {
-            if ended.contains(&self.guide_tile.get()) {
+            if ended.iter().any(|(t, _)| *t == self.guide_tile.get()) {
                 self.hide_guide();
             }
             let fg = wm::foreground();
@@ -939,6 +946,8 @@ impl Shell {
         self.splash.set_launch_name(t.name);
         self.splash.set_launch_cover(t.cover);
         self.splash.set_launch_art(t.hero);
+        self.splash.set_launch_hue(t.hue);
+        self.splash.set_launch_initial(t.initial);
         self.splash.set_launch_t(0.0);
         self.splash.set_launch_spin(0.0);
         if let Some(h) = wm::find_window(SPLASH_TITLE) {
@@ -987,16 +996,36 @@ fn tile_of(g: &Game) -> Tile {
         running: false,
         add: false,
         install: g.install,
+        sub: if g.install { "".into() } else { playtime::label(&playtime_key(g)).into() },
     }
 }
 
 fn add_tile() -> Tile {
-    Tile { name: tr("Ajouter un jeu").into(), initial: "+".into(), hue: slint::Color::from_rgb_u8(90, 100, 160), cover: Default::default(), hero: Default::default(), running: false, add: true, install: false }
+    Tile { name: tr("Ajouter un jeu").into(), initial: "+".into(), hue: slint::Color::from_rgb_u8(90, 100, 160), cover: Default::default(), hero: Default::default(), running: false, add: true, install: false, sub: "".into() }
 }
 
 impl Shell {
     /// Insère une tuile avant la tuile « Ajouter un jeu ».
     fn tiles_insert(&self, idx: usize, t: Tile) {
         self.tiles.insert(idx, t);
+    }
+}
+
+/// Clé de temps de jeu : identifiant du jeu, sinon son nom.
+fn playtime_key(g: &Game) -> String {
+    if g.id.is_empty() {
+        format!("name-{}", g.name)
+    } else {
+        g.id.clone()
+    }
+}
+
+impl Shell {
+    fn refresh_sub(&self, tile: usize) {
+        let Some(g) = self.games.borrow().get(tile).cloned() else { return };
+        if let Some(mut t) = self.tiles.row_data(tile) {
+            t.sub = playtime::label(&playtime_key(&g)).into();
+            self.tiles.set_row_data(tile, t);
+        }
     }
 }
