@@ -139,6 +139,24 @@ const EN: &[(&str, &str)] = &[
     ("Autorisation administrateur", "Administrator permission"),
     ("Activée", "Enabled"),
     ("Activer (une seule fois)", "Enable (one time only)"),
+    ("Vérifier / mettre à jour", "Check / update"),
+    ("Jeu désinstallé", "Game uninstalled"),
+    ("Désinstallation impossible", "Could not uninstall"),
+    ("Mise à jour disponible", "Update available"),
+    ("Mettre à jour maintenant", "Update now"),
+    ("Plus tard", "Later"),
+    ("Identifiant Steam", "Steam username"),
+    ("Mot de passe Steam", "Steam password"),
+    ("Code Steam Guard", "Steam Guard code"),
+    ("Connexion à Steam…", "Signing in to Steam…"),
+    ("Connecté à Steam :", "Signed in to Steam:"),
+    ("Saisissez le code Steam Guard", "Enter the Steam Guard code"),
+    ("Connexion refusée", "Sign-in refused"),
+    ("Déjà en cours", "Already in progress"),
+    ("téléchargement en cours (plusieurs minutes)…", "downloading (several minutes)…"),
+    ("installé", "installed"),
+    ("échec", "failed"),
+    ("Steam : installer sans le client", "Steam: install without the client"),
     ("Autorisation administrateur requise : acceptez la fenêtre Windows (une seule fois)", "Administrator permission needed: accept the Windows prompt (one time only)"),
 ];
 
@@ -222,4 +240,11 @@ pub fn toasts() -> bool {
 pub fn set_toasts(on: bool) {
     TOASTS.store(on, Ordering::Relaxed);
     persist();
+}
+
+/// Enregistre une préférence textuelle dans `settings.json`.
+pub fn set_pref(key: &str, value: &str) {
+    let mut v: serde_json::Value = std::fs::read_to_string(file()).ok().and_then(|s| serde_json::from_str(s.trim_start_matches('\u{feff}')).ok()).unwrap_or_else(|| serde_json::json!({}));
+    v[key] = value.into();
+    let _ = std::fs::write(file(), v.to_string());
 }

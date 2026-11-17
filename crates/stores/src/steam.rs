@@ -72,9 +72,10 @@ impl Store for Steam {
     }
 
     fn installed(&self) -> Vec<Game> {
-        let Some(root) = root() else { return vec![] };
-        let mut games = vec![];
-        for lib in libraries(&root) {
+        let mut libs: Vec<(PathBuf, bool)> = root().map(|r| libraries(&r)).unwrap_or_default().into_iter().map(|p| (p, false)).collect();
+        libs.push((crate::steamcmd::dir(), true));
+        let mut games: Vec<Game> = vec![];
+        for (lib, cmd) in libs {
             let Ok(dir) = std::fs::read_dir(lib.join("steamapps")) else { continue };
             for e in dir.flatten() {
                 let name = e.file_name().to_string_lossy().into_owned();
@@ -87,9 +88,17 @@ impl Store for Steam {
                 let installed = get("StateFlags").and_then(|f| f.parse::<u32>().ok()).is_some_and(|f| f & 4 != 0);
                 // Outils et environnements d'exécution : pas des jeux.
                 let tool = id == "228980" || ["Steamworks", "Steam Linux Runtime", "Proton", "Steam Controller"].iter().any(|p| title.starts_with(p));
-                if installed && !tool {
-                    games.push(Game { art: art(&id), launch: Launch::Uri(format!("steam://rungameid/{id}")), id: format!("steam-{id}"), store: "Steam", title });
+                if !installed || tool || games.iter().any(|g| g.id == format!("steam-{id}")) {
+                    continue;
                 }
+                let launch = if cmd {
+                    // Installé par SteamCMD : le client ne le connaît pas, on lance l'exécutable directement.
+                    let Some(exe) = get("installdir").and_then(|d| crate::steamcmd::main_exe(&lib.join("steamapps").join("common").join(d))) else { continue };
+                    Launch::Exe { path: exe.to_string_lossy().into_owned(), args: vec![] }
+                } else {
+                    Launch::Uri(format!("steam://rungameid/{id}"))
+                };
+                games.push(Game { art: art(&id), launch, id: format!("steam-{id}"), store: "Steam", title });
             }
         }
         games.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));

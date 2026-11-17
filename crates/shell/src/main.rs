@@ -15,6 +15,7 @@ mod accounts;
 mod addflow;
 mod i18n;
 mod menus;
+mod scmd;
 mod playtime;
 mod prefs;
 mod settings;
@@ -73,6 +74,13 @@ struct Shell {
     owned: RefCell<Vec<(stores::account::Owned, String)>>,
     menu_acts: RefCell<Vec<menus::Act>>,
     rename_id: RefCell<Option<String>>,
+    scmd_stage: Cell<u8>,
+    scmd_user_tmp: RefCell<String>,
+    scmd_pass: RefCell<String>,
+    scmd_pending: RefCell<Option<String>>,
+    scmd_busy: RefCell<std::collections::HashSet<String>>,
+    updates: RefCell<Vec<String>>,
+    declined: RefCell<std::collections::HashSet<String>>,
     pick_ids: RefCell<Vec<String>>,
     identify_target: RefCell<Option<String>>,
     deals: Rc<VecModel<Deal>>,
@@ -132,6 +140,13 @@ fn main() -> Result<(), slint::PlatformError> {
         owned: RefCell::new(vec![]),
         menu_acts: RefCell::new(vec![]),
         rename_id: RefCell::new(None),
+        scmd_stage: Cell::new(0),
+        scmd_user_tmp: RefCell::new(String::new()),
+        scmd_pass: RefCell::new(String::new()),
+        scmd_pending: RefCell::new(None),
+        scmd_busy: RefCell::new(Default::default()),
+        updates: RefCell::new(vec![]),
+        declined: RefCell::new(Default::default()),
         pick_ids: RefCell::new(vec![]),
         identify_target: RefCell::new(None),
         deals: Rc::new(VecModel::default()),
@@ -286,6 +301,10 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     });
 
+    Shell::schedule_updates();
+    let s = shell.clone();
+    let upd = slint::Timer::default();
+    upd.start(slint::TimerMode::Repeated, Duration::from_secs(6 * 3600), move || s.check_updates());
     shell.start_art();
     shell.refresh_owned();
     shell.ui.run()
@@ -445,6 +464,7 @@ impl Shell {
                     });
                 });
             }
+            settings::Outcome::SteamCmd => self.scmd_begin(None),
             settings::Outcome::Login(store) => self.begin_login(store),
             settings::Outcome::Logout(store) => self.logout(&store),
             settings::Outcome::BtScan => {
@@ -510,7 +530,9 @@ impl Shell {
     }
 
     fn kb_refresh(&self) {
-        self.ui.set_kb_text(self.settings.kb_text().into());
+        let text = self.settings.kb_text();
+        let shown = if self.scmd_stage.get() == 2 { "•".repeat(text.chars().count()) } else { text };
+        self.ui.set_kb_text(shown.into());
         let keys: Vec<SharedString> = self.settings.kb_keys().into_iter().map(Into::into).collect();
         self.ui.set_kb_keys(Rc::new(VecModel::from(keys)).into());
     }
@@ -539,6 +561,10 @@ impl Shell {
                     5
                 } else if self.rename_id.borrow_mut().take().is_some() {
                     0
+                } else if self.scmd_stage.replace(0) != 0 {
+                    *self.scmd_pass.borrow_mut() = String::new();
+                    *self.scmd_pending.borrow_mut() = None;
+                    0
                 } else {
                     3
                 };
@@ -546,7 +572,9 @@ impl Shell {
             }
             settings::Kb::Done(ssid, text) => {
                 let renaming = self.rename_id.borrow_mut().take();
-                if let Some(id) = renaming {
+                if self.scmd_stage.get() != 0 {
+                    self.scmd_text(text);
+                } else if let Some(id) = renaming {
                     self.ui.set_zone(0);
                     self.rename_game(&id, text.trim());
                 } else if self.kb_login.replace(false) {
@@ -695,6 +723,7 @@ impl Shell {
     /// Chaque seconde : jeux terminés, et ré-application du sans-bordure (certains jeux le retirent).
     fn tick(&self) {
         self.set_clock();
+        self.maybe_prompt_update();
         if self.settings.tick() {
             self.display_changed();
             self.open_cat_keep(self.ui.get_cat());

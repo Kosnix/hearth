@@ -200,6 +200,10 @@ impl Shell {
 
     /// Installe un jeu possédé via le client de sa boutique (installé au besoin).
     pub fn install_owned(&self, g: &Game) {
+        if g.id.starts_with("owned-steam-") {
+            self.steam_install(&g.id);
+            return;
+        }
         let detected = self.store_status.borrow().iter().any(|(n, d, _)| *n == g.store && *d);
         if !detected {
             self.account_install_client(g.store.clone());

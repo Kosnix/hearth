@@ -7,6 +7,7 @@ mod gog;
 mod http;
 mod reg;
 mod steam;
+pub mod steamcmd;
 
 pub mod account;
 pub mod qr;
@@ -192,4 +193,9 @@ pub fn catalog() -> Vec<Offer> {
 /// Recherche unifiée dans toutes les boutiques.
 pub fn search(query: &str) -> Vec<Offer> {
     collect(|s| s.search(query))
+}
+
+/// Téléchargement HTTPS simple (bloquant).
+pub fn download(url: &str) -> Option<Vec<u8>> {
+    http::get(url, &[])
 }

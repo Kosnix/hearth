@@ -59,6 +59,7 @@ pub fn fetch(cat: i32) -> Fetched {
         12 => {
             let mut accounts: Vec<(String, bool, Option<String>)> = stores::all().iter().map(|s| (s.name().to_string(), s.detected(), stores::account::session(s.name()).map(|a| a.name))).collect();
             accounts.push(("@admin".into(), system::admin::enabled(), None));
+            accounts.push(("@steamcmd".into(), true, crate::i18n::pref("steamcmd_user")));
             Fetched { accounts, ..Default::default() }
         }
         _ => Fetched::default(),
@@ -83,6 +84,7 @@ pub enum Outcome {
     BtUnpair(String, String),
     InstallClient(String),
     Admin,
+    SteamCmd,
     Login(String),
     Logout(String),
 }
@@ -430,6 +432,7 @@ impl Settings {
                 out = match account_rows(&s.data.accounts).into_iter().nth(r as usize).map(|(_, _, a)| a) {
                     Some(Act::Install(n)) => Outcome::InstallClient(n),
                     Some(Act::Admin) => Outcome::Admin,
+                    Some(Act::SteamCmd) => Outcome::SteamCmd,
                     Some(Act::Login(n)) => Outcome::Login(n),
                     Some(Act::Logout(n)) => Outcome::Logout(n),
                     _ => Outcome::None,
@@ -567,6 +570,7 @@ fn gb(bytes: u64) -> String {
 enum Act {
     Install(String),
     Admin,
+    SteamCmd,
     Login(String),
     Logout(String),
     None,
@@ -576,6 +580,14 @@ enum Act {
 fn account_rows(accounts: &[(String, bool, Option<String>)]) -> Vec<(String, String, Act)> {
     let mut v = vec![];
     for (name, detected, session) in accounts {
+        if name == "@steamcmd" {
+            let value = match session {
+                Some(u) => format!("{} · {u}", tr("Connecté")),
+                None => tr("Se connecter"),
+            };
+            v.push((tr("Steam : installer sans le client"), value, Act::SteamCmd));
+            continue;
+        }
         if name == "@admin" {
             let value = if *detected { tr("Activée") } else { tr("Activer (une seule fois)") };
             v.push((tr("Autorisation administrateur"), value, if *detected { Act::None } else { Act::Admin }));

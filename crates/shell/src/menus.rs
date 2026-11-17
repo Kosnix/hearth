@@ -19,11 +19,12 @@ pub enum Act {
     ConfirmUninstall(usize),
     AddGame,
     ShowHidden,
+    UpdateYes(usize),
     Cancel,
 }
 
 impl Shell {
-    fn menu_show(&self, title: String, items: Vec<(String, Act)>) {
+    pub fn menu_show(&self, title: String, items: Vec<(String, Act)>) {
         let from = self.ui.get_zone();
         self.ui.set_menu_title(title.into());
         let labels: Vec<SharedString> = items.iter().map(|(l, _)| l.as_str().into()).collect();
@@ -48,12 +49,24 @@ impl Shell {
             v.push((tr("Modifier le nom"), Act::Rename(gid)));
             v.push((tr("Changer le visuel"), Act::Reart(gid)));
         }
+        if self.is_scmd_game(&g.exe) && !running {
+            v.push((tr("Vérifier / mettre à jour"), Act::UpdateYes(gid)));
+        }
         v.push((tr("Cacher"), Act::Hide(gid)));
         if !g.install && !running {
             v.push((tr(if g.store.is_empty() { "Retirer de Hearth" } else { "Désinstaller" }), Act::Uninstall(gid)));
         }
         v.push((tr("Annuler"), Act::Cancel));
         self.menu_show(g.name, v);
+    }
+
+    /// Une mise à jour est disponible : on demande à l'utilisateur.
+    pub fn update_menu(&self, gid: usize) {
+        let Some(name) = self.games.borrow().get(gid).map(|g| g.name.clone()) else { return };
+        self.menu_show(
+            format!("{} : {name}", tr("Mise à jour disponible")),
+            vec![(tr("Mettre à jour maintenant"), Act::UpdateYes(gid)), (tr("Plus tard"), Act::Cancel)],
+        );
     }
 
     /// Menu du bouton « + » : ajouter un jeu, retrouver les jeux cachés.
@@ -108,6 +121,12 @@ impl Shell {
             }
             Act::AddGame => self.add_open(),
             Act::ShowHidden => self.show_hidden(),
+            Act::UpdateYes(g) => {
+                self.ui.set_zone(back);
+                if let Some(id) = self.games.borrow().get(g).map(|g| g.id.clone()) {
+                    self.steam_install(&id);
+                }
+            }
         }
     }
 
@@ -151,8 +170,14 @@ impl Shell {
             self.push_notif(&tr("Jeu retiré"), &g.name);
             return;
         }
+        if self.is_scmd_game(&g.exe) {
+            let ok = g.id.strip_prefix("steam-").is_some_and(stores::steamcmd::uninstall);
+            self.push_notif(&g.name, &tr(if ok { "Jeu désinstallé" } else { "Désinstallation impossible" }));
+            self.poll_installed();
+            return;
+        }
         let started = match g.store.as_str() {
-            "Steam" => g.id.strip_prefix("steam-").is_some_and(|id| Command::new("cmd").args(["/c", "start", "", &format!("steam://uninstall/{id}")]).spawn().is_ok()),
+            "Steam" =>g.id.strip_prefix("steam-").is_some_and(|id| Command::new("cmd").args(["/c", "start", "", &format!("steam://uninstall/{id}")]).spawn().is_ok()),
             "GOG" => {
                 let exe = Path::new(&g.exe);
                 let found = exe.ancestors().skip(1).take(3).find_map(|d| {
