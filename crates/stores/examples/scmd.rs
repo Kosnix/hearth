@@ -1,3 +1,4 @@
 fn main() {
-    println!("session_ok = {}", stores::steamcmd::session_ok("nikosss38"));
+    let l = stores::account::library("Epic Games");
+    println!("{} jeux: {:?}", l.len(), l.iter().take(8).map(|o| (&o.title, o.images.len())).collect::<Vec<_>>());
 }

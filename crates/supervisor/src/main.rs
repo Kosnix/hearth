@@ -49,7 +49,7 @@ fn supervise() {
             cmd.env("HEARTH_BACKEND", "winit-software");
         }
         let code = cmd.status().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
-        if code == EXIT_DESKTOP {
+        if code == EXIT_DESKTOP || code == 0 {
             log("retour au bureau demandé");
             desktop_until_console(event);
             continue;

@@ -256,6 +256,13 @@ fn main() -> Result<(), slint::PlatformError> {
         _ => {}
     });
     shell.ui.on_desktop(|| std::process::exit(EXIT_DESKTOP));
+    // Alt+F4 / fermeture de la console : bureau Windows plutôt qu'un écran noir pendant la relance.
+    shell.ui.window().on_close_requested(|| {
+        if wm::ctrl_down() {
+            return slint::CloseRequestResponse::KeepWindowShown;
+        }
+        std::process::exit(EXIT_DESKTOP)
+    });
     let s = shell.clone();
     shell.ui.on_search_open(move || s.search_open());
     let s = shell.clone();

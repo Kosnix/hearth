@@ -362,3 +362,8 @@ pub fn minimize_windows_of(exes: &[&str]) -> usize {
     }
     count
 }
+
+/// Ctrl est-il enfoncé ? (les raccourcis de test Ctrl+Alt+Maj+F1..F8 ne doivent pas fermer la console via Alt+F4)
+pub fn ctrl_down() -> bool {
+    unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) < 0 }
+}

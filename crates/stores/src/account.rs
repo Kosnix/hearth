@@ -207,31 +207,56 @@ fn epic_refresh(s: &Session) -> Option<Session> {
 }
 
 fn epic_library(s: &mut Session) -> Vec<Owned> {
-    let url = "https://library-service.live.use1a.on.epicgames.com/library/api/public/items?includeMetadata=true&platform=Windows";
-    let mut res = http::get_status(url, &[("Authorization", &format!("bearer {}", s.access))]);
-    if matches!(res, Some((401, _))) {
-        if let Some(n) = epic_refresh(s) {
-            *s = n;
-            store_session("Epic Games", s.clone());
-            res = http::get_status(url, &[("Authorization", &format!("bearer {}", s.access))]);
+    let base = "https://library-service.live.use1a.on.epicgames.com/library/api/public/items?includeMetadata=true&platform=Windows";
+    let mut records: Vec<serde_json::Value> = vec![];
+    let mut cursor = String::new();
+    for _ in 0..8 {
+        let url = if cursor.is_empty() { base.to_string() } else { format!("{base}&cursor={cursor}") };
+        let mut res = http::get_status(&url, &[("Authorization", &format!("bearer {}", s.access))]);
+        if matches!(res, Some((401, _))) {
+            if let Some(n) = epic_refresh(s) {
+                *s = n;
+                store_session("Epic Games", s.clone());
+                res = http::get_status(&url, &[("Authorization", &format!("bearer {}", s.access))]);
+            }
+        }
+        let Some((200, j)) = res else { break };
+        records.extend(j["records"].as_array().cloned().unwrap_or_default());
+        cursor = j["responseMetadata"]["nextCursor"].as_str().unwrap_or("").to_string();
+        if cursor.is_empty() {
+            break;
         }
     }
-    let Some((200, j)) = res else { return vec![] };
-    let records: Vec<&serde_json::Value> = j["records"].as_array().into_iter().flatten().filter(|r| r["sandboxType"] == "PUBLISHED" && r["namespace"] != "ue").collect();
-    // Titres et visuels par espace de noms.
-    let mut out = vec![];
-    for r in records.into_iter().take(60) {
-        let (ns, cat, app) = (r["namespace"].as_str().unwrap_or(""), r["catalogItemId"].as_str().unwrap_or(""), r["appName"].as_str().unwrap_or(""));
-        let meta = http::get_json(&format!("https://catalog-public-service-prod06.ol.epicgames.com/catalog/api/shared/namespace/{ns}/bulk/items?id={cat}&country=FR&locale=fr"), &[("Authorization", &format!("bearer {}", s.access))]);
-        let Some(item) = meta.as_ref().and_then(|m| m[cat].as_object()) else { continue };
-        let title = item.get("title").and_then(|t| t.as_str()).unwrap_or(app).to_string();
-        let images: Vec<String> = ["DieselGameBoxTall", "OfferImageTall", "Thumbnail"]
-            .iter()
-            .filter_map(|t| item.get("keyImages")?.as_array()?.iter().find(|k| k["type"] == *t)?["url"].as_str().map(String::from))
-            .collect();
-        out.push(Owned { store: "Epic Games", title, key: format!("{ns}:{cat}:{app}"), images });
-    }
-    out
+    // Jeux publics (pas les outils Unreal ni les doublons de plateforme), un par produit.
+    let mut seen = std::collections::HashSet::new();
+    let games: Vec<(String, String, String)> = records
+        .iter()
+        .filter(|r| r["sandboxType"] == "PUBLIC" && r["recordType"] == "APPLICATION" && r["namespace"] != "ue")
+        .filter_map(|r| {
+            let (ns, cat, app) = (r["namespace"].as_str()?, r["catalogItemId"].as_str()?, r["appName"].as_str()?);
+            seen.insert(ns.to_string()).then(|| (ns.to_string(), cat.to_string(), app.to_string()))
+        })
+        .collect();
+    let token = s.access.clone();
+    let mut out: Vec<Option<Owned>> = vec![None; games.len()];
+    std::thread::scope(|sc| {
+        for (chunk, slots) in games.chunks(8).zip(out.chunks_mut(8)) {
+            let token = &token;
+            sc.spawn(move || {
+                for ((ns, cat, app), slot) in chunk.iter().zip(slots) {
+                    let meta = http::get_json(&format!("https://catalog-public-service-prod06.ol.epicgames.com/catalog/api/shared/namespace/{ns}/bulk/items?id={cat}&country=FR&locale=fr"), &[("Authorization", &format!("bearer {token}"))]);
+                    let Some(item) = meta.as_ref().and_then(|m| m[cat.as_str()].as_object()) else { continue };
+                    let title = item.get("title").and_then(|t| t.as_str()).unwrap_or(app).to_string();
+                    let images: Vec<String> = ["DieselGameBoxTall", "OfferImageTall", "Thumbnail"]
+                        .iter()
+                        .filter_map(|t| item.get("keyImages")?.as_array()?.iter().find(|k| k["type"] == *t)?["url"].as_str().map(String::from))
+                        .collect();
+                    *slot = Some(Owned { store: "Epic Games", title, key: format!("{ns}:{cat}:{app}"), images });
+                }
+            });
+        }
+    });
+    out.into_iter().flatten().collect()
 }
 
 // ---------- Steam (connexion par QR code) ----------
@@ -372,3 +397,13 @@ pub fn install_uri(o: &Owned) -> Option<String> {
     }
 }
 
+
+#[doc(hidden)]
+pub fn epic_debug() -> String {
+    let Some(s) = session("Epic Games") else { return "pas de session".into() };
+    let url = "https://library-service.live.use1a.on.epicgames.com/library/api/public/items?includeMetadata=true&platform=Windows";
+    match http::get_status(url, &[("Authorization", &format!("bearer {}", s.access))]) {
+        Some((st, j)) => format!("HTTP {st}: {}", j.to_string().chars().take(600).collect::<String>()),
+        None => "pas de réponse".into(),
+    }
+}
