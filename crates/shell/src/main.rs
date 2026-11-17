@@ -77,6 +77,8 @@ struct Shell {
     scmd_stage: Cell<u8>,
     steam_wait: Cell<bool>,
     anim_n: Cell<u32>,
+    lib_cover: RefCell<std::collections::HashMap<String, slint::Image>>,
+    lib_last: Cell<(i32, usize)>,
     sfx_on: Cell<bool>,
     fg_main: Cell<bool>,
     steam_timer: slint::Timer,
@@ -155,6 +157,8 @@ fn main() -> Result<(), slint::PlatformError> {
         scmd_stage: Cell::new(0),
         steam_wait: Cell::new(false),
         anim_n: Cell::new(0),
+        lib_cover: RefCell::new(Default::default()),
+        lib_last: Cell::new((-1, 0)),
         sfx_on: Cell::new(i18n::pref("sfx").as_deref() != Some("0")),
         fg_main: Cell::new(true),
         steam_timer: slint::Timer::default(),
@@ -962,6 +966,9 @@ impl Shell {
             }
             self.fg_main.set(wm::find_window(MAIN_TITLE).is_some_and(|h| h == wm::foreground()));
         }
+        if n % 2 == 0 {
+            self.sync_library_art();
+        }
         if i18n::anim() && self.ui.get_zone() < 3 && self.fg_main.get() {
             phase.set((phase.get() + 0.2) % 3600.0);
             self.ui.set_phase(phase.get());
@@ -1194,6 +1201,8 @@ impl Shell {
     /// Un visuel vient d'arriver : on met à jour uniquement la tuile concernée (pas de reconstruction de toute la liste).
     pub fn reload_art(&self, id: &str) {
         self.art_cache.borrow_mut().remove(id);
+        self.lib_cover.borrow_mut().remove(id);
+        self.lib_last.set((-1, 0));
         let games = self.games.borrow();
         let Some((gid, g)) = games.iter().enumerate().find(|(_, g)| g.id == id) else { return };
         for model in [&self.tiles, &self.library] {
@@ -1282,7 +1291,12 @@ impl Shell {
     }
 
     fn make_tile(&self, gid: usize, g: &Game, running: bool, pt: &std::collections::HashMap<String, playtime::Entry>) -> Tile {
-        let (cover, hero, logo) = self.art_of(g);
+        // Bibliothèque (jeux à installer) : les jaquettes sont chargées à la demande (sync_library_art), jamais toutes d'un coup.
+        let (cover, hero, logo) = if g.install {
+            (self.lib_cover.borrow().get(&g.id).cloned().unwrap_or_default(), Default::default(), Default::default())
+        } else {
+            self.art_of(g)
+        };
         Tile {
             gid: gid as i32,
             name: g.name.as_str().into(),
@@ -1327,6 +1341,7 @@ impl Shell {
         let lsel = cur_lib.and_then(|g| b.iter().position(|t| t.gid == g)).unwrap_or((self.ui.get_lsel().max(0) as usize).min(b.len().saturating_sub(1)));
         self.tiles.set_vec(a);
         self.library.set_vec(b);
+        self.lib_last.set((-1, 0));
         self.ui.set_sel(sel as i32);
         self.ui.set_lsel(lsel as i32);
     }
@@ -1412,6 +1427,40 @@ impl Shell {
         };
         if let Some(s) = s {
             system::sfx::play(s);
+        }
+    }
+}
+
+impl Shell {
+    /// Ne garde en mémoire que les jaquettes des rangées affichées de la bibliothèque (cf. app.slint : lrow-2 .. lrow+3).
+    fn sync_library_art(&self) {
+        let (lsel, n) = (self.ui.get_lsel(), self.library.row_count());
+        if self.lib_last.get() == (lsel, n) {
+            return;
+        }
+        self.lib_last.set((lsel, n));
+        let cols = 10usize;
+        let lrow = (lsel.max(0) as usize) / cols;
+        let (lo, hi) = (lrow.saturating_sub(2) * cols, (lrow + 4) * cols);
+        for r in 0..n {
+            let Some(mut t) = self.library.row_data(r) else { continue };
+            let inwin = r >= lo && r < hi;
+            let loaded = t.cover.size().width > 0;
+            if inwin && !loaded {
+                let games = self.games.borrow();
+                if let Some(g) = games.get(t.gid as usize) {
+                    let img = cover_of(g);
+                    self.lib_cover.borrow_mut().insert(g.id.clone(), img.clone());
+                    t.cover = img;
+                    self.library.set_row_data(r, t);
+                }
+            } else if !inwin && loaded {
+                if let Some(g) = self.games.borrow().get(t.gid as usize) {
+                    self.lib_cover.borrow_mut().remove(&g.id);
+                }
+                t.cover = Default::default();
+                self.library.set_row_data(r, t);
+            }
         }
     }
 }
