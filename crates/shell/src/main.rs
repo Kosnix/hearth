@@ -76,6 +76,9 @@ struct Shell {
     rename_id: RefCell<Option<String>>,
     scmd_stage: Cell<u8>,
     steam_wait: Cell<bool>,
+    anim_n: Cell<u32>,
+    sfx_on: Cell<bool>,
+    fg_main: Cell<bool>,
     steam_timer: slint::Timer,
     steam_until: Cell<Option<std::time::Instant>>,
     scmd_user_tmp: RefCell<String>,
@@ -151,6 +154,9 @@ fn main() -> Result<(), slint::PlatformError> {
         rename_id: RefCell::new(None),
         scmd_stage: Cell::new(0),
         steam_wait: Cell::new(false),
+        anim_n: Cell::new(0),
+        sfx_on: Cell::new(i18n::pref("sfx").as_deref() != Some("0")),
+        fg_main: Cell::new(true),
         steam_timer: slint::Timer::default(),
         steam_until: Cell::new(None),
         scmd_user_tmp: RefCell::new(String::new()),
@@ -234,6 +240,8 @@ fn main() -> Result<(), slint::PlatformError> {
     let s = shell.clone();
     shell.ui.on_game_menu(move |i| s.game_menu(i as usize));
     let s = shell.clone();
+    shell.ui.on_nav_key(move |a| s.nav_with_sound(a));
+    let s = shell.clone();
     shell.ui.on_add_menu(move || s.add_menu());
     let s = shell.clone();
     shell.ui.on_menu_pick(move |i| s.menu_pick(i as usize));
@@ -291,7 +299,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let s = shell.clone();
     let phase = Cell::new(0.0f32);
     let anim = slint::Timer::default();
-    anim.start(slint::TimerMode::Repeated, Duration::from_millis(160), move || s.animate(&phase));
+    anim.start(slint::TimerMode::Repeated, Duration::from_millis(40), move || s.animate(&phase));
 
     // Le menu guide est créé une fois puis affiché/masqué en Win32, sans jamais prendre le focus
     // (un jeu plein écran qui perd le focus se réduit et clignote).
@@ -399,7 +407,7 @@ impl Shell {
             // La manette est lue même en arrière-plan : n'agir que si la console est visible
             // au premier plan, sinon on navigue à l'aveugle (jusqu'à « Veille »…).
             if wm::find_window(MAIN_TITLE).is_some_and(|h| h == wm::foreground()) {
-                self.ui.invoke_nav(nav as i32);
+                self.nav_with_sound(nav as i32);
             }
             return;
         }
@@ -814,6 +822,9 @@ impl Shell {
         if self.notes.row_count() > MAX_NOTES {
             self.notes.remove(MAX_NOTES);
         }
+        if self.sfx_on.get() && self.fg_main.get() {
+            system::sfx::play(system::sfx::Sfx::Notify);
+        }
         if !i18n::toasts() {
             return;
         }
@@ -933,20 +944,26 @@ impl Shell {
 
     /// Fond animé (arrêté quand la console n'est pas devant : économise le CPU en jeu) et pictogrammes.
     fn animate(&self, phase: &Cell<f32>) {
-        if self.ui.get_tab() == 2 && !self.catalog_started.get() {
-            self.load_catalog(None);
+        // Tick à 25 Hz pour un mouvement fluide ; les vérifications coûteuses (fenêtres, manette) une fois sur cinq.
+        let n = self.anim_n.get().wrapping_add(1);
+        self.anim_n.set(n);
+        if n % 5 == 0 {
+            if self.ui.get_tab() == 2 && !self.catalog_started.get() {
+                self.load_catalog(None);
+            }
+            let pad = match std::env::var("HEARTH_PAD").as_deref() {
+                Ok("ps") => 1,
+                Ok("xbox") => 0,
+                _ => input::last_pad() as i32,
+            };
+            if self.ui.global::<Pad>().get_kind() != pad {
+                self.ui.global::<Pad>().set_kind(pad);
+                self.guide.global::<Pad>().set_kind(pad);
+            }
+            self.fg_main.set(wm::find_window(MAIN_TITLE).is_some_and(|h| h == wm::foreground()));
         }
-        let pad = match std::env::var("HEARTH_PAD").as_deref() {
-            Ok("ps") => 1,
-            Ok("xbox") => 0,
-            _ => input::last_pad() as i32,
-        };
-        if self.ui.global::<Pad>().get_kind() != pad {
-            self.ui.global::<Pad>().set_kind(pad);
-            self.guide.global::<Pad>().set_kind(pad);
-        }
-        if i18n::anim() && self.ui.get_zone() < 3 && wm::find_window(MAIN_TITLE).is_some_and(|h| h == wm::foreground()) {
-            phase.set((phase.get() + 0.8) % 3600.0);
+        if i18n::anim() && self.ui.get_zone() < 3 && self.fg_main.get() {
+            phase.set((phase.get() + 0.2) % 3600.0);
             self.ui.set_phase(phase.get());
         }
     }
@@ -1174,10 +1191,19 @@ impl Shell {
         });
     }
 
-    /// Un visuel vient d'arriver : on oublie le cache de ce jeu et on reconstruit (regroupé).
+    /// Un visuel vient d'arriver : on met à jour uniquement la tuile concernée (pas de reconstruction de toute la liste).
     pub fn reload_art(&self, id: &str) {
         self.art_cache.borrow_mut().remove(id);
-        self.rebuild_soon();
+        let games = self.games.borrow();
+        let Some((gid, g)) = games.iter().enumerate().find(|(_, g)| g.id == id) else { return };
+        for model in [&self.tiles, &self.library] {
+            if let Some(row) = (0..model.row_count()).find(|&r| model.row_data(r).is_some_and(|t| t.gid == gid as i32)) {
+                let old = model.row_data(row).unwrap_or_default();
+                let mut t = self.make_tile(gid, g, old.running, &Default::default());
+                t.sub = old.sub;
+                model.set_row_data(row, t);
+            }
+        }
     }
 
     pub fn rebuild_soon(&self) {
@@ -1342,6 +1368,50 @@ impl Shell {
         if now != cur {
             self.reload_games(inst);
             self.start_art();
+        }
+    }
+}
+
+impl Shell {
+    fn ui_state(&self) -> [i32; 18] {
+        let u = &self.ui;
+        [
+            u.get_zone(), u.get_tab(), u.get_top(), u.get_sel(), u.get_lsel(), u.get_osel(), u.get_psel(), u.get_msel(), u.get_nsel(),
+            u.get_dsel(), u.get_dlsel(), u.get_srow(), u.get_cat(), u.get_brow(), u.get_kbx(), u.get_kby(), u.get_pw(), u.get_sfocus(),
+        ]
+    }
+
+    /// Navigation (manette ou clavier) avec son : déplacement, validation, retour, ouverture d'un menu.
+    fn nav_with_sound(&self, a: i32) {
+        let before = self.ui_state();
+        self.ui.invoke_nav(a);
+        if !self.sfx_on.get() || a == 6 {
+            return;
+        }
+        let after = self.ui_state();
+        use system::sfx::Sfx;
+        let s = if after[0] != before[0] {
+            if a == 5 {
+                Some(Sfx::Back)
+            } else if matches!(after[0], 2 | 3 | 7 | 8 | 9 | 10) || a == 7 {
+                Some(Sfx::Open)
+            } else {
+                Some(Sfx::Select)
+            }
+        } else if after != before {
+            match a {
+                0..=3 => Some(Sfx::Move),
+                4 => Some(Sfx::Select),
+                5 => Some(Sfx::Back),
+                _ => None,
+            }
+        } else if a == 4 {
+            Some(Sfx::Select)
+        } else {
+            None
+        };
+        if let Some(s) = s {
+            system::sfx::play(s);
         }
     }
 }

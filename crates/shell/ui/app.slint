@@ -376,6 +376,7 @@ export component App inherits Window {
     in-out property <int> sfocus: 0; // 0 catégories, 1 lignes
     property <int> cols: 10;
     callback launch(int); // identifiant interne du jeu
+    callback nav-key(int); // touche du clavier physique (le shell joue les sons puis appelle nav)
     callback game-menu(int);
     callback add-menu();
     callback power(int); // 0 veille, 1 redémarrer, 2 éteindre
@@ -508,7 +509,7 @@ export component App inherits Window {
 
     keys := NavKeys {
         typing: zone == 4;
-        nav(a) => { root.nav(a); }
+        nav(a) => { root.nav-key(a); }
         typed(t) => { root.kb-char(t); }
     }
 
@@ -723,23 +724,30 @@ export component App inherits Window {
         width: parent.width;
         height: 960px;
         clip: true;
-        for t[i] in library: GameTile {
+        for t[i] in library: Rectangle {
+            property <int> trow: floor(i / cols);
+            property <int> lrow: floor(lsel / cols);
             x: 80px + mod(i, cols) * 236px;
-            y: 20px + floor(i / cols) * 330px - max(0, floor(lsel / cols) - 1) * 330px;
+            y: 20px + trow * 330px - max(0, lrow - 1) * 330px;
             width: 200px;
             height: 300px;
-            compact: true;
             animate y { duration: 150ms; easing: ease-out; }
-            tile: t;
-            selected: zone == 0 && i == lsel;
-            clicked => {
-                root.lsel = i;
-                root.zone = 0;
-                root.launch(t.gid);
+            // Seules les rangées proches de la sélection existent : pas de centaines de jaquettes en mémoire.
+            if trow >= lrow - 2 && trow <= lrow + 3: GameTile {
+                width: parent.width;
+                height: parent.height;
+                compact: true;
+                tile: t;
+                selected: zone == 0 && i == lsel;
+                clicked => {
+                    root.lsel = i;
+                    root.zone = 0;
+                    root.launch(t.gid);
+                }
+                options => { root.lsel = i; root.game-menu(t.gid); }
+                hovered => { if (root.zone == 0) { root.lsel = i; } }
+                wheel(d) => { root.nav(d > 0 ? 1 : 0); }
             }
-            options => { root.lsel = i; root.game-menu(t.gid); }
-            hovered => { if (root.zone == 0) { root.lsel = i; } }
-            wheel(d) => { root.nav(d > 0 ? 1 : 0); }
         }
     }
 
