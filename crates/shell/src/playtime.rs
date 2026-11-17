@@ -19,7 +19,7 @@ fn file() -> PathBuf {
 }
 
 pub fn load() -> HashMap<String, Entry> {
-    std::fs::read_to_string(file()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    std::fs::read_to_string(file()).ok().and_then(|s| serde_json::from_str(s.trim_start_matches('\u{feff}')).ok()).unwrap_or_default()
 }
 
 fn now() -> u64 {
