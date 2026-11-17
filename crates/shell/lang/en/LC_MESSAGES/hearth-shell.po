@@ -439,3 +439,23 @@ msgstr "Updates and downloads of games installed by Hearth"
 msgctxt "App"
 msgid "Aucun téléchargement en cours. Les installations depuis la Bibliothèque et les mises à jour apparaîtront ici."
 msgstr "No downloads in progress. Installs from the Library and updates will show up here."
+
+msgctxt "App"
+msgid "Connecter"
+msgstr "Connect"
+
+msgctxt "App"
+msgid "Profils"
+msgstr "Profiles"
+
+msgctxt "App"
+msgid "Chaque profil a ses comptes de boutiques, sa liste de jeux et son temps de jeu"
+msgstr "Each profile has its own store accounts, game list and play time"
+
+msgctxt "App"
+msgid "Profil actif"
+msgstr "Active profile"
+
+msgctxt "App"
+msgid "Choisissez un avatar"
+msgstr "Choose an avatar"

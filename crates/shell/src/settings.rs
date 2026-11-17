@@ -59,7 +59,6 @@ pub fn fetch(cat: i32) -> Fetched {
         12 => {
             let mut accounts: Vec<(String, bool, Option<String>)> = stores::all().iter().map(|s| (s.name().to_string(), s.detected(), stores::account::session(s.name()).map(|a| a.name))).collect();
             accounts.push(("@admin".into(), system::admin::enabled(), None));
-            accounts.push(("@steamcmd".into(), true, crate::i18n::pref("steamcmd_user")));
             Fetched { accounts, ..Default::default() }
         }
         _ => Fetched::default(),
@@ -304,7 +303,11 @@ impl Settings {
                 row("Mise en veille après", minutes(s.data.sleep_min), true),
                 row("Extinction de l'écran après", minutes(s.data.screen_min), true),
             ],
-            10 => vec![row("Afficher les bannières", onoff(Some(i18n::toasts())), false)],
+            10 => vec![
+                row("Afficher les bannières", onoff(Some(i18n::toasts())), false),
+                row("Effets sonores", onoff(Some(i18n::sfx())), false),
+                row("Musique d'ambiance", onoff(Some(i18n::music())), false),
+            ],
             12 if s.loading => vec![row("Lecture…", String::new(), false)],
             12 => {
                 if hint.is_empty() {
@@ -428,6 +431,8 @@ impl Settings {
                 s.data.screen_min = system::power::timeout(false).or(Some(m));
             }
             (10, 0, 0) => i18n::set_toasts(!i18n::toasts()),
+            (10, 1, 0) => i18n::set_sfx(!i18n::sfx()),
+            (10, 2, 0) => i18n::set_music(!i18n::music()),
             (12, r, 0) if !s.loading => {
                 out = match account_rows(&s.data.accounts).into_iter().nth(r as usize).map(|(_, _, a)| a) {
                     Some(Act::Install(n)) => Outcome::InstallClient(n),
@@ -580,20 +585,12 @@ enum Act {
 fn account_rows(accounts: &[(String, bool, Option<String>)]) -> Vec<(String, String, Act)> {
     let mut v = vec![];
     for (name, detected, session) in accounts {
-        if name == "@steamcmd" {
-            let value = match session {
-                Some(u) => format!("{} · {u}", tr("Connecté")),
-                None => tr("Se connecter"),
-            };
-            v.push((tr("Steam : installer sans le client"), value, Act::SteamCmd));
-            continue;
-        }
         if name == "@admin" {
             let value = if *detected { tr("Activée") } else { tr("Activer (une seule fois)") };
             v.push((tr("Autorisation administrateur"), value, if *detected { Act::None } else { Act::Admin }));
             continue;
         }
-        if name == "GOG" {
+        if name == "GOG" || name == "Rockstar Games" {
             let value = if *detected { tr("Bibliothèque locale") } else { tr("Client non installé") };
             v.push((name.clone(), value, Act::None));
         } else if let Some(user) = session {
@@ -601,7 +598,7 @@ fn account_rows(accounts: &[(String, bool, Option<String>)]) -> Vec<(String, Str
         } else {
             v.push((name.clone(), tr("Se connecter"), Act::Login(name.clone())));
         }
-        if !*detected {
+        if !*detected && name != "Rockstar Games" {
             v.push((format!("{} {name}", tr("Installer le client")), tr("Automatique (winget)"), Act::Install(name.clone())));
         }
     }

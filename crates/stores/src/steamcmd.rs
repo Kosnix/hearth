@@ -328,7 +328,7 @@ pub fn uninstall(appid: &str) -> bool {
 }
 
 /// Exécutable principal d'un dossier de jeu : le plus gros .exe qui n'est pas un installeur ou un utilitaire.
-pub fn main_exe(root: &Path) -> Option<PathBuf> {
+fn main_exe_scan(root: &Path) -> Option<PathBuf> {
     fn walk(d: &Path, depth: u32, best: &mut Option<(u64, PathBuf)>) {
         let Ok(rd) = std::fs::read_dir(d) else { return };
         for e in rd.flatten() {
@@ -349,4 +349,20 @@ pub fn main_exe(root: &Path) -> Option<PathBuf> {
     let mut best = None;
     walk(root, 0, &mut best);
     best.map(|(_, p)| p)
+}
+
+/// Exécutable principal d'un dossier de jeu (résultat mis en cache : le parcours du dossier est coûteux).
+pub fn main_exe(root: &Path) -> Option<PathBuf> {
+    static CACHE: std::sync::OnceLock<Mutex<HashMap<PathBuf, Option<PathBuf>>>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(Some(p)) = cache.lock().ok().and_then(|c| c.get(root).cloned()) {
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    let r = main_exe_scan(root);
+    if let Ok(mut c) = cache.lock() {
+        c.insert(root.to_path_buf(), r.clone());
+    }
+    r
 }

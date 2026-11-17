@@ -4,6 +4,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+use slint::Model;
 use stores::account::{self, Owned, Poll};
 
 use crate::i18n::tr;
@@ -141,6 +142,11 @@ impl Shell {
         if self.ui.get_zone() == 3 && self.ui.get_cat() == 12 {
             self.open_cat(12);
         }
+        if store == "Steam" && self.scmd_user().is_none() {
+            // Étape 2 : identifiants de téléchargement (SteamCMD), une seule fois, dans la foulée.
+            self.push_notif("Steam", &tr("Étape 2 : identifiant Steam pour télécharger les jeux"));
+            self.scmd_begin(None);
+        }
         if store == "Epic Games" {
             self.epic_prepare();
         }
@@ -149,6 +155,9 @@ impl Shell {
 
     pub fn logout(&self, store: &str) {
         account::logout(store);
+        if store == "Steam" {
+            crate::i18n::set_pref(&crate::scmd::user_key(), "");
+        }
         if store == "Epic Games" {
             std::thread::spawn(stores::epiccmd::logout);
         }
@@ -158,12 +167,10 @@ impl Shell {
 
     /// Jeux possédés des boutiques connectées : onglet Bibliothèque (badge « À installer »).
     pub fn refresh_owned(&self) {
-        let connected: Vec<&'static str> = ["Steam", "Epic Games"].into_iter().filter(|s| account::session(s).is_some()).collect();
-        if connected.is_empty() {
-            self.owned_ready(vec![]);
-            return;
-        }
-        std::thread::spawn(move || {
+        self.refresh_onboard();
+        // Sessions, bibliothèques distantes et lecture des jeux installés : tout hors du thread de l'interface.
+        std::thread::spawn(|| {
+            let connected: Vec<&'static str> = ["Steam", "Epic Games"].into_iter().filter(|s| account::session(s).is_some()).collect();
             let mut items: Vec<(Owned, String)> = vec![];
             for store in connected {
                 for o in account::library(store).into_iter().take(300) {
@@ -172,13 +179,14 @@ impl Shell {
                     items.push((o, id));
                 }
             }
-            let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.owned_ready(items)));
+            let installed = stores::installed();
+            let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.owned_ready(items, installed)));
         });
     }
 
-    fn owned_ready(&self, items: Vec<(Owned, String)>) {
+    fn owned_ready(&self, items: Vec<(Owned, String)>, installed: Vec<stores::Game>) {
         *self.owned.borrow_mut() = items;
-        self.reload_games(stores::installed());
+        self.reload_games(installed);
         self.start_art();
     }
 
@@ -223,5 +231,22 @@ impl Shell {
             let _ = Command::new("cmd").args(["/c", "start", "", uri]).spawn();
             self.push_notif(&tr("Installation"), &format!("{} ({}) : {}", g.name, g.store, tr("à valider dans la fenêtre du client")));
         }
+    }
+}
+
+impl Shell {
+    /// Boutiques sans compte connecté (affichées comme invitations dans l'onglet Boutique).
+    pub fn refresh_onboard(&self) {
+        let missing: Vec<slint::SharedString> = ["Steam", "Epic Games"].into_iter().filter(|s| account::session(s).is_none()).map(Into::into).collect();
+        self.ui.set_onboard(std::rc::Rc::new(slint::VecModel::from(missing)).into());
+        if self.ui.get_obsel() as usize >= self.ui.get_onboard().row_count() {
+            self.ui.set_obsel(0);
+        }
+    }
+
+    pub fn onboard_pick(&self, i: usize) {
+        let Some(store) = self.ui.get_onboard().row_data(i) else { return };
+        self.ui.set_qr_return(0);
+        self.begin_login(store.to_string());
     }
 }

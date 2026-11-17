@@ -14,7 +14,7 @@ pub struct Override {
 }
 
 fn file() -> PathBuf {
-    PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("Hearth").join("overrides.json")
+    stores::profile_dir().join("overrides.json")
 }
 
 pub fn load() -> HashMap<String, Override> {

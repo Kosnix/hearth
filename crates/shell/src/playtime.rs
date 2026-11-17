@@ -15,7 +15,7 @@ pub struct Entry {
 }
 
 fn file() -> PathBuf {
-    PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("Hearth").join("playtime.json")
+    stores::profile_dir().join("playtime.json")
 }
 
 pub fn load() -> HashMap<String, Entry> {

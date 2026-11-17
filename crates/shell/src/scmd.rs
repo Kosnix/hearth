@@ -45,7 +45,7 @@ pub enum RowAct {
 
 impl Shell {
     pub fn scmd_user(&self) -> Option<String> {
-        i18n::pref("steamcmd_user")
+        i18n::pref(&user_key())
     }
 
     /// Le jeu a-t-il été installé par SteamCMD ?
@@ -120,7 +120,7 @@ impl Shell {
     fn scmd_login_done(&self, user: String, r: Login, proc: Option<Pending>) {
         match r {
             Login::Ok => {
-                i18n::set_pref("steamcmd_user", &user);
+                i18n::set_pref(&user_key(), &user);
                 self.push_notif("Steam", &format!("{} {user}", tr("Connecté à Steam :")));
                 if self.ui.get_zone() == 3 && self.ui.get_cat() == 12 {
                     self.open_cat(12);
@@ -518,5 +518,13 @@ impl Shell {
                 self.steam_timer.stop();
             }
         }
+    }
+}
+
+/// Clé de l'identifiant SteamCMD dans settings.json : une par profil.
+pub fn user_key() -> String {
+    match std::env::var("HEARTH_PROFILE_ID").ok().filter(|p| p != "default" && !p.is_empty()) {
+        Some(p) => format!("steamcmd_user_{p}"),
+        None => "steamcmd_user".into(),
     }
 }

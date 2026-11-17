@@ -7,6 +7,7 @@ pub mod epiccmd;
 mod gog;
 mod http;
 mod reg;
+mod rockstar;
 mod steam;
 pub mod steamcmd;
 
@@ -96,7 +97,7 @@ pub trait Store: Send + Sync {
 }
 
 pub fn all() -> Vec<Box<dyn Store>> {
-    vec![Box::new(steam::Steam), Box::new(epic::Epic), Box::new(gog::Gog)]
+    vec![Box::new(steam::Steam), Box::new(epic::Epic), Box::new(gog::Gog), Box::new(rockstar::Rockstar)]
 }
 
 /// Tous les jeux installés, toutes boutiques confondues.
@@ -203,3 +204,22 @@ pub fn download(url: &str) -> Option<Vec<u8>> {
 
 pub use steam::{client_start as steam_client_start, client_user as steam_client_user};
 pub use steam::disable_overlay as steam_disable_overlay;
+
+/// Visuels d'un jeu sans visuel connu (ajouté à la main, Rockstar…) : recherche par titre sur Steam.
+pub fn resolve_art(title: &str) -> Option<Art> {
+    let offers = steam::Steam.search(title);
+    let n = norm(title);
+    let pick = offers.iter().find(|o| norm(&o.title) == n).or_else(|| offers.iter().find(|o| norm(&o.title).starts_with(&n) || n.starts_with(&norm(&o.title))))?;
+    let id = pick.url.trim_end_matches('/').rsplit('/').next()?.to_string();
+    Some(steam::art(&id))
+}
+
+/// Dossier de données de Hearth (`%LOCALAPPDATA%\Hearth`).
+pub fn base_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("Hearth")
+}
+
+/// Dossier du profil actif (comptes, liste de jeux, temps de jeu, personnalisations) ; `HEARTH_PROFILE_DIR` est fixé au démarrage.
+pub fn profile_dir() -> std::path::PathBuf {
+    std::env::var_os("HEARTH_PROFILE_DIR").map(std::path::PathBuf::from).unwrap_or_else(base_dir)
+}

@@ -16,7 +16,11 @@ pub fn dir() -> PathBuf {
 }
 
 pub fn config() -> PathBuf {
-    dir().join("config")
+    // Une session Legendary par profil (le profil « default » garde l'ancien dossier).
+    match std::env::var("HEARTH_PROFILE_ID").ok().filter(|p| p != "default" && !p.is_empty()) {
+        Some(p) => dir().join(format!("config-{p}")),
+        None => dir().join("config"),
+    }
 }
 
 pub fn exe() -> PathBuf {

@@ -48,7 +48,7 @@ pub struct Owned {
 // ---------- Stockage chiffré ----------
 
 fn file() -> PathBuf {
-    PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("Hearth").join("accounts.dat")
+    crate::profile_dir().join("accounts.dat")
 }
 
 mod dpapi {

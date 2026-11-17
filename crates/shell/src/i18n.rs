@@ -159,6 +159,17 @@ const EN: &[(&str, &str)] = &[
     ("Mise à jour disponible", "Update available"),
     ("Terminé", "Done"),
     ("Mo/s", "MB/s"),
+    ("Nouveau profil", "New profile"),
+    ("Nom du profil", "Profile name"),
+    ("Profils", "Profiles"),
+    ("Profil créé", "Profile created"),
+    ("Profil supprimé", "Profile deleted"),
+    ("Ce profil ne peut pas être supprimé", "This profile cannot be deleted"),
+    ("Supprimer le profil", "Delete profile"),
+    ("Supprimer", "Delete"),
+    ("Effets sonores", "Sound effects"),
+    ("Musique d'ambiance", "Ambient music"),
+    ("Étape 2 : identifiant Steam pour télécharger les jeux", "Step 2: Steam username to download games"),
     ("Préparation de Steam…", "Preparing Steam…"),
     ("Démarrage de Steam…", "Starting Steam…"),
     ("Connectez-vous dans la fenêtre Steam (une seule fois), puis relancez le jeu", "Sign in in the Steam window (one time only), then launch the game again"),
@@ -274,4 +285,31 @@ pub fn set_pref(key: &str, value: &str) {
     let mut v: serde_json::Value = std::fs::read_to_string(file()).ok().and_then(|s| serde_json::from_str(s.trim_start_matches('\u{feff}')).ok()).unwrap_or_else(|| serde_json::json!({}));
     v[key] = value.into();
     let _ = std::fs::write(file(), v.to_string());
+}
+
+static SFX: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+static MUSIC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub fn sfx() -> bool {
+    SFX.load(Ordering::Relaxed)
+}
+
+pub fn music() -> bool {
+    MUSIC.load(Ordering::Relaxed)
+}
+
+pub fn set_sfx(on: bool) {
+    SFX.store(on, Ordering::Relaxed);
+    set_pref("sfx", if on { "1" } else { "0" });
+}
+
+pub fn set_music(on: bool) {
+    MUSIC.store(on, Ordering::Relaxed);
+    set_pref("music", if on { "1" } else { "0" });
+}
+
+/// Lit les préférences sonores au démarrage.
+pub fn init_audio_prefs() {
+    SFX.store(pref("sfx").as_deref() != Some("0"), Ordering::Relaxed);
+    MUSIC.store(pref("music").as_deref() != Some("0"), Ordering::Relaxed);
 }

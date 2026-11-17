@@ -14,6 +14,13 @@ export struct Tile {
     sub: string,
 }
 
+export struct ProfileRow {
+    name: string,
+    avatar: int,
+    active: bool,
+    add: bool,
+}
+
 export struct DlRow {
     name: string,
     status: string,
@@ -54,15 +61,15 @@ export struct Offer {
 }
 
 export global Theme {
-    out property <brush> bg: @linear-gradient(180deg, #3d5a99 0%, #2a2166 100%);
-    out property <brush> bg-settings: @linear-gradient(180deg, #34508f 0%, #231b5a 100%);
-    out property <brush> bg-guide: @linear-gradient(180deg, #2c3b84 0%, #1c1650 100%);
-    out property <color> panel: #1b2142ee;
-    out property <color> glass: #ffffff1f;
-    out property <color> tile: #2b3566;
-    out property <color> accent: #3d7bff;
+    out property <brush> bg: @linear-gradient(180deg, #0e0e14 0%, #050507 100%);
+    out property <brush> bg-settings: @linear-gradient(180deg, #101017 0%, #050507 100%);
+    out property <brush> bg-guide: @linear-gradient(180deg, #12121a 0%, #060608 100%);
+    out property <color> panel: #15151cee;
+    out property <color> glass: #ffffff1a;
+    out property <color> tile: #1d1d26;
+    out property <color> accent: #e5484d;
     out property <color> text: #ffffff;
-    out property <color> dim: #c3cae6;
+    out property <color> dim: #b6b6c2;
     out property <string> icons: "Segoe MDL2 Assets";
 }
 
@@ -81,7 +88,7 @@ component PadGlyph inherits Rectangle {
     // Disque : sombre à anneau coloré (PlayStation) ou plein coloré avec reflet (Xbox A/B).
     Rectangle {
         border-radius: 24px;
-        background: ps ? @linear-gradient(180deg, #2a2f55 0%, #12152e 100%) : (btn <= 1 ? @linear-gradient(180deg, tint.brighter(0.35) 0%, tint.darker(0.25) 100%) : @linear-gradient(180deg, #3a3f6a 0%, #1a1d3a 100%));
+        background: ps ? @linear-gradient(180deg, #2a2a33 0%, #101014 100%) : (btn <= 1 ? @linear-gradient(180deg, tint.brighter(0.35) 0%, tint.darker(0.25) 100%) : @linear-gradient(180deg, #34343f 0%, #16161c 100%));
         border-width: ps ? 3px : (btn <= 1 ? 0px : 2px);
         border-color: tint;
     }
@@ -152,6 +159,55 @@ component Hint inherits Rectangle {
         font-size: 24px;
         y: (parent.height - self.height) / 2;
         color: Theme.dim;
+    }
+}
+
+// Avatar généré : dégradé de couleur + emblème (6 teintes x 4 emblèmes = 24 avatars).
+component Avatar inherits Rectangle {
+    in property <int> kind;
+    in property <length> size: 72px;
+    width: size;
+    height: size;
+    border-radius: size / 2;
+    clip: true;
+    property <color> c: [#e5484d, #f5a524, #2dc98a, #3aa0ff, #9b6bff, #ff5fa2][mod(kind, 6)];
+    background: @linear-gradient(160deg, c.brighter(0.3) 0%, c.darker(0.6) 100%);
+    Path {
+        width: parent.width * 0.6;
+        height: parent.height * 0.6;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        commands: ["M 18 80 L 50 22 L 82 80 Z", "M 50 12 L 61 40 L 90 42 L 67 60 L 75 88 L 50 72 L 25 88 L 33 60 L 10 42 L 39 40 Z", "M 62 14 A 38 38 0 1 0 88 62 A 30 30 0 1 1 62 14 Z", "M 50 10 L 84 30 L 84 70 L 50 90 L 16 70 L 16 30 Z"][floor(kind / 6)];
+        fill: #ffffffe8;
+    }
+}
+
+// Deux calques d'image en fondu croisé : un changement de source n'apparaît jamais d'un coup.
+component HeroFade inherits Rectangle {
+    in property <image> source;
+    property <image> a;
+    property <image> b;
+    property <bool> show-a: true;
+    init => { a = source; }
+    changed source => {
+        if (show-a) { b = source; show-a = false; }
+        else { a = source; show-a = true; }
+    }
+    Image {
+        width: parent.width;
+        height: parent.height;
+        source: a;
+        image-fit: cover;
+        opacity: show-a ? 1 : 0;
+        animate opacity { duration: 500ms; easing: ease-in-out; }
+    }
+    Image {
+        width: parent.width;
+        height: parent.height;
+        source: b;
+        image-fit: cover;
+        opacity: show-a ? 0 : 1;
+        animate opacity { duration: 500ms; easing: ease-in-out; }
     }
 }
 
@@ -324,6 +380,9 @@ export component App inherits Window {
     in-out property <int> nsel: 0;
     in property <string> offers-state; // "", "loading", "empty"
     in property <string> offers-title;
+    in property <[string]> onboard; // boutiques sans compte connecté
+    in-out property <int> obsel: 0;
+    callback onboard-pick(int);
     in property <image> qr;
     in property <string> qr-title;
     in property <string> qr-url;
@@ -347,6 +406,14 @@ export component App inherits Window {
     in property <[Deal]> deals;
     in property <[DlRow]> dl-rows;
     in property <int> dl-badge;
+    in property <[ProfileRow]> profiles;
+    in property <int> user-avatar: 3;
+    in-out property <int> pfsel: 0;
+    in-out property <int> avsel: 0;
+    callback profile-open();
+    callback profile-pick(int);
+    callback profile-menu(int);
+    callback avatar-pick(int);
     in-out property <int> dlsel: 0;
     callback dl-pick(int);
     callback dl-open();
@@ -399,7 +466,7 @@ export component App inherits Window {
 
     title: "Hearth";
     no-frame: true;
-    background: #2a2166;
+    background: #060608;
     preferred-width: 1280px;
     preferred-height: 720px;
     forward-focus: keys;
@@ -408,6 +475,19 @@ export component App inherits Window {
     public function nav(a: int) {
         if (a == 6) {
             zone = 0;
+        } else if (zone == 12) {
+            if (a == 0) { avsel = max(0, avsel - 6); }
+            else if (a == 1) { avsel = min(23, avsel + 6); }
+            else if (a == 2) { avsel = max(0, avsel - 1); }
+            else if (a == 3) { avsel = min(23, avsel + 1); }
+            else if (a == 4) { avatar-pick(avsel); }
+            else if (a == 5) { zone = 11; }
+        } else if (zone == 11) {
+            if (a == 0) { pfsel = max(0, pfsel - 1); }
+            else if (a == 1) { pfsel = max(0, min(profiles.length - 1, pfsel + 1)); }
+            else if (a == 4) { profile-pick(pfsel); }
+            else if (a == 7) { profile-menu(pfsel); }
+            else if (a == 5) { zone = 1; }
         } else if (zone == 10) {
             if (a == 0) { dlsel = max(0, dlsel - 1); }
             else if (a == 1) { dlsel = max(0, min(dl-rows.length - 1, dlsel + 1)); }
@@ -467,7 +547,7 @@ export component App inherits Window {
             else if (a == 4) { power(pw); }
         } else if (zone == 1) {
             if (a == 2) { top = max(0, top - 1); if (top <= 2) { tab = top; } }
-            else if (a == 3) { top = min(7, top + 1); if (top <= 2) { tab = top; } }
+            else if (a == 3) { top = min(8, top + 1); if (top <= 2) { tab = top; } }
             else if (a == 1 || a == 5) { zone = 0; }
             else if (a == 4 && top <= 2) { zone = 0; }
             else if (a == 4 && top == 3) { add-menu(); }
@@ -475,6 +555,7 @@ export component App inherits Window {
             else if (a == 4 && top == 5) { nsel = 0; notifs-opened(); zone = 8; }
             else if (a == 4 && top == 6) { sfocus = 0; srow = 0; zone = 3; open-cat(cat); }
             else if (a == 4 && top == 7) { pw = 0; zone = 2; }
+            else if (a == 4 && top == 8) { pfsel = 0; profile-open(); zone = 11; }
         } else {
             if (a == 7) {
                 if (tab == 0 && games.length > 0) { game-menu(games[sel].gid); }
@@ -493,12 +574,18 @@ export component App inherits Window {
                 else if (a == 3) { lsel = max(0, min(library.length - 1, lsel + 1)); }
                 else if (a == 4 && library.length > 0) { launch(library[lsel].gid); }
             } else {
-                if (a == 5 && brow == 1) { brow = 0; }
-                else if (a == 0 && brow == 1) { brow = 0; }
+                if (a == 5 && brow >= 1) { brow = 0; }
+                else if (a == 0 && brow >= 1) { brow = 0; }
                 else if (a == 0 || a == 5) { top = tab; zone = 1; }
                 else if (brow == 0) {
                     if (a == 4) { search-open(); }
+                    else if (a == 3 && onboard.length > 0) { brow = 2; }
                     else if (a == 1 && offers.length > 0) { brow = 1; }
+                } else if (brow == 2) {
+                    if (a == 2) { if (obsel == 0) { brow = 0; } else { obsel = obsel - 1; } }
+                    else if (a == 3) { obsel = max(0, min(onboard.length - 1, obsel + 1)); }
+                    else if (a == 1 && offers.length > 0) { brow = 1; }
+                    else if (a == 4) { onboard-pick(obsel); }
                 } else {
                     if (a == 2) { osel = max(0, osel - 1); }
                     else if (a == 3) { osel = max(0, min(offers.length - 1, osel + 1)); }
@@ -531,38 +618,38 @@ export component App inherits Window {
         width: 420px;
         height: 420px;
         border-radius: 210px;
-        background: @radial-gradient(circle, #8aa6ff30 0%, #8aa6ff00 70%);
+        background: @radial-gradient(circle, #ffffff14 0%, #ffffff00 70%);
     }
 
     // --- Accueil (onglet Jeux) : héros plein cadre fondu dans le fond, titre, bouton, rangée de jaquettes ---
-    if tab == 0 && games.length > 0 && games[sel].hero.width >= 1400: Image {
+    // Le héros change en fondu (jamais de coupure franche) ; sans visuel large il s'efface vers le fond noir.
+    if tab == 0 && games.length > 0: HeroFade {
         x: 0px;
         y: 0px;
         width: parent.width;
         height: 860px;
-        source: games[sel].hero;
-        image-fit: cover;
+        source: games[sel].hero.width >= 1400 ? games[sel].hero : @image-url("");
     }
-    if tab == 0 && games.length > 0 && games[sel].hero.width >= 1400: Rectangle {
+    if tab == 0 && games.length > 0: Rectangle {
         x: 0px;
         y: 400px;
         width: parent.width;
         height: 460px;
-        background: @linear-gradient(180deg, #31387a00 0%, #31387a 100%);
+        background: @linear-gradient(180deg, #08080b00 0%, #08080b 100%);
     }
-    if tab == 0 && games.length > 0 && games[sel].hero.width >= 1400: Rectangle {
+    if tab == 0 && games.length > 0: Rectangle {
         x: 0px;
         y: 0px;
         width: 1500px;
         height: 860px;
-        background: @linear-gradient(90deg, #232a6af0 0%, #232a6a00 100%);
+        background: @linear-gradient(90deg, #050507f0 0%, #05050700 100%);
     }
-    if tab == 0 && games.length > 0 && games[sel].hero.width >= 1400: Rectangle {
+    if tab == 0 && games.length > 0: Rectangle {
         x: 0px;
         y: 0px;
         width: parent.width;
         height: 220px;
-        background: @linear-gradient(180deg, #101438cc 0%, #10143800 100%);
+        background: @linear-gradient(180deg, #000000cc 0%, #00000000 100%);
     }
     // Pas de héros : halo teinté, grande jaquette à droite (ou initiale géante).
     if tab == 0 && games.length > 0 && games[sel].hero.width < 1400: Rectangle {
@@ -794,6 +881,26 @@ export component App inherits Window {
             clicked => { root.brow = 0; root.search-open(); }
         }
     }
+    // Aucun compte connecté : invitation directe à se connecter (une seule fois ; la connexion se gère ensuite dans Réglages).
+    for b[i] in onboard: Rectangle {
+        x: 1240px + i * 330px;
+        y: 310px;
+        width: 310px;
+        height: 92px;
+        border-radius: 46px;
+        visible: tab == 2;
+        background: zone == 0 && brow == 2 && obsel == i ? Theme.accent : Theme.glass;
+        animate background { duration: 100ms; }
+        Text {
+            text: @tr("Connecter") + " " + b;
+            font-size: 28px;
+            font-weight: 600;
+            color: Theme.text;
+        }
+        TouchArea {
+            clicked => { root.brow = 2; root.obsel = i; root.onboard-pick(i); }
+        }
+    }
     if tab == 2: Text {
         x: 80px;
         y: 450px;
@@ -928,12 +1035,14 @@ export component App inherits Window {
             width: 72px;
             height: 72px;
             border-radius: 36px;
-            background: Theme.glass;
-            Text {
-                text: "\u{E77B}";
-                font-family: Theme.icons;
-                font-size: 28px;
-                color: Theme.text;
+            border-width: zone == 1 && top == 8 ? 4px : 0px;
+            border-color: Theme.text;
+            Avatar {
+                kind: user-avatar;
+                size: 72px;
+            }
+            TouchArea {
+                clicked => { root.top = 8; root.zone = 1; root.nav(4); }
             }
         }
         Text {
@@ -989,14 +1098,14 @@ export component App inherits Window {
             y: 380px;
             width: parent.width;
             height: 380px;
-            background: @linear-gradient(180deg, #2b347300 0%, #2b3473 100%);
+            background: @linear-gradient(180deg, #08080b00 0%, #08080b 100%);
         }
         Rectangle {
             x: 0px;
             y: 0px;
             width: 1900px;
             height: 760px;
-            background: @linear-gradient(90deg, #232a6af0 0%, #232a6a00 100%);
+            background: @linear-gradient(90deg, #050507f0 0%, #05050700 100%);
         }
         Rectangle {
             x: 100px;
@@ -1204,6 +1313,129 @@ export component App inherits Window {
         }
     }
 
+    // --- Profils ---
+    if zone == 11: Rectangle {
+        background: Theme.bg-settings;
+        TouchArea {
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.up && (e.button == PointerEventButton.right || e.button == PointerEventButton.back)) { root.nav(5); }
+            }
+        }
+        Text {
+            x: 80px;
+            y: 100px;
+            text: @tr("Profils");
+            font-size: 96px;
+            font-weight: 800;
+            color: Theme.text;
+        }
+        Text {
+            x: 84px;
+            y: 240px;
+            text: @tr("Chaque profil a ses comptes de boutiques, sa liste de jeux et son temps de jeu");
+            font-size: 28px;
+            color: Theme.dim;
+        }
+        for p[i] in profiles: Rectangle {
+            x: 80px;
+            y: 330px + i * 124px;
+            width: 1300px;
+            height: 108px;
+            border-radius: 18px;
+            background: i == pfsel ? Theme.accent : Theme.glass;
+            animate background { duration: 100ms; }
+            if !p.add: Avatar {
+                x: 24px;
+                kind: p.avatar;
+                size: 76px;
+            }
+            if p.add: Rectangle {
+                x: 24px;
+                width: 76px;
+                height: 76px;
+                border-radius: 38px;
+                background: #ffffff22;
+                Text {
+                    text: "\u{E710}";
+                    font-family: Theme.icons;
+                    font-size: 32px;
+                    color: Theme.text;
+                }
+            }
+            Text {
+                x: 130px;
+                text: p.name;
+                font-size: 34px;
+                font-weight: 600;
+                color: Theme.text;
+            }
+            if p.active: Text {
+                x: parent.width - self.width - 36px;
+                text: @tr("Profil actif");
+                font-size: 26px;
+                color: Theme.text;
+            }
+            TouchArea {
+                clicked => { root.pfsel = i; root.profile-pick(i); }
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.move) { root.pfsel = i; }
+                    if (e.kind == PointerEventKind.up && e.button == PointerEventButton.right) { root.profile-menu(i); }
+                }
+            }
+        }
+        HorizontalLayout {
+            x: 80px;
+            y: parent.height - 100px;
+            spacing: 48px;
+            Hint { btn: 0; label: @tr("Valider"); }
+            Hint { btn: 1; label: @tr("Retour"); }
+            Hint { btn: 3; label: @tr("Options"); }
+        }
+    }
+
+    if zone == 12: Rectangle {
+        background: Theme.bg-settings;
+        TouchArea {
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.up && (e.button == PointerEventButton.right || e.button == PointerEventButton.back)) { root.nav(5); }
+            }
+        }
+        Text {
+            x: 80px;
+            y: 100px;
+            text: @tr("Choisissez un avatar");
+            font-size: 80px;
+            font-weight: 800;
+            color: Theme.text;
+        }
+        for i in 24: Rectangle {
+            x: 140px + mod(i, 6) * 210px;
+            y: 300px + floor(i / 6) * 220px;
+            width: 170px;
+            height: 170px;
+            border-radius: 85px;
+            border-width: i == avsel ? 8px : 0px;
+            border-color: Theme.text;
+            Avatar {
+                kind: i;
+                size: 170px;
+            }
+            TouchArea {
+                clicked => { root.avsel = i; root.avatar-pick(i); }
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.move) { root.avsel = i; }
+                }
+            }
+        }
+        HorizontalLayout {
+            x: 80px;
+            y: parent.height - 100px;
+            spacing: 48px;
+            Hint { btn: 0; label: @tr("Valider"); }
+            Hint { btn: 1; label: @tr("Retour"); }
+        }
+    }
+
     // --- Menu contextuel ---
     if zone == 9: Rectangle {
         background: #000a;
@@ -1390,7 +1622,7 @@ export component App inherits Window {
         width: 700px;
         height: 120px;
         border-radius: 18px;
-        background: #1b2142f2;
+        background: #15151cf2;
         opacity: toast-on ? 1 : 0;
         animate x, opacity { duration: 220ms; easing: ease-out; }
         Rectangle {
@@ -1514,7 +1746,7 @@ export component App inherits Window {
 
     // Sélecteur générique (explorateur de fichiers, identification d'un jeu…).
     if zone == 6: Rectangle {
-        background: #0b0e24;
+        background: #050507;
         TouchArea {
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.up && (e.button == PointerEventButton.right || e.button == PointerEventButton.back)) { root.nav(5); }
@@ -1610,7 +1842,7 @@ export component App inherits Window {
 
     // QR code d'achat : à scanner avec un téléphone.
     if zone == 5: Rectangle {
-        background: #0b0e24ee;
+        background: #050507ee;
         TouchArea {
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.up && (e.button == PointerEventButton.right || e.button == PointerEventButton.back)) { root.nav(5); }
@@ -1676,7 +1908,7 @@ export component App inherits Window {
 
     // Clavier virtuel (mots de passe, saisies).
     if zone == 4: Rectangle {
-        background: #0b0e24ee;
+        background: #050507ee;
         TouchArea {
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.up && (e.button == PointerEventButton.right || e.button == PointerEventButton.back)) { root.nav(5); }
@@ -1821,7 +2053,7 @@ export component GuideMenu inherits Window {
     title: "Hearth Guide";
     no-frame: true;
     always-on-top: true;
-    background: #1c1650;
+    background: #060608;
     forward-focus: keys;
 
     public function nav(a: int) {
@@ -1960,7 +2192,7 @@ export component GuideMenu inherits Window {
 
 // Écran de lancement : fenêtre superposée au jeu pendant son chargement (comme le menu guide, sans prendre le focus).
 export component Splash inherits Window {
-    in property <color> launch-hue: #4b63b8;
+    in property <color> launch-hue: #3a3a46;
     in property <string> launch-initial;
     in property <string> launch-name;
     in property <image> launch-cover;

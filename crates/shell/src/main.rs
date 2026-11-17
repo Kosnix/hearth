@@ -16,6 +16,7 @@ mod addflow;
 mod i18n;
 mod imgload;
 mod menus;
+mod profiles;
 mod scmd;
 mod playtime;
 mod prefs;
@@ -78,11 +79,14 @@ struct Shell {
     scmd_stage: Cell<u8>,
     steam_wait: Cell<bool>,
     anim_n: Cell<u32>,
+    profile_rows: Rc<VecModel<ProfileRow>>,
+    kb_profile: Cell<bool>,
+    new_profile: RefCell<String>,
     lib_cover: RefCell<std::collections::HashMap<String, slint::Image>>,
     lib_last: Cell<(i32, usize)>,
     art_pending: RefCell<std::collections::HashSet<String>>,
     lib_pending: RefCell<std::collections::HashSet<String>>,
-    sfx_on: Cell<bool>,
+    music_on: Cell<bool>,
     fg_main: Cell<bool>,
     steam_timer: slint::Timer,
     steam_until: Cell<Option<std::time::Instant>>,
@@ -137,6 +141,7 @@ fn main() -> Result<(), slint::PlatformError> {
     std::panic::set_hook(Box::new(|info| {
         let _ = std::fs::write(games_file().with_file_name("panic.log"), info.to_string());
     }));
+    let _profile = profiles::activate();
     // set_fullscreen() avant run() est ignoré par winit : plein écran dès la création.
     std::env::set_var("SLINT_FULLSCREEN", "1");
     // Legendary (jeux Epic) lit sa configuration ici, y compris quand il est lancé par le gestionnaire de fenêtres.
@@ -160,11 +165,14 @@ fn main() -> Result<(), slint::PlatformError> {
         scmd_stage: Cell::new(0),
         steam_wait: Cell::new(false),
         anim_n: Cell::new(0),
+        profile_rows: Rc::new(VecModel::default()),
+        kb_profile: Cell::new(false),
+        new_profile: RefCell::new(String::new()),
         lib_cover: RefCell::new(Default::default()),
         lib_last: Cell::new((-1, 0)),
         art_pending: RefCell::new(Default::default()),
         lib_pending: RefCell::new(Default::default()),
-        sfx_on: Cell::new(i18n::pref("sfx").as_deref() != Some("0")),
+        music_on: Cell::new(false),
         fg_main: Cell::new(true),
         steam_timer: slint::Timer::default(),
         steam_until: Cell::new(None),
@@ -226,6 +234,8 @@ fn main() -> Result<(), slint::PlatformError> {
     shell.guide.set_notes(shell.notes.clone().into());
     *shell.store_status.borrow_mut() = stores::all().iter().map(|s| (s.name().to_string(), s.detected(), shell.games.borrow().iter().filter(|g| g.store == s.name()).count())).collect();
     i18n::init();
+    i18n::init_audio_prefs();
+    std::thread::spawn(system::sfx::init);
     shell.refresh_lang();
     shell.ui.set_rows(shell.settings.rows.clone().into());
     shell.ui.set_offers(shell.offers.clone().into());
@@ -234,7 +244,7 @@ fn main() -> Result<(), slint::PlatformError> {
     shell.ui.on_notifs_opened(move || s.notifs_opened());
     let s = shell.clone();
     shell.ui.on_notif_action(move |i| s.notif_action(i));
-    shell.ui.set_user(std::env::var("USERNAME").unwrap_or_default().into());
+
     shell.set_clock();
 
     let s = shell.clone();
@@ -248,6 +258,18 @@ fn main() -> Result<(), slint::PlatformError> {
     shell.ui.on_launch(move |i| s.launch(i as usize));
     let s = shell.clone();
     shell.ui.on_game_menu(move |i| s.game_menu(i as usize));
+    let s = shell.clone();
+    shell.ui.on_profile_open(move || s.profile_open());
+    let s = shell.clone();
+    shell.ui.on_profile_pick(move |i| s.profile_pick(i as usize));
+    let s = shell.clone();
+    shell.ui.on_profile_menu(move |i| s.profile_menu(i as usize));
+    let s = shell.clone();
+    shell.ui.on_avatar_pick(move |a| s.avatar_pick(a));
+    shell.ui.set_profiles(shell.profile_rows.clone().into());
+    shell.profile_refresh_top();
+    let s = shell.clone();
+    shell.ui.on_onboard_pick(move |i| s.onboard_pick(i as usize));
     let s = shell.clone();
     shell.ui.on_nav_key(move |a| s.nav_with_sound(a));
     let s = shell.clone();
@@ -615,7 +637,9 @@ impl Shell {
         match k {
             settings::Kb::Continue => self.kb_refresh(),
             settings::Kb::Cancel => {
-                let back = if self.kb_search.replace(false) {
+                let back = if self.kb_profile.replace(false) {
+                    11
+                } else if self.kb_search.replace(false) {
                     0
                 } else if self.kb_identify.replace(false) {
                     6
@@ -633,7 +657,9 @@ impl Shell {
             }
             settings::Kb::Done(ssid, text) => {
                 let renaming = self.rename_id.borrow_mut().take();
-                if self.scmd_stage.get() != 0 {
+                if self.kb_profile.replace(false) {
+                    self.profile_named(text);
+                } else if self.scmd_stage.get() != 0 {
                     self.scmd_text(text);
                 } else if let Some(id) = renaming {
                     self.ui.set_zone(0);
@@ -785,6 +811,11 @@ impl Shell {
     fn tick(&self) {
         self.set_clock();
         self.maybe_prompt_update();
+        // Musique d'ambiance : seulement quand la console est devant (pas pendant un jeu).
+        let want = i18n::music() && self.running.borrow().is_empty() && wm::find_window(MAIN_TITLE).is_some_and(|h| h == wm::foreground());
+        if want != self.music_on.get() && system::sfx::music(want) {
+            self.music_on.set(want);
+        }
         if self.settings.tick() {
             self.display_changed();
             self.open_cat_keep(self.ui.get_cat());
@@ -844,7 +875,7 @@ impl Shell {
         if self.notes.row_count() > MAX_NOTES {
             self.notes.remove(MAX_NOTES);
         }
-        if self.sfx_on.get() && self.fg_main.get() {
+        if i18n::sfx() && self.fg_main.get() {
             system::sfx::play(system::sfx::Sfx::Notify);
         }
         if !i18n::toasts() {
@@ -890,8 +921,7 @@ impl Shell {
 }
 
 fn games_file() -> PathBuf {
-    let base = std::env::var_os("LOCALAPPDATA").unwrap_or_default();
-    Path::new(&base).join("Hearth").join("games.json")
+    stores::profile_dir().join("games.json")
 }
 
 /// Jeux manuels (games.json) puis jeux installés des boutiques, avec noms/masquage personnalisés.
@@ -1196,10 +1226,22 @@ impl Shell {
         let key = i18n::pref("steamgriddb_key").or_else(|| std::env::var("HEARTH_SGDB_KEY").ok());
         let mut jobs: Vec<(String, String, stores::Art)> =
             self.owned.borrow().iter().map(|(o, id)| (id.clone(), o.title.clone(), stores::account::owned_art(o))).collect();
+        // Jeux sans aucun visuel (ajoutés à la main, Rockstar, etc.) : recherche par titre.
+        let titleless: Vec<(String, String)> =
+            self.games.borrow().iter().filter(|g| !g.install && !g.id.starts_with("demo-") && stores::asset(&g.id, "cover").is_none()).map(|g| (g.id.clone(), g.name.clone())).collect();
         let installed = self.games.borrow().iter().any(|g| !g.store.is_empty() && !g.install);
         std::thread::spawn(move || {
             if installed {
                 jobs.extend(stores::installed().into_iter().map(|g| (g.id, g.title, g.art)));
+            }
+            for (id, title) in titleless {
+                if jobs.iter().any(|(j, _, a)| *j == id && !a.cover.is_empty()) {
+                    continue;
+                }
+                if let Some(art) = stores::resolve_art(&title) {
+                    jobs.retain(|(j, _, _)| *j != id);
+                    jobs.push((id, title, art));
+                }
             }
             let key = &key;
             std::thread::scope(|sc| {
@@ -1452,7 +1494,7 @@ impl Shell {
     fn nav_with_sound(&self, a: i32) {
         let before = self.ui_state();
         timed("invoke_nav", || self.ui.invoke_nav(a));
-        if !self.sfx_on.get() || a == 6 {
+        if !i18n::sfx() || a == 6 {
             return;
         }
         let after = self.ui_state();

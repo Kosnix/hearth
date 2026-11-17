@@ -20,6 +20,7 @@ pub enum Act {
     AddGame,
     ShowHidden,
     UpdateYes(usize),
+    DeleteProfile(usize),
     Cancel,
 }
 
@@ -121,6 +122,10 @@ impl Shell {
             }
             Act::AddGame => self.add_open(),
             Act::ShowHidden => self.show_hidden(),
+            Act::DeleteProfile(i) => {
+                self.ui.set_zone(back);
+                self.profile_delete(i);
+            }
             Act::UpdateYes(g) => {
                 self.ui.set_zone(back);
                 if let Some(id) = self.games.borrow().get(g).map(|g| g.id.clone()) {
