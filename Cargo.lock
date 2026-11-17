@@ -1628,6 +1628,7 @@ dependencies = [
 name = "hearth-shell"
 version = "0.1.0"
 dependencies = [
+ "image",
  "input 0.1.0",
  "serde",
  "serde_json",

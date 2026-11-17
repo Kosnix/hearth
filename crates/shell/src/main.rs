@@ -14,6 +14,7 @@ mod addgame;
 mod accounts;
 mod addflow;
 mod i18n;
+mod imgload;
 mod menus;
 mod scmd;
 mod playtime;
@@ -79,6 +80,7 @@ struct Shell {
     anim_n: Cell<u32>,
     lib_cover: RefCell<std::collections::HashMap<String, slint::Image>>,
     lib_last: Cell<(i32, usize)>,
+    lib_pending: RefCell<std::collections::HashSet<String>>,
     sfx_on: Cell<bool>,
     fg_main: Cell<bool>,
     steam_timer: slint::Timer,
@@ -107,7 +109,7 @@ struct Shell {
     offers: Rc<VecModel<Offer>>,
     /// Offres du catalogue affiché (titres, URLs) et leurs images locales.
     offer_data: RefCell<Vec<stores::Offer>>,
-    featured: RefCell<Option<(Vec<stores::Offer>, Vec<Option<PathBuf>>)>>,
+    featured: RefCell<Option<(Vec<stores::Offer>, Vec<Option<imgload::Buf>>)>>,
     store_status: RefCell<Vec<(String, bool, usize)>>,
     catalog_started: Cell<bool>,
     catalog_gen: Cell<u32>,
@@ -159,6 +161,7 @@ fn main() -> Result<(), slint::PlatformError> {
         anim_n: Cell::new(0),
         lib_cover: RefCell::new(Default::default()),
         lib_last: Cell::new((-1, 0)),
+        lib_pending: RefCell::new(Default::default()),
         sfx_on: Cell::new(i18n::pref("sfx").as_deref() != Some("0")),
         fg_main: Cell::new(true),
         steam_timer: slint::Timer::default(),
@@ -294,7 +297,7 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let s = shell.clone();
     let tick = slint::Timer::default();
-    tick.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || s.tick());
+    tick.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || timed("tick", || s.tick()));
 
     let s = shell.clone();
     let poll = slint::Timer::default();
@@ -303,7 +306,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let s = shell.clone();
     let phase = Cell::new(0.0f32);
     let anim = slint::Timer::default();
-    anim.start(slint::TimerMode::Repeated, Duration::from_millis(40), move || s.animate(&phase));
+    anim.start(slint::TimerMode::Repeated, Duration::from_millis(40), move || timed("animate", || s.animate(&phase)));
 
     // Le menu guide est créé une fois puis affiché/masqué en Win32, sans jamais prendre le focus
     // (un jeu plein écran qui perd le focus se réduit et clignote).
@@ -342,6 +345,19 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     });
 
+    // Détecteur de blocages (HEARTH_PERF=1) : un timer de 8 ms qui journalise tout retard > 25 ms du thread UI.
+    let s = shell.clone();
+    let last = Cell::new(std::time::Instant::now());
+    let watchdog = slint::Timer::default();
+    watchdog.start(slint::TimerMode::Repeated, Duration::from_millis(8), move || {
+        let gap = last.replace(std::time::Instant::now()).elapsed().as_secs_f64() * 1000.0;
+        if gap > 25.0 && std::env::var_os("HEARTH_PERF").is_some() {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(games_file().with_file_name("perf.log")) {
+                let _ = writeln!(f, "STALL {gap:.0} ms (zone {} tab {})", s.ui.get_zone(), s.ui.get_tab());
+            }
+        }
+    });
     Shell::schedule_updates();
     let s = shell.clone();
     let upd = slint::Timer::default();
@@ -967,7 +983,7 @@ impl Shell {
             self.fg_main.set(wm::find_window(MAIN_TITLE).is_some_and(|h| h == wm::foreground()));
         }
         if n % 2 == 0 {
-            self.sync_library_art();
+            timed("sync_library_art", || self.sync_library_art());
         }
         if i18n::anim() && self.ui.get_zone() < 3 && self.fg_main.get() {
             phase.set((phase.get() + 0.2) % 3600.0);
@@ -1051,7 +1067,7 @@ impl Shell {
                 for chunk in jobs.chunks(jobs.len().div_ceil(6).max(1)) {
                     sc.spawn(move || {
                         for (i, imgs) in chunk {
-                            if let Some(p) = stores::fetch_first(imgs) {
+                            if let Some(p) = stores::fetch_first(imgs).and_then(|p| imgload::decode(&p, 300, 450)) {
                                 let i = *i;
                                 let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.offer_art(gen, featured, i, p)));
                             }
@@ -1063,7 +1079,7 @@ impl Shell {
     }
 
     fn offers_listed(&self, gen: u32, featured: bool, offers: Vec<stores::Offer>) {
-        let paths = vec![None; offers.len()];
+        let paths: Vec<Option<imgload::Buf>> = vec![None; offers.len()];
         if self.catalog_gen.get() == gen {
             self.apply_offers(&offers, &paths);
         }
@@ -1072,7 +1088,7 @@ impl Shell {
         }
     }
 
-    fn offer_art(&self, gen: u32, featured: bool, i: usize, p: PathBuf) {
+    fn offer_art(&self, gen: u32, featured: bool, i: usize, p: imgload::Buf) {
         if featured {
             if let Some((_, paths)) = self.featured.borrow_mut().as_mut() {
                 if let Some(slot) = paths.get_mut(i) {
@@ -1081,14 +1097,15 @@ impl Shell {
             }
         }
         if self.catalog_gen.get() == gen {
-            if let (Some(mut row), Ok(img)) = (self.offers.row_data(i), slint::Image::load_from_path(&p)) {
+            if let Some(mut row) = self.offers.row_data(i) {
+                let img = imgload::image(&p);
                 row.art = img;
                 self.offers.set_row_data(i, row);
             }
         }
     }
 
-    fn apply_offers(&self, offers: &[stores::Offer], paths: &[Option<PathBuf>]) {
+    fn apply_offers(&self, offers: &[stores::Offer], paths: &[Option<imgload::Buf>]) {
         let rows: Vec<Offer> = offers
             .iter()
             .zip(paths)
@@ -1096,7 +1113,7 @@ impl Shell {
                 title: o.title.as_str().into(),
                 price: if o.price == "Gratuit" { tr("Gratuit") } else { o.price.clone() }.into(),
                 store: o.store.as_str().into(),
-                art: p.as_ref().and_then(|p| slint::Image::load_from_path(p).ok()).unwrap_or_default(),
+                art: p.as_ref().map(imgload::image).unwrap_or_default(),
             })
             .collect();
         *self.offer_data.borrow_mut() = offers.to_vec();
@@ -1399,7 +1416,7 @@ impl Shell {
     /// Navigation (manette ou clavier) avec son : déplacement, validation, retour, ouverture d'un menu.
     fn nav_with_sound(&self, a: i32) {
         let before = self.ui_state();
-        self.ui.invoke_nav(a);
+        timed("invoke_nav", || self.ui.invoke_nav(a));
         if !self.sfx_on.get() || a == 6 {
             return;
         }
@@ -1432,7 +1449,8 @@ impl Shell {
 }
 
 impl Shell {
-    /// Ne garde en mémoire que les jaquettes des rangées affichées de la bibliothèque (cf. app.slint : lrow-2 .. lrow+3).
+    /// Jaquettes de la bibliothèque : décodées en arrière-plan (threads) pour les rangées proches de la sélection,
+    /// libérées pour les autres (cf. app.slint : rangées lrow-2 .. lrow+3 affichées, une de marge de chaque côté ici).
     fn sync_library_art(&self) {
         let (lsel, n) = (self.ui.get_lsel(), self.library.row_count());
         if self.lib_last.get() == (lsel, n) {
@@ -1441,26 +1459,69 @@ impl Shell {
         self.lib_last.set((lsel, n));
         let cols = 10usize;
         let lrow = (lsel.max(0) as usize) / cols;
-        let (lo, hi) = (lrow.saturating_sub(2) * cols, (lrow + 4) * cols);
+        let (lo, hi) = (lrow.saturating_sub(3) * cols, (lrow + 5) * cols);
+        let mut jobs: Vec<(String, PathBuf)> = vec![];
         for r in 0..n {
             let Some(mut t) = self.library.row_data(r) else { continue };
             let inwin = r >= lo && r < hi;
             let loaded = t.cover.size().width > 0;
+            let games = self.games.borrow();
+            let Some(g) = games.get(t.gid as usize) else { continue };
             if inwin && !loaded {
-                let games = self.games.borrow();
-                if let Some(g) = games.get(t.gid as usize) {
-                    let img = cover_of(g);
-                    self.lib_cover.borrow_mut().insert(g.id.clone(), img.clone());
-                    t.cover = img;
+                if let Some(img) = self.lib_cover.borrow().get(&g.id) {
+                    t.cover = img.clone();
                     self.library.set_row_data(r, t);
+                } else if !self.lib_pending.borrow().contains(&g.id) {
+                    let path = if g.cover.is_empty() { stores::asset(&g.id, "cover") } else { Some(PathBuf::from(&g.cover)) };
+                    if let Some(p) = path {
+                        self.lib_pending.borrow_mut().insert(g.id.clone());
+                        jobs.push((g.id.clone(), p));
+                    }
                 }
             } else if !inwin && loaded {
-                if let Some(g) = self.games.borrow().get(t.gid as usize) {
-                    self.lib_cover.borrow_mut().remove(&g.id);
-                }
+                self.lib_cover.borrow_mut().remove(&g.id);
                 t.cover = Default::default();
                 self.library.set_row_data(r, t);
             }
         }
+        if jobs.is_empty() {
+            return;
+        }
+        std::thread::spawn(move || {
+            std::thread::scope(|sc| {
+                for chunk in jobs.chunks(jobs.len().div_ceil(4).max(1)) {
+                    sc.spawn(move || {
+                        for (id, path) in chunk {
+                            let buf = imgload::decode(path, 300, 450);
+                            let id = id.clone();
+                            let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.lib_cover_ready(&id, buf)));
+                        }
+                    });
+                }
+            });
+        });
     }
+
+    fn lib_cover_ready(&self, id: &str, buf: Option<imgload::Buf>) {
+        self.lib_pending.borrow_mut().remove(id);
+        let Some(buf) = buf else { return };
+        let img = imgload::image(&buf);
+        self.lib_cover.borrow_mut().insert(id.to_string(), img);
+        // Force la mise en place sur la tuile si elle est (toujours) dans la fenêtre.
+        self.lib_last.set((-1, 0));
+    }
+}
+
+/// Mesure de diagnostic : journalise dans perf.log tout traitement du thread UI qui dure plus de 8 ms.
+fn timed<R>(what: &str, f: impl FnOnce() -> R) -> R {
+    let t0 = std::time::Instant::now();
+    let r = f();
+    let ms = t0.elapsed().as_secs_f64() * 1000.0;
+    if ms > 8.0 && std::env::var_os("HEARTH_PERF").is_some() {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(games_file().with_file_name("perf.log")) {
+            let _ = writeln!(f, "{what}: {ms:.1} ms");
+        }
+    }
+    r
 }
