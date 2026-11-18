@@ -159,6 +159,7 @@ const EN: &[(&str, &str)] = &[
     ("Mise à jour disponible", "Update available"),
     ("Terminé", "Done"),
     ("Mo/s", "MB/s"),
+    ("Jamais joué", "Never played"),
     ("Nouveau profil", "New profile"),
     ("Nom du profil", "Profile name"),
     ("Profils", "Profiles"),

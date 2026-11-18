@@ -186,12 +186,17 @@ pub mod install {
             "Steam" => Some("Valve.Steam"),
             "Epic Games" => Some("EpicGames.EpicGamesLauncher"),
             "GOG" => Some("GOG.Galaxy"),
+            "Rockstar Games" => Some("RockstarGames.Launcher"),
             _ => None,
         }
     }
 
     /// Installe un paquet via l'assistant administrateur (autorisation demandée une seule fois). Bloquant.
     pub fn winget(id: &str) -> Result<(), String> {
+        // Le Rockstar Launcher n'est pas dans la liste fermée de l'assistant administrateur : installation directe (une confirmation Windows).
+        if id == "RockstarGames.Launcher" {
+            return winget_direct(id);
+        }
         if !crate::admin::enabled() {
             crate::admin::setup()?;
         }

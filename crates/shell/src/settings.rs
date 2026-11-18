@@ -598,7 +598,7 @@ fn account_rows(accounts: &[(String, bool, Option<String>)]) -> Vec<(String, Str
         } else {
             v.push((name.clone(), tr("Se connecter"), Act::Login(name.clone())));
         }
-        if !*detected && name != "Rockstar Games" {
+        if !*detected {
             v.push((format!("{} {name}", tr("Installer le client")), tr("Automatique (winget)"), Act::Install(name.clone())));
         }
     }

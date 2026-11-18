@@ -459,3 +459,39 @@ msgstr "Active profile"
 msgctxt "App"
 msgid "Choisissez un avatar"
 msgstr "Choose an avatar"
+
+msgctxt "App"
+msgid "Non installés"
+msgstr "Not installed"
+
+msgctxt "App"
+msgid "Tout"
+msgstr "All"
+
+msgctxt "App"
+msgid "Nom"
+msgstr "Name"
+
+msgctxt "App"
+msgid "Temps de jeu"
+msgstr "Play time"
+
+msgctxt "App"
+msgid "Dernière partie"
+msgstr "Last played"
+
+msgctxt "App"
+msgid "Plateforme"
+msgstr "Platform"
+
+msgctxt "App"
+msgid "État de l'installation"
+msgstr "Installation status"
+
+msgctxt "App"
+msgid "Aucun jeu installé. Installez-en un depuis « Non installés » ou la Boutique, ou ajoutez-en un avec le bouton +."
+msgstr "No installed games. Install one from \"Not installed\" or the Store, or add one with the + button."
+
+msgctxt "App"
+msgid "Aucun jeu."
+msgstr "No games."

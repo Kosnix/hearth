@@ -179,6 +179,9 @@ impl Shell {
                     items.push((o, id));
                 }
             }
+            if !items.is_empty() {
+                account::owned_cache_save(&items);
+            }
             let installed = stores::installed();
             let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.owned_ready(items, installed)));
         });

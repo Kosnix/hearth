@@ -423,3 +423,30 @@ pub fn epic_exchange_code() -> Option<String> {
     let Some((200, j)) = res else { return None };
     j["code"].as_str().map(String::from)
 }
+
+fn owned_cache_file() -> PathBuf {
+    crate::profile_dir().join("owned.json")
+}
+
+/// Mémorise la bibliothèque possédée : affichée aussitôt à l'ouverture, avant la mise à jour réseau.
+pub fn owned_cache_save(items: &[(Owned, String)]) {
+    let v: Vec<serde_json::Value> = items.iter().map(|(o, id)| serde_json::json!({"store": o.store, "title": o.title, "key": o.key, "images": o.images, "id": id})).collect();
+    let _ = std::fs::write(owned_cache_file(), serde_json::Value::Array(v).to_string());
+}
+
+pub fn owned_cache_load() -> Vec<(Owned, String)> {
+    let Some(j) = std::fs::read_to_string(owned_cache_file()).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(s.trim_start_matches('\u{feff}')).ok()) else { return vec![] };
+    j.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| {
+            let store = match e["store"].as_str()? {
+                "Steam" => "Steam",
+                "Epic Games" => "Epic Games",
+                _ => return None,
+            };
+            let images = e["images"].as_array()?.iter().filter_map(|i| i.as_str().map(String::from)).collect();
+            Some((Owned { store, title: e["title"].as_str()?.to_string(), key: e["key"].as_str()?.to_string(), images }, e["id"].as_str()?.to_string()))
+        })
+        .collect()
+}

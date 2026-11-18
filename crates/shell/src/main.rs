@@ -79,6 +79,7 @@ struct Shell {
     scmd_stage: Cell<u8>,
     steam_wait: Cell<bool>,
     anim_n: Cell<u32>,
+    last_tab: Cell<i32>,
     profile_rows: Rc<VecModel<ProfileRow>>,
     kb_profile: Cell<bool>,
     new_profile: RefCell<String>,
@@ -165,6 +166,7 @@ fn main() -> Result<(), slint::PlatformError> {
         scmd_stage: Cell::new(0),
         steam_wait: Cell::new(false),
         anim_n: Cell::new(0),
+        last_tab: Cell::new(0),
         profile_rows: Rc::new(VecModel::default()),
         kb_profile: Cell::new(false),
         new_profile: RefCell::new(String::new()),
@@ -230,6 +232,13 @@ fn main() -> Result<(), slint::PlatformError> {
     let s = shell.clone();
     shell.ui.on_dl_open(move || s.dl_refresh());
     shell.ui.set_det_shots(shell.det_shots.clone().into());
+    // Bibliothèque possédée : affichée tout de suite depuis le cache disque (la mise à jour réseau suit).
+    *shell.owned.borrow_mut() = stores::account::owned_cache_load();
+    {
+        let mut g = shell.games.borrow().clone();
+        shell.append_owned(&mut g);
+        *shell.games.borrow_mut() = g;
+    }
     shell.rebuild();
     shell.guide.set_notes(shell.notes.clone().into());
     *shell.store_status.borrow_mut() = stores::all().iter().map(|s| (s.name().to_string(), s.detected(), shell.games.borrow().iter().filter(|g| g.store == s.name()).count())).collect();
@@ -1000,7 +1009,7 @@ impl Shell {
         let n = self.anim_n.get().wrapping_add(1);
         self.anim_n.set(n);
         if n % 5 == 0 {
-            if self.ui.get_tab() == 2 && !self.catalog_started.get() {
+            if self.ui.get_tab() == 3 && !self.catalog_started.get() {
                 self.load_catalog(None);
             }
             let pad = match std::env::var("HEARTH_PAD").as_deref() {
@@ -1013,6 +1022,11 @@ impl Shell {
                 self.guide.global::<Pad>().set_kind(pad);
             }
             self.fg_main.set(wm::find_window(MAIN_TITLE).is_some_and(|h| h == wm::foreground()));
+            let tab = self.ui.get_tab();
+            if tab != self.last_tab.replace(tab) && (tab == 1 || tab == 2) {
+                self.ui.set_lsel(0);
+                self.rebuild();
+            }
         }
         if n % 2 == 0 {
             timed("sync_library_art", || self.sync_library_art());
@@ -1402,6 +1416,9 @@ impl Shell {
             running,
             install: g.install,
             sub: if g.install { "".into() } else { playtime::label_in(pt, &playtime_key(g)).into() },
+            store: if g.store.is_empty() { tr("Hearth") } else { g.store.clone() }.into(),
+            played: playtime::played_in(pt, &playtime_key(g)).into(),
+            lastp: playtime::last_in(pt, &playtime_key(g)).into(),
         }
     }
 
@@ -1417,20 +1434,26 @@ impl Shell {
         let cur_lib = self.library.row_data(self.ui.get_lsel().max(0) as usize).map(|t| t.gid);
         let pt = playtime::load();
         let running: Vec<usize> = self.running.borrow().iter().map(|r| r.tile).collect();
+        let all_tab = self.ui.get_tab() == 2;
         let (mut a, mut b): (Vec<(u64, Tile)>, Vec<Tile>) = (vec![], vec![]);
         for (i, g) in self.games.borrow().iter().enumerate() {
             if g.hidden {
                 continue;
             }
             let t = self.make_tile(i, g, running.contains(&i), &pt);
-            if g.install {
-                b.push(t);
-            } else {
+            // Onglet Tout : tous les jeux (installés ou non) ; sinon seulement ceux à installer.
+            if g.install || all_tab {
+                b.push(t.clone());
+            }
+            if !g.install {
                 a.push((playtime::last(&playtime_key(g), &pt), t));
             }
         }
         a.sort_by_key(|(last, _)| std::cmp::Reverse(*last));
         let a: Vec<Tile> = a.into_iter().map(|(_, t)| t).collect();
+        if all_tab {
+            b.sort_by_key(|t| t.name.to_lowercase());
+        }
         let sel = cur.and_then(|g| a.iter().position(|t| t.gid == g)).unwrap_or((self.ui.get_sel().max(0) as usize).min(a.len().saturating_sub(1)));
         let lsel = cur_lib.and_then(|g| b.iter().position(|t| t.gid == g)).unwrap_or((self.ui.get_lsel().max(0) as usize).min(b.len().saturating_sub(1)));
         self.tiles.set_vec(a);

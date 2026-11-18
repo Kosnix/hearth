@@ -59,3 +59,23 @@ pub fn label_in(map: &HashMap<String, Entry>, key: &str) -> String {
 pub fn last(key: &str, map: &HashMap<String, Entry>) -> u64 {
     map.get(key).map_or(0, |e| e.last)
 }
+
+/// « 25h 24m » (ou « 12 min », « Jamais joué »).
+pub fn played_in(map: &HashMap<String, Entry>, key: &str) -> String {
+    match map.get(key).map(|e| e.secs) {
+        Some(s) if s >= 3600 => format!("{}h {:02}m", s / 3600, (s % 3600) / 60),
+        Some(s) if s > 0 => format!("{} min", (s / 60).max(1)),
+        _ => tr("Jamais joué"),
+    }
+}
+
+/// « aujourd'hui », « hier », « il y a 3 j ».
+pub fn last_in(map: &HashMap<String, Entry>, key: &str) -> String {
+    let Some(e) = map.get(key).filter(|e| e.last > 0) else { return "—".into() };
+    match now().saturating_sub(e.last) / 86_400 {
+        0 => tr("aujourd'hui"),
+        1 => tr("hier"),
+        n if crate::i18n::lang() == 1 => format!("{n} d ago"),
+        n => format!("il y a {n} j"),
+    }
+}
