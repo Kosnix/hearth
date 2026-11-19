@@ -3,7 +3,10 @@
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
+mod mouse;
 mod xpad;
+
+pub use mouse::{active as mouse_active, osk as osk_open, backspace, enter, send_text, set_active as set_mouse_active, set_osk};
 
 use windows::core::{w, PCSTR};
 use windows::Gaming::Input::{GameControllerSwitchPosition as Hat, Gamepad, GamepadButtons, RawGameController};
@@ -24,6 +27,9 @@ pub enum Nav {
     Back,
     Guide,
     Menu,
+    /// Hors manette de navigation : le mode souris a changé (L3 + R3) / le clavier visuel est demandé (Triangle en mode souris).
+    Mouse,
+    Osk,
 }
 
 // Masques au format XInput (wButtons).
@@ -57,9 +63,12 @@ const STICK: f64 = 0.5; // seuil de déviation du stick, 0..1
 type GetState = unsafe extern "system" fn(u32, *mut XINPUT_STATE) -> u32;
 
 /// Lance le thread de lecture ; `on_nav` est appelé depuis ce thread.
-pub fn spawn(on_nav: impl Fn(Nav) + Send + 'static) {
+pub fn spawn(on_nav: impl Fn(Nav) + Send + Sync + 'static) {
+    let on_nav = std::sync::Arc::new(on_nav);
+    mouse::spawn(on_nav.clone());
     xpad::spawn();
     thread::spawn(move || {
+        let on_nav = move |n: Nav| (*on_nav)(n);
         unsafe { RoInitialize(RO_INIT_MULTITHREADED).ok() };
         let get_state = xinput_get_state_ex().unwrap_or(xinput_get_state);
         let mut xinput = XInput { get_state, connected: [true; 4], tick: 0 };
@@ -82,7 +91,11 @@ pub fn spawn(on_nav: impl Fn(Nav) + Send + 'static) {
             } else if other != 0 {
                 LAST_PAD.store(0, Ordering::Relaxed);
             }
-            let cur = sony | other;
+            let mut cur = sony | other;
+            // Mode souris (sans clavier visuel) : la manette pilote le curseur, seule la touche guide reste à Hearth.
+            if mouse::active() && !mouse::osk() {
+                cur &= GUIDE;
+            }
             let pressed = cur & !prev;
             for (bit, nav) in MAP {
                 if pressed & bit != 0 {

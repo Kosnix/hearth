@@ -35,7 +35,7 @@ pub fn spawn() {
         let mut last = XGamepad::default();
         let mut missing: Option<Instant> = None;
         loop {
-            match read() {
+            match read().map(|p| if crate::mouse::active() { XGamepad::default() } else { p }) {
                 Some(pad) => {
                     missing = None;
                     PRESENT.store(true, Ordering::Relaxed);

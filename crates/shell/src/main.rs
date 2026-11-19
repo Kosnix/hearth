@@ -29,6 +29,7 @@ const EXIT_DESKTOP: i32 = 10;
 const MAIN_TITLE: &str = "Hearth";
 const GUIDE_TITLE: &str = "Hearth Guide";
 const SPLASH_TITLE: &str = "Hearth Splash";
+const PAD_TITLE: &str = "Hearth Pad";
 const GUIDE_WIDTH: f32 = 460.0; // px logiques
 const MAX_NOTES: usize = 5;
 
@@ -75,6 +76,9 @@ struct Shell {
     ui: App,
     guide: GuideMenu,
     splash: Splash,
+    pad: PadOverlay,
+    pad_acc: Cell<bool>,
+    pad_up: Cell<bool>,
     games: RefCell<Vec<Game>>,
     /// Onglet Jeux (installés, non cachés) et onglet Bibliothèque (possédés à installer).
     tiles: Rc<VecModel<Tile>>,
@@ -165,6 +169,9 @@ fn main() -> Result<(), slint::PlatformError> {
         ui: App::new()?,
         guide: GuideMenu::new()?,
         splash: Splash::new()?,
+        pad: PadOverlay::new()?,
+        pad_acc: Cell::new(false),
+        pad_up: Cell::new(false),
         games: RefCell::new(games),
         tiles: Rc::new(VecModel::default()),
         library: Rc::new(VecModel::default()),
@@ -382,11 +389,16 @@ fn main() -> Result<(), slint::PlatformError> {
     // (un jeu plein écran qui perd le focus se réduit et clignote).
     shell.guide.show()?;
     shell.splash.show()?;
+    shell.pad.show()?;
+    let s = shell.clone();
+    shell.pad.on_press(move |x, y| s.pad_press(x, y));
     // Les fenêtres natives n'existent pas forcément dès le premier tour : on réessaie.
     let setup = Rc::new(slint::Timer::default());
     let t = setup.clone();
     setup.start(slint::TimerMode::Repeated, Duration::from_millis(50), move || {
-        if let (Some(h), Some(sp)) = (wm::find_window(GUIDE_TITLE), wm::find_window(SPLASH_TITLE)) {
+        if let (Some(h), Some(sp), Some(pd)) = (wm::find_window(GUIDE_TITLE), wm::find_window(SPLASH_TITLE), wm::find_window(PAD_TITLE)) {
+            wm::make_overlay(pd);
+            wm::hide(pd);
             wm::make_overlay(h);
             wm::hide(h);
             wm::make_overlay(sp);
@@ -453,6 +465,17 @@ fn main() -> Result<(), slint::PlatformError> {
     let s = shell.clone();
     let upd = slint::Timer::default();
     upd.start(slint::TimerMode::Repeated, Duration::from_secs(6 * 3600), move || s.check_updates(false));
+    // Test sans manette : HEARTH_PADDEMO=bar|kbd affiche le bandeau du mode souris ou le clavier visuel.
+    if let Ok(v) = std::env::var("HEARTH_PADDEMO") {
+        let s = shell.clone();
+        slint::Timer::single_shot(Duration::from_secs(5), move || {
+            input::set_mouse_active(true);
+            if v == "kbd" {
+                input::set_osk(true);
+            }
+            s.pad_show(v == "kbd");
+        });
+    }
     shell.start_art();
     shell.refresh_owned();
     shell.ui.run()
@@ -513,7 +536,106 @@ impl Shell {
         }
     }
 
+    /// Bandeau d'aide du mode souris (`kbd` faux) ou clavier visuel, en bas de l'écran, sans prendre le focus.
+    fn pad_show(&self, kbd: bool) {
+        self.pad.set_kbd(kbd);
+        if kbd {
+            self.pad_keys();
+            self.pad.set_kbx(0);
+            self.pad.set_kby(0);
+        }
+        if let Some(h) = wm::find_window(PAD_TITLE) {
+            let (x, y, mw, mh) = wm::primary_monitor();
+            let s = self.ui.window().scale_factor();
+            let (w, hh) = if kbd { (1180.0 * s, 560.0 * s) } else { (1300.0 * s, 96.0 * s) };
+            let (w, hh) = (w as i32, hh as i32);
+            wm::show_overlay(h, x + (mw - w) / 2, y + mh - hh - if kbd { 40 } else { 140 }, w, hh);
+            self.pad.window().request_redraw();
+        }
+    }
+
+    fn pad_hide(&self) {
+        input::set_osk(false);
+        if let Some(h) = wm::find_window(PAD_TITLE) {
+            wm::hide(h);
+        }
+    }
+
+    /// Active ou quitte le mode souris (menu guide ; la manette le fait aussi avec L3 + R3).
+    fn pad_toggle(&self) {
+        let on = !input::mouse_active();
+        input::set_mouse_active(on);
+        self.pad_sync();
+    }
+
+    /// Affiche ou masque le bandeau selon l'état du mode souris.
+    fn pad_sync(&self) {
+        if input::mouse_active() {
+            self.pad_show(false);
+        } else {
+            self.pad_hide();
+        }
+    }
+
+    fn pad_keys(&self) {
+        let (up, acc) = (self.pad_up.get(), self.pad_acc.get());
+        let rows: [&str; 4] = if acc {
+            ["éèêëàâäùûü", "ôöîïçœæñÿ'", "@.-_,;:!?/", "+*=%€$#&()"]
+        } else {
+            ["1234567890", "azertyuiop", "qsdfghjklm", "wxcvbn.-_@"]
+        };
+        let keys: Vec<SharedString> = rows.iter().flat_map(|r| r.chars()).map(|c| if up { c.to_uppercase().to_string() } else { c.to_string() }.into()).collect();
+        self.pad.set_keys(Rc::new(VecModel::from(keys)).into());
+        self.pad.set_acc(acc);
+    }
+
+    fn pad_press(&self, x: i32, y: i32) {
+        if x < 0 {
+            input::set_osk(false);
+            self.pad_show(false);
+            return;
+        }
+        if y < 4 {
+            if let Some(k) = self.pad.get_keys().row_data((y * 10 + x) as usize) {
+                input::send_text(k.as_str());
+            }
+            return;
+        }
+        match x {
+            0 => self.pad_up.set(!self.pad_up.get()),
+            1 => self.pad_acc.set(!self.pad_acc.get()),
+            2 => input::send_text(" "),
+            3 => input::backspace(),
+            4 => input::enter(),
+            _ => {
+                input::set_osk(false);
+                self.pad_show(false);
+                return;
+            }
+        }
+        self.pad_keys();
+    }
+
     fn on_nav(&self, nav: Nav) {
+        // Mode souris : L3 + R3 (ou menu guide) l'active ; Triangle ouvre le clavier visuel qui écrit dans la fenêtre active.
+        match nav {
+            Nav::Mouse => {
+                self.pad_sync();
+                return;
+            }
+            Nav::Osk => {
+                if input::mouse_active() {
+                    input::set_osk(true);
+                    self.pad_show(true);
+                }
+                return;
+            }
+            _ => {}
+        }
+        if input::osk_open() {
+            self.pad.invoke_nav(nav as i32);
+            return;
+        }
         if wm::find_window(SPLASH_TITLE).is_some_and(wm::is_visible) {
             if nav == Nav::Back {
                 self.hide_splash();
@@ -898,6 +1020,10 @@ impl Shell {
                 self.guide.set_brightness(b);
                 std::thread::spawn(move || system::display::set_brightness(b as u32));
             }
+            (6, 0) => {
+                self.hide_guide();
+                self.pad_toggle();
+            }
             (5, _) if self.guide.get_wifi() >= 0 => {
                 let on = self.guide.get_wifi() == 0;
                 self.guide.set_wifi(on as i32);
@@ -1111,6 +1237,7 @@ impl Shell {
             if self.ui.global::<Pad>().get_kind() != pad {
                 self.ui.global::<Pad>().set_kind(pad);
                 self.guide.global::<Pad>().set_kind(pad);
+                self.pad.global::<Pad>().set_kind(pad);
             }
             self.fg_main.set(wm::find_window(MAIN_TITLE).is_some_and(|h| h == wm::foreground()));
             let tab = self.ui.get_tab();

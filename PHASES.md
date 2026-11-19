@@ -43,3 +43,5 @@
 - Assistant administrateur : une seule tentative par version (marqueur global) ; curseur de souris masqué après 5 s sans mouvement.
 
 - Installation sans invite pour l'utilisateur final : assistant administrateur v3 (VC++ x64/x86, ViGEmBus, Rockstar, règles de pare-feu par jeu), une seule validation au premier lancement.
+
+- Mode souris à la manette PlayStation (L3 + R3) : stick = curseur, Croix/Rond = clics, stick droit = défilement, Triangle = clavier visuel (overlay sans focus, texte Unicode) ; bandeau d'aide et ligne « Souris et clavier » dans le menu guide.

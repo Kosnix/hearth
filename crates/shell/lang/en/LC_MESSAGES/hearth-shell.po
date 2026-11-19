@@ -503,3 +503,47 @@ msgstr "No games to install. Connect your stores to find your purchases."
 msgctxt "App"
 msgid "Possédé"
 msgstr "Owned"
+
+msgctxt "PadOverlay"
+msgid "Mode souris"
+msgstr "Mouse mode"
+
+msgctxt "PadOverlay"
+msgid "Clic"
+msgstr "Click"
+
+msgctxt "PadOverlay"
+msgid "Clic droit"
+msgstr "Right click"
+
+msgctxt "PadOverlay"
+msgid "Clavier"
+msgstr "Keyboard"
+
+msgctxt "PadOverlay"
+msgid "Quitter"
+msgstr "Exit"
+
+msgctxt "PadOverlay"
+msgid "Maj"
+msgstr "Shift"
+
+msgctxt "PadOverlay"
+msgid "Espace"
+msgstr "Space"
+
+msgctxt "PadOverlay"
+msgid "Effacer"
+msgstr "Delete"
+
+msgctxt "PadOverlay"
+msgid "Entrée"
+msgstr "Enter"
+
+msgctxt "PadOverlay"
+msgid "Fermer"
+msgstr "Close"
+
+msgctxt "GuideMenu"
+msgid "Souris et clavier"
+msgstr "Mouse and keyboard"
