@@ -49,3 +49,5 @@
 - Prise en charge de Rockstar / Social Club supprimée (aucune API d'installation ; boutiques : Steam, Epic, GOG).
 
 - Réglages > Comptes : ligne « Visuels SteamGridDB (clé API) » (saisie au clavier visuel, enregistrée dans les préférences, relance la recherche des visuels manquants).
+
+- Sons : moteur audio maison (mixeur waveOut, volumes effets/musique dans Réglages > Son, fondus), 11 effets synthétisés (cloches douces en ré majeur), musique d'ambiance au piano doux de 96 s en boucle.

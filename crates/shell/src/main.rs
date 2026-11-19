@@ -266,6 +266,7 @@ fn main() -> Result<(), slint::PlatformError> {
     i18n::init();
     i18n::init_audio_prefs();
     system::sfx::init();
+    i18n::init_volumes();
     shell.refresh_lang();
     shell.ui.set_rows(shell.settings.rows.clone().into());
     shell.ui.set_offers(shell.offers.clone().into());
@@ -467,6 +468,12 @@ fn main() -> Result<(), slint::PlatformError> {
     let s = shell.clone();
     let upd = slint::Timer::default();
     upd.start(slint::TimerMode::Repeated, Duration::from_secs(6 * 3600), move || s.check_updates(false));
+    // Petit son de démarrage une fois le moteur audio prêt.
+    slint::Timer::single_shot(Duration::from_millis(1800), || {
+        if i18n::sfx() {
+            system::sfx::play(system::sfx::Sfx::Boot);
+        }
+    });
     // Test sans manette : HEARTH_PADDEMO=bar|kbd affiche le bandeau du mode souris ou le clavier visuel.
     if let Ok(v) = std::env::var("HEARTH_PADDEMO") {
         let s = shell.clone();
@@ -530,10 +537,14 @@ impl Shell {
             Ok(session) => {
                 let hands_off = g.anticheat || compat.anticheat || !compat.borderless;
                 self.running.borrow_mut().push(Running { tile: i, session, hands_off, closing: false, started: std::time::Instant::now() });
+                if i18n::sfx() {
+                    system::sfx::play(system::sfx::Sfx::Launch);
+                }
                 self.rebuild();
             }
             Err(e) => {
                 self.hide_splash();
+                system::sfx::play(system::sfx::Sfx::Error);
             }
         }
     }
@@ -1790,21 +1801,25 @@ impl Shell {
         use system::sfx::Sfx;
         let s = if after[0] != before[0] {
             if a == 5 {
-                Some(Sfx::Back)
+                // Fermer un panneau ou un menu : son de fermeture ; simple retour en arrière : son de retour.
+                if matches!(before[0], 2 | 3 | 7 | 8 | 9 | 10 | 4 | 5) { Some(Sfx::Close) } else { Some(Sfx::Back) }
             } else if matches!(after[0], 2 | 3 | 7 | 8 | 9 | 10) || a == 7 {
                 Some(Sfx::Open)
             } else {
                 Some(Sfx::Select)
             }
+        } else if after[1] != before[1] {
+            Some(Sfx::Tab)
         } else if after != before {
             match a {
                 0..=3 => Some(Sfx::Move),
+                4 if before[0] == 4 => Some(Sfx::Key),
                 4 => Some(Sfx::Select),
                 5 => Some(Sfx::Back),
                 _ => None,
             }
         } else if a == 4 {
-            Some(Sfx::Select)
+            Some(if before[0] == 4 { Sfx::Key } else { Sfx::Select })
         } else {
             None
         };

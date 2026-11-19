@@ -235,6 +235,9 @@ impl Settings {
             0 => vec![
                 row("Sortie audio", s.devices.iter().find(|d| d.default).map_or("—".into(), |d| d.name.clone()), s.devices.len() > 1),
                 row("Volume", audio::volume().map_or("—".into(), |v| format!("{v} %")), audio::volume().is_some()),
+                row("Volume des effets", format!("{} %", i18n::sfx_vol()), true),
+                row("Volume de la musique", format!("{} %", i18n::music_vol()), true),
+                row("Musique d'ambiance", onoff(Some(i18n::music())), false),
             ],
             1 => match &s.revert {
                 Some((_, secs)) => {
@@ -307,8 +310,6 @@ impl Settings {
             ],
             10 => vec![
                 row("Afficher les bannières", onoff(Some(i18n::toasts())), false),
-                row("Effets sonores", onoff(Some(i18n::sfx())), false),
-                row("Musique d'ambiance", onoff(Some(i18n::music())), false),
             ],
             12 if s.loading => vec![row("Lecture…", String::new(), false)],
             12 => {
@@ -344,6 +345,9 @@ impl Settings {
                     audio::set_volume((v as i32 + d * 5).clamp(0, 100) as u32);
                 }
             }
+            (0, 2, d) if d != 0 => i18n::set_sfx_vol((i18n::sfx_vol() as i32 + d * 10).clamp(0, 100) as u32),
+            (0, 3, d) if d != 0 => i18n::set_music_vol((i18n::music_vol() as i32 + d * 10).clamp(0, 100) as u32),
+            (0, 4, 0) => i18n::set_music(!i18n::music()),
             (1, r, d) if s.revert.is_none() => match (r, d) {
                 (0, d) if d != 0 => {
                     s.ri = step(s.ri, s.res.len(), d);
@@ -433,8 +437,6 @@ impl Settings {
                 s.data.screen_min = system::power::timeout(false).or(Some(m));
             }
             (10, 0, 0) => i18n::set_toasts(!i18n::toasts()),
-            (10, 1, 0) => i18n::set_sfx(!i18n::sfx()),
-            (10, 2, 0) => i18n::set_music(!i18n::music()),
             (12, r, 0) if !s.loading => {
                 out = match account_rows(&s.data.accounts).into_iter().nth(r as usize).map(|(_, _, a)| a) {
                     Some(Act::Install(n)) => Outcome::InstallClient(n),

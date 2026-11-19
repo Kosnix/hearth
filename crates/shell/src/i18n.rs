@@ -26,6 +26,8 @@ const EN: &[(&str, &str)] = &[
     ("Entrée", "Enter"),
     ("Fermer", "Close"),
     ("Ajouter une boutique", "Add a store"),
+    ("Volume des effets", "Effects volume"),
+    ("Volume de la musique", "Music volume"),
     ("Connectez-vous dans la fenêtre du client", "Sign in in the client window"),
     ("Retour automatique à l'ancien mode dans", "Automatic revert to the previous mode in"),
     ("Mode actuel :", "Current mode:"),
@@ -330,4 +332,43 @@ pub fn set_music(on: bool) {
 pub fn init_audio_prefs() {
     SFX.store(pref("sfx").as_deref() != Some("0"), Ordering::Relaxed);
     MUSIC.store(pref("music").as_deref() != Some("0"), Ordering::Relaxed);
+}
+
+static SFX_VOL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(80);
+static MUSIC_VOL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(40);
+
+pub fn sfx_vol() -> u32 {
+    SFX_VOL.load(Ordering::Relaxed)
+}
+
+pub fn music_vol() -> u32 {
+    MUSIC_VOL.load(Ordering::Relaxed)
+}
+
+/// Envoie les volumes (réglages) au moteur audio.
+pub fn apply_volumes() {
+    system::sfx::set_volumes(if sfx() { sfx_vol() } else { 0 }, music_vol());
+}
+
+pub fn set_sfx_vol(v: u32) {
+    SFX_VOL.store(v.min(100), Ordering::Relaxed);
+    set_pref("sfx_vol", &v.min(100).to_string());
+    apply_volumes();
+}
+
+pub fn set_music_vol(v: u32) {
+    MUSIC_VOL.store(v.min(100), Ordering::Relaxed);
+    set_pref("music_vol", &v.min(100).to_string());
+    apply_volumes();
+}
+
+/// Volumes enregistrés (à appeler après le démarrage du moteur audio).
+pub fn init_volumes() {
+    if let Some(v) = pref("sfx_vol").and_then(|s| s.parse::<u32>().ok()) {
+        SFX_VOL.store(v.min(100), Ordering::Relaxed);
+    }
+    if let Some(v) = pref("music_vol").and_then(|s| s.parse::<u32>().ok()) {
+        MUSIC_VOL.store(v.min(100), Ordering::Relaxed);
+    }
+    apply_volumes();
 }
