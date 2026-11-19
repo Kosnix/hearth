@@ -953,6 +953,7 @@ impl Shell {
     fn display_changed(&self) {
         if let Some(h) = wm::find_window(MAIN_TITLE) {
             wm::fit_to_monitor(h);
+            wm::nudge(h);
         }
     }
 
@@ -965,6 +966,7 @@ impl Shell {
         if let Some(h) = wm::find_window(MAIN_TITLE) {
             // Un jeu qui a changé la résolution a pu rétrécir notre fenêtre : on la recale.
             wm::fit_to_monitor(h);
+            wm::nudge(h);
             wm::focus(h);
         }
         self.ui.invoke_nav(Nav::Guide as i32);
@@ -1515,8 +1517,9 @@ impl Shell {
             }
             let key = &key;
             std::thread::scope(|sc| {
-                for chunk in jobs.chunks(jobs.len().div_ceil(6).max(1)) {
+                for chunk in jobs.chunks(jobs.len().div_ceil(3).max(1)) {
                     sc.spawn(move || {
+                        imgload::background();
                         for (id, title, art) in chunk {
                             if stores::ensure_art_for(id, title, art, key.as_deref()) {
                                 let id = id.clone();
@@ -1631,9 +1634,12 @@ impl Shell {
         let cover = if g.cover.is_empty() { stores::asset(&g.id, "cover") } else { Some(PathBuf::from(&g.cover)) };
         let (hero, logo) = (stores::asset(&g.id, "hero"), stores::asset(&g.id, "logo"));
         std::thread::spawn(move || {
-            let c = cover.and_then(|p| imgload::decode(&p, 600, 900));
-            let h = hero.and_then(|p| imgload::decode(&p, 1920, 1080));
-            let l = logo.and_then(|p| imgload::decode(&p, 800, 320));
+            let (c, h, l) = imgload::limited(|| {
+                let c = cover.and_then(|p| imgload::decode(&p, 600, 900));
+                let h = hero.and_then(|p| imgload::decode(&p, 1920, 1080));
+                let l = logo.and_then(|p| imgload::decode(&p, 800, 320));
+                (c, h, l)
+            });
             let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.art_ready(&id, c, h, l)));
         });
     }

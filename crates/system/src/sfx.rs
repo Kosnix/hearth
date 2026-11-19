@@ -17,7 +17,9 @@ pub enum Sfx {
 }
 
 const NAMES: [&str; 5] = ["move", "select", "back", "open", "notify"];
-const VERSION: &str = "v3";
+const VERSION: &str = "v5";
+/// Faux tant qu'une vraie musique d'ambiance n'est pas composée (la nappe synthétisée a été jugée désagréable).
+const MUSIC_ENABLED: bool = false;
 
 fn dir() -> PathBuf {
     PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("Hearth").join("sfx")
@@ -104,6 +106,8 @@ fn build(i: usize) -> Vec<u8> {
         }
     }
     lowpass(&mut o, 0.45);
+    // Crêtes à -6 dBFS (déplacement plus discret : -9 dBFS), notification un peu plus basse.
+    normalize(&mut o, [0.35, 0.5, 0.5, 0.45, 0.45][i.min(4)]);
     wav(R, &o)
 }
 
@@ -130,6 +134,7 @@ fn build_music() -> Vec<u8> {
         }
     }
     lowpass(&mut o, 0.25);
+    normalize(&mut o, 0.2);
     wav(R, &o)
 }
 
@@ -168,21 +173,35 @@ pub fn init() {
             }
             mci(&format!("open \"{}\" type waveaudio alias hs_music", m.display()));
             READY.store(true, std::sync::atomic::Ordering::SeqCst);
-            while let Ok(c) = rx.recv() {
-                match c {
-                    Cmd::Play(i, at) => {
+            // MCI waveaudio refuse « repeat » (erreur 259) : la boucle se fait ici, en relançant la musique dès qu'elle s'arrête.
+            let mut want = false;
+            loop {
+                match rx.recv_timeout(std::time::Duration::from_millis(150)) {
+                    Ok(Cmd::Play(i, at)) => {
                         // Sons en retard (interface bloquée un instant) abandonnés : jamais de rafale de sons à la suite.
                         if at.elapsed() < std::time::Duration::from_millis(150) {
                             mci(&format!("play hs_{} from 0", NAMES[i]));
                         }
                     }
-                    Cmd::Music(on) => {
-                        if on && !STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                            mci("play hs_music repeat");
+                    Ok(Cmd::Music(on)) => {
+                        want = on;
+                        STARTED.store(true, std::sync::atomic::Ordering::SeqCst);
+                        if on {
+                            match mci_mode("hs_music").as_str() {
+                                "paused" => mci("resume hs_music"),
+                                "playing" => {}
+                                _ => mci("play hs_music from 0"),
+                            }
                         } else {
-                            mci(if on { "resume hs_music" } else { "pause hs_music" });
+                            mci("pause hs_music");
                         }
                     }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        if want && mci_mode("hs_music") == "stopped" {
+                            mci("play hs_music from 0");
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
         });
@@ -199,8 +218,30 @@ pub fn play(s: Sfx) {
 
 /// Musique d'ambiance : lecture en boucle (la première fois), puis pause / reprise. Faux tant que le thread audio n'est pas prêt.
 pub fn music(on: bool) -> bool {
+    // Musique d'ambiance suspendue (à refaire) : aucune lecture, mais on répond « fait » pour que l'interface ne réessaie pas.
+    if !MUSIC_ENABLED {
+        return true;
+    }
     if !READY.load(std::sync::atomic::Ordering::SeqCst) {
         return false;
     }
     TX.get().is_some_and(|tx| tx.send(Cmd::Music(on)).is_ok())
+}
+
+/// Ramène la crête du son à `peak` (0..1) : niveaux homogènes d'un son à l'autre.
+fn normalize(s: &mut [f32], peak: f32) {
+    let max = s.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    if max > 1e-6 {
+        let g = peak / max;
+        s.iter_mut().for_each(|x| *x *= g);
+    }
+}
+
+fn mci_mode(alias: &str) -> String {
+    let w: Vec<u16> = format!("status {alias} mode").encode_utf16().chain(Some(0)).collect();
+    let mut buf = [0u16; 32];
+    unsafe {
+        let _ = mciSendStringW(PCWSTR(w.as_ptr()), Some(&mut buf), None);
+    }
+    String::from_utf16_lossy(&buf).trim_end_matches('\0').to_string()
 }

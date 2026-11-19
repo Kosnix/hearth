@@ -17,3 +17,33 @@ pub fn decode(path: &Path, max_w: u32, max_h: u32) -> Option<Buf> {
 pub fn image(b: &Buf) -> slint::Image {
     slint::Image::from_rgba8(b.clone())
 }
+
+/// Priorité basse pour le thread courant : le téléchargement et le décodage de fond ne doivent jamais retarder l'interface.
+pub fn background() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetCurrentThread() -> isize;
+        fn SetThreadPriority(h: isize, p: i32) -> i32;
+    }
+    unsafe {
+        SetThreadPriority(GetCurrentThread(), -2); // THREAD_PRIORITY_LOWEST
+    }
+}
+
+static SLOTS: (std::sync::Mutex<u32>, std::sync::Condvar) = (std::sync::Mutex::new(0), std::sync::Condvar::new());
+
+/// Au plus 2 décodages de fond en même temps (le rafraîchissement de tous les visuels lançait un thread par jeu).
+pub fn limited<T>(f: impl FnOnce() -> T) -> T {
+    {
+        let mut n = SLOTS.0.lock().unwrap_or_else(|e| e.into_inner());
+        while *n >= 2 {
+            n = SLOTS.1.wait(n).unwrap_or_else(|e| e.into_inner());
+        }
+        *n += 1;
+    }
+    background();
+    let r = f();
+    *SLOTS.0.lock().unwrap_or_else(|e| e.into_inner()) -= 1;
+    SLOTS.1.notify_one();
+    r
+}

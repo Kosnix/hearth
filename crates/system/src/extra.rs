@@ -170,7 +170,13 @@ pub mod about {
         let ram = unsafe { GlobalMemoryStatusEx(&mut mem) }.map(|_| format!("{} Go", (mem.ullTotalPhys + 500_000_000) / 1_000_000_000)).unwrap_or_default();
         vec![
             ("PC", std::env::var("COMPUTERNAME").unwrap_or_default()),
-            ("Windows", format!("{} {} (build {})", get(win, "ProductName"), get(win, "DisplayVersion"), get(win, "CurrentBuild"))),
+            // Le registre garde « Windows 10 » même sous Windows 11 (build 22000 et plus).
+            ("Windows", {
+                let build = get(win, "CurrentBuild");
+                let name = get(win, "ProductName");
+                let name = if build.parse::<u32>().is_ok_and(|b| b >= 22000) { name.replace("Windows 10", "Windows 11") } else { name };
+                format!("{name} {} (build {build})", get(win, "DisplayVersion"))
+            }),
             ("Processeur", get(r"HARDWARE\DESCRIPTION\System\CentralProcessor\0", "ProcessorNameString").trim().to_string()),
             ("Mémoire", ram),
         ]

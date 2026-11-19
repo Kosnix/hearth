@@ -408,3 +408,15 @@ pub fn foreground_game(exclude: &[&str]) -> Option<HWND> {
     let name = exe_name(h);
     (!name.is_empty() && !exclude.contains(&name.as_str())).then_some(h)
 }
+
+/// Force la fenêtre à se redimensionner (1 pixel de moins puis retour) : après un jeu qui a changé la résolution,
+/// la surface de rendu garde parfois une mauvaise taille (bande non peinte en haut de l'écran).
+pub fn nudge(h: HWND) {
+    let m = monitor_rect(h);
+    let (w, hh) = (m.right - m.left, m.bottom - m.top);
+    unsafe {
+        let flags = SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE;
+        let _ = SetWindowPos(h, None, m.left, m.top, w, hh - 1, flags);
+        let _ = SetWindowPos(h, None, m.left, m.top, w, hh, flags);
+    }
+}
