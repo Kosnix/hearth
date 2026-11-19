@@ -377,7 +377,6 @@ component NavKeys inherits FocusScope {
         if (typing) {
             if (e.text == Key.Return) { root.typed("\n"); return accept; }
             if (e.text == Key.Backspace) { root.typed("\u{8}"); return accept; }
-            if (e.modifiers.control && (e.text == "v" || e.text == "V" || e.text == "{16}")) { root.typed("{16}"); return accept; }
             if (e.modifiers.control && (e.text == "v" || e.text == "V" || e.text == "\u{16}")) { root.typed("\u{16}"); return accept; }
             if (!e.modifiers.control && !e.modifiers.alt) { root.typed(e.text); return accept; }
             return reject;
