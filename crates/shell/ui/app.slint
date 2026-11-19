@@ -62,6 +62,7 @@ export struct Offer {
     store: string,
     art: image,
     owned: bool,
+    initial: string,
 }
 
 export global Theme {
@@ -270,9 +271,10 @@ component GameTile inherits Rectangle {
         font-weight: 700;
         wrap: word-wrap;
     }
+    // Pastilles discrètes (coin bas) : elles ne masquent plus le titre de la jaquette.
     if tile.running: Rectangle {
         x: 10px;
-        y: 10px;
+        y: parent.height - 40px;
         width: badge.preferred-width + 20px;
         height: 30px;
         border-radius: 15px;
@@ -280,20 +282,22 @@ component GameTile inherits Rectangle {
         badge := Text {
             text: @tr("En cours");
             font-size: 16px;
-            color: Theme.text;
+            font-weight: 700;
+            color: Theme.on-accent;
         }
     }
     if tile.install: Rectangle {
-        x: 10px;
-        y: 10px;
-        width: badge2.preferred-width + 20px;
-        height: 30px;
-        border-radius: 15px;
-        background: #2fa36b;
-        badge2 := Text {
-            text: @tr("À installer");
-            font-size: 16px;
-            color: Theme.text;
+        x: parent.width - 46px;
+        y: parent.height - 46px;
+        width: 36px;
+        height: 36px;
+        border-radius: 18px;
+        background: #000000b0;
+        Text {
+            text: "\u{E896}";
+            font-family: Theme.icons;
+            font-size: 18px;
+            color: #4fd18f;
         }
     }
     Rectangle {
@@ -657,25 +661,26 @@ export component App inherits Window {
     }
     // Visuel du jeu en fond de la fiche, très atténué, avec fondu croisé d'un jeu à l'autre.
     if tab == 0 && games.length > 0: HeroFade {
-        x: 800px;
+        x: 0px;
         y: 728px;
-        width: 1760px;
+        width: 2560px;
         height: 712px;
-        opacity: 0.24;
+        opacity: 0.55;
         source: games[sel].hero.width >= 1400 ? games[sel].hero : @image-url("");
     }
+    // Voile sombre à gauche : le logo et le bouton Jouer restent lisibles sur n'importe quel visuel.
     if tab == 0 && games.length > 0: Rectangle {
-        x: 800px;
+        x: 0px;
         y: 728px;
-        width: 900px;
+        width: 1500px;
         height: 712px;
-        background: @linear-gradient(90deg, #1b1b1d 0%, #1b1b1d00 100%);
+        background: @linear-gradient(90deg, #1b1b1d 0%, #1b1b1de0 40%, #1b1b1d00 100%);
     }
     if tab == 0 && games.length > 0: Rectangle {
-        x: 800px;
-        y: 1180px;
-        width: 1760px;
-        height: 260px;
+        x: 0px;
+        y: 1140px;
+        width: 2560px;
+        height: 300px;
         background: @linear-gradient(180deg, #1b1b1d00 0%, #1b1b1d 100%);
     }
     if tab == 0 && games.length > 0: Rectangle {
@@ -693,12 +698,13 @@ export component App inherits Window {
         height: 420px;
         for t[i] in games: Rectangle {
             property <int> d: i - sel;
-            x: d == 0 ? 1300px : (d > 0 ? 1548px + (d - 1) * 246px : 1076px + (d + 1) * 246px);
+            x: d == 0 ? 160px : (d > 0 ? 418px + (d - 1) * 246px : 120px + d * 246px);
+            opacity: d < 0 ? 0 : 1;
             y: d == 0 ? 14px : 48px;
             width: d == 0 ? 234px : 210px;
             height: d == 0 ? 370px : 332px;
-            animate x, y, width, height { duration: 190ms; easing: ease-out; }
-            if d >= -7 && d <= 7: GameTile {
+            animate x, y, width, height, opacity { duration: 190ms; easing: ease-out; }
+            if d >= -1 && d <= 8: GameTile {
                 width: parent.width;
                 height: parent.height;
                 tile: t;
@@ -923,7 +929,14 @@ export component App inherits Window {
                     height: 315px;
                     border-radius: 16px;
                     clip: true;
-                    background: Theme.tile;
+                    background: @linear-gradient(135deg, #3a3a44 0%, #25252b 100%);
+                    // Jaquette absente : grande initiale en filigrane (comme une tuile de jeu sans visuel).
+                    if o.art.width == 0: Text {
+                        text: o.initial;
+                        color: #ffffff30;
+                        font-size: 190px;
+                        font-weight: 800;
+                    }
                     Image {
                         width: 100%;
                         height: 100%;
@@ -936,32 +949,35 @@ export component App inherits Window {
                         border-color: Theme.accent;
                     }
                 }
+                // Titre sur deux lignes (deux éditions d'un même jeu restent distinguables), puis prix et boutique sur une ligne.
                 Text {
                     x: 0px;
-                    y: 328px;
+                    y: 326px;
                     width: 210px;
+                    height: 60px;
                     text: o.title;
-                    font-size: 24px;
+                    font-size: 22px;
                     font-weight: 600;
                     color: on ? Theme.text : Theme.dim;
+                    wrap: word-wrap;
                     overflow: elide;
                 }
                 Text {
                     x: 0px;
-                    y: 362px;
+                    y: 384px;
                     width: 210px;
                     text: o.owned ? @tr("Possédé") : o.price;
-                    font-size: o.owned ? 22px : 26px;
+                    font-size: o.owned ? 22px : 24px;
                     font-weight: 800;
-                    color: o.owned ? Theme.text : Theme.accent;
+                    color: o.owned ? #4fd18f : Theme.accent;
                     overflow: elide;
                 }
                 Text {
                     x: 0px;
-                    y: 398px;
+                    y: 416px;
                     width: 210px;
                     text: o.store;
-                    font-size: 20px;
+                    font-size: 18px;
                     color: Theme.dim;
                     overflow: elide;
                 }
@@ -1076,6 +1092,14 @@ export component App inherits Window {
             source: det-hero;
             image-fit: cover;
         }
+        // Voile sur tout le visuel : titre, genres et description restent lisibles même sur une image claire.
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: 760px;
+            background: #1b1b1d99;
+        }
         Rectangle {
             x: 0px;
             y: 380px;
@@ -1086,7 +1110,7 @@ export component App inherits Window {
         Rectangle {
             x: 0px;
             y: 0px;
-            width: 1900px;
+            width: 2100px;
             height: 760px;
             background: @linear-gradient(90deg, #1b1b1df0 0%, #1b1b1d00 100%);
         }
@@ -1171,14 +1195,14 @@ export component App inherits Window {
                 text: d.store;
                 font-size: 30px;
                 font-weight: 600;
-                color: Theme.text;
+                color: i == dsel ? Theme.on-accent : Theme.text;
             }
             Text {
                 x: parent.width - self.width - 28px;
                 text: d.price;
                 font-size: 30px;
                 font-weight: 700;
-                color: Theme.text;
+                color: i == dsel ? Theme.on-accent : Theme.text;
             }
             TouchArea {
                 clicked => { root.dsel = i; root.deal-pick(i); }
@@ -1242,7 +1266,7 @@ export component App inherits Window {
                     text: r.name;
                     font-size: 30px;
                     font-weight: r.kind == 3 ? 700 : 500;
-                    color: Theme.text;
+                    color: i == dlsel ? Theme.on-accent : Theme.text;
                     overflow: elide;
                 }
                 Text {
@@ -1250,7 +1274,7 @@ export component App inherits Window {
                     y: r.pct >= 0 ? 16px : (parent.height - self.height) / 2;
                     text: r.status;
                     font-size: 26px;
-                    color: i == dlsel ? Theme.text : (r.kind == 1 ? #ffd27a : Theme.dim);
+                    color: i == dlsel ? Theme.on-accent : (r.kind == 1 ? #ffd27a : Theme.dim);
                 }
                 if r.pct >= 0: Rectangle {
                     x: 32px;
@@ -1350,13 +1374,13 @@ export component App inherits Window {
                 text: p.name;
                 font-size: 34px;
                 font-weight: 600;
-                color: Theme.text;
+                color: i == pfsel ? Theme.on-accent : Theme.text;
             }
             if p.active: Text {
                 x: parent.width - self.width - 36px;
                 text: @tr("Profil actif");
                 font-size: 26px;
-                color: Theme.text;
+                color: i == pfsel ? Theme.on-accent : Theme.text;
             }
             TouchArea {
                 clicked => { root.pfsel = i; root.profile-pick(i); }
@@ -1453,7 +1477,7 @@ export component App inherits Window {
                     x: 28px;
                     text: item;
                     font-size: 28px;
-                    color: Theme.text;
+                    color: i == msel ? Theme.on-accent : Theme.text;
                 }
                 TouchArea {
                     clicked => { root.msel = i; root.menu-pick(i); }
@@ -1488,7 +1512,7 @@ export component App inherits Window {
                     x: 24px;
                     text: item;
                     font-size: 28px;
-                    color: Theme.text;
+                    color: i == pw ? Theme.on-accent : Theme.text;
                 }
                 TouchArea {
                     clicked => {
@@ -1528,13 +1552,13 @@ export component App inherits Window {
                 text: ["\u{E767}", "\u{E7F4}", "\u{E701}", "\u{E702}", "\u{E7FC}", "\u{E774}", "\u{E895}", "\u{EDA2}", "\u{E950}", "\u{E7E8}", "\u{E7ED}", "\u{E946}", "\u{E77B}"][i];
                 font-family: Theme.icons;
                 font-size: 28px;
-                color: i == cat ? Theme.text : Theme.dim;
+                color: i == cat ? (sfocus == 0 ? Theme.on-accent : Theme.text) : Theme.dim;
             }
             Text {
                 x: 84px;
                 text: c;
                 font-size: 28px;
-                color: i == cat ? Theme.text : Theme.dim;
+                color: i == cat ? (sfocus == 0 ? Theme.on-accent : Theme.text) : Theme.dim;
             }
             TouchArea {
                 clicked => {
@@ -1565,13 +1589,13 @@ export component App inherits Window {
                     x: 32px;
                     text: r.label;
                     font-size: 28px;
-                    color: Theme.text;
+                    color: sfocus == 1 && i == srow ? Theme.on-accent : Theme.text;
                 }
                 Text {
                     x: parent.width - self.width - 32px;
                     text: r.adjustable ? "‹  " + r.value + "  ›" : r.value;
                     font-size: 28px;
-                    color: sfocus == 1 && i == srow ? Theme.text : Theme.dim;
+                    color: sfocus == 1 && i == srow ? Theme.on-accent : Theme.dim;
                 }
                 TouchArea {
                     clicked => {
@@ -1693,7 +1717,7 @@ export component App inherits Window {
                     text: n.title;
                     font-size: 26px;
                     font-weight: 700;
-                    color: Theme.text;
+                    color: i == nsel ? Theme.on-accent : Theme.text;
                     overflow: elide;
                 }
                 Text {
@@ -1701,7 +1725,7 @@ export component App inherits Window {
                     y: 22px;
                     text: n.time;
                     font-size: 20px;
-                    color: i == nsel ? Theme.text : Theme.dim;
+                    color: i == nsel ? Theme.on-accent : Theme.dim;
                 }
                 Text {
                     x: 40px;
@@ -1709,7 +1733,7 @@ export component App inherits Window {
                     width: parent.width - 64px;
                     text: n.text;
                     font-size: 22px;
-                    color: i == nsel ? Theme.text : Theme.dim;
+                    color: i == nsel ? Theme.on-accent : Theme.dim;
                     overflow: elide;
                 }
                 TouchArea {
@@ -1791,7 +1815,7 @@ export component App inherits Window {
                 text: it.label;
                 font-size: 30px;
                 font-weight: 600;
-                color: Theme.text;
+                color: i == psel ? Theme.on-accent : Theme.text;
                 overflow: elide;
             }
             if it.sub != "": Text {
@@ -1929,7 +1953,7 @@ export component App inherits Window {
             Text {
                 text: k;
                 font-size: 34px;
-                color: Theme.text;
+                color: kbx == mod(i, 10) && kby == floor(i / 10) ? Theme.on-accent : Theme.text;
             }
             TouchArea {
                 clicked => {
@@ -1949,7 +1973,7 @@ export component App inherits Window {
             Text {
                 text: lbl;
                 font-size: 28px;
-                color: Theme.text;
+                color: kbx == i && kby == 4 ? Theme.on-accent : Theme.text;
             }
             TouchArea {
                 clicked => {
@@ -1984,7 +2008,7 @@ component GuideRow inherits Rectangle {
             text: glyph;
             font-family: Theme.icons;
             font-size: 24px;
-            color: Theme.text;
+            color: selected ? Theme.on-accent : Theme.text;
         }
     }
     Text {
@@ -1992,14 +2016,14 @@ component GuideRow inherits Rectangle {
         y: gauge >= 0 ? 10px : (parent.height - self.height) / 2;
         text: label;
         font-size: 24px;
-        color: Theme.text;
+        color: selected ? Theme.on-accent : Theme.text;
     }
     Text {
         x: parent.width - self.width - 20px;
         y: gauge >= 0 ? 10px : (parent.height - self.height) / 2;
         text: value;
         font-size: 22px;
-        color: selected ? Theme.text : Theme.dim;
+        color: selected ? Theme.on-accent : Theme.dim;
     }
     if gauge >= 0: Rectangle {
         x: 78px;

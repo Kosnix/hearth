@@ -1416,6 +1416,7 @@ impl Shell {
                 store: o.store.as_str().into(),
                 art: p.as_ref().map(imgload::image).unwrap_or_default(),
                 owned: false,
+                initial: o.title.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().to_string()).unwrap_or_default().into(),
             })
             .collect();
         let own = self.owned_titles();

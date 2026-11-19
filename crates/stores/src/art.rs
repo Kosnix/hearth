@@ -83,10 +83,32 @@ fn steamgriddb(id: &str, title: &str, key: &str) -> Option<String> {
     sgdb_find(id, title, key).ok()??.url("cover")
 }
 
-fn download(url: &str) -> Option<(Vec<u8>, &'static str)> {
+fn download(url: &str, limit: (u32, u32)) -> Option<(Vec<u8>, &'static str)> {
     let data = http::get(url, &[])?;
     let ext = extension(&data)?;
-    Some((data, ext))
+    Some(shrink(data, ext, limit))
+}
+
+/// Visuels trop lourds (jaquettes Epic de plusieurs Mo) : réduits à la taille d'affichage et réencodés (JPEG, ou PNG s'il y a de la transparence).
+fn shrink(data: Vec<u8>, ext: &'static str, (w, h): (u32, u32)) -> (Vec<u8>, &'static str) {
+    if data.len() < 250_000 {
+        return (data, ext);
+    }
+    let Ok(img) = image::load_from_memory(&data) else { return (data, ext) };
+    let img = if img.width() > w || img.height() > h { img.resize(w, h, image::imageops::FilterType::Triangle) } else { img };
+    let mut out = std::io::Cursor::new(Vec::new());
+    let ok = if img.color().has_alpha() {
+        img.write_to(&mut out, image::ImageFormat::Png).is_ok()
+    } else {
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 88).encode_image(&img.to_rgb8()).is_ok()
+    };
+    let new_ext = if img.color().has_alpha() { "png" } else { "jpg" };
+    let bytes = out.into_inner();
+    if ok && bytes.len() < data.len() {
+        (bytes, new_ext)
+    } else {
+        (data, ext)
+    }
 }
 
 /// Télécharge les visuels manquants du jeu. Renvoie vrai si au moins un fichier a été ajouté (bloquant).
@@ -128,7 +150,7 @@ pub fn ensure_art_for(id: &str, title: &str, art: &crate::Art, sgdb_key: Option<
             candidates.extend(key.and_then(|k| steamgriddb(id, title, k)));
         }
         for url in candidates {
-            if let Some((data, ext)) = download(&url) {
+            if let Some((data, ext)) = download(&url, match kind { "hero" => (1920, 1080), "logo" => (1000, 400), _ => (720, 1080) }) {
                 if std::fs::create_dir_all(&dir).is_ok() {
                     for old in ["png", "jpg", "jpeg"] {
                         let _ = std::fs::remove_file(dir.join(format!("{kind}.{old}")));
@@ -162,7 +184,7 @@ fn fetch_image(url: &str) -> Option<PathBuf> {
             return Some(p);
         }
     }
-    let (data, ext) = download(url)?;
+    let (data, ext) = download(url, (420, 630))?;
     std::fs::create_dir_all(&dir).ok()?;
     let p = dir.join(format!("{hash:016x}.{ext}"));
     std::fs::write(&p, data).ok()?;
@@ -177,7 +199,7 @@ pub fn save_art(id: &str, offer: &crate::Offer) -> bool {
             continue;
         }
         for url in urls {
-            if let Some((data, ext)) = download(url) {
+            if let Some((data, ext)) = download(url, if kind == "hero" { (1920, 1080) } else { (720, 1080) }) {
                 let dir = assets_dir().join(id);
                 if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(dir.join(format!("{kind}.{ext}")), data).is_ok() {
                     added = true;
