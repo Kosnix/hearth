@@ -196,7 +196,14 @@ pub mod install {
         if !crate::admin::enabled() {
             crate::admin::setup()?;
         }
-        crate::admin::request(&format!("winget {id}"))
+        match crate::admin::request(&format!("winget {id}")) {
+            // Assistant d'une ancienne version (liste d'opérations plus courte) : réinstallé une fois, puis nouvel essai.
+            Err(e) if e.contains("refusée") => {
+                crate::admin::setup()?;
+                crate::admin::request(&format!("winget {id}"))
+            }
+            r => r,
+        }
     }
 
     /// Installation directe (sans assistant) : Windows demande alors une confirmation à chaque fois.
