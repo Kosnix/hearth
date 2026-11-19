@@ -80,6 +80,7 @@ pub enum Outcome {
     Connect(String),
     LangChanged,
     ThemeChanged,
+    Oobe,
     CheckUpdates(bool),
     BtScan,
     BtPair(String, String),
@@ -333,6 +334,7 @@ impl Settings {
             11 => {
                 let mut v: Vec<SettingRow> = s.data.about.iter().map(|(k, val)| row(k, val.clone(), false)).collect();
                 v.push(row("Hearth", env!("CARGO_PKG_VERSION").into(), false));
+                v.push(row("Assistant de démarrage", tr("Revoir"), false));
                 v
             }
             _ => vec![],
@@ -371,6 +373,7 @@ impl Settings {
                 theme::set_tone(theme::tone() as i32 + d);
                 out = Outcome::ThemeChanged;
             }
+            (11, r, 0) if r as usize == s.data.about.len() + 1 => out = Outcome::Oobe,
             (13, 3, 0) => {
                 theme::reset();
                 out = Outcome::ThemeChanged;

@@ -16,6 +16,7 @@ mod addflow;
 mod i18n;
 mod imgload;
 mod menus;
+mod oobe;
 mod profiles;
 mod scmd;
 mod playtime;
@@ -79,6 +80,12 @@ struct Shell {
     splash: Splash,
     pad: PadOverlay,
     pad_acc: Cell<bool>,
+    oobe_step: Cell<i32>,
+    oobe_rows: Rc<VecModel<SettingRow>>,
+    oobe_content: Cell<usize>,
+    oobe_sys: RefCell<[u8; 4]>,
+    kb_oobe_name: Cell<bool>,
+    oobe_avatar: Cell<bool>,
     pad_up: Cell<bool>,
     games: RefCell<Vec<Game>>,
     /// Onglet Jeux (installés, non cachés) et onglet Bibliothèque (possédés à installer).
@@ -176,6 +183,12 @@ fn main() -> Result<(), slint::PlatformError> {
         splash: Splash::new()?,
         pad: PadOverlay::new()?,
         pad_acc: Cell::new(false),
+        oobe_step: Cell::new(-1),
+        oobe_rows: Rc::new(VecModel::default()),
+        oobe_content: Cell::new(0),
+        oobe_sys: RefCell::new([0; 4]),
+        kb_oobe_name: Cell::new(false),
+        oobe_avatar: Cell::new(false),
         pad_up: Cell::new(false),
         games: RefCell::new(games),
         tiles: Rc::new(VecModel::default()),
@@ -430,7 +443,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // Pilote de manette Xbox virtuelle (ViGEmBus) : installé automatiquement s'il manque (un seul essai).
     // L'assistant administrateur (une seule validation Windows, au premier lancement) est réinstallé quand sa liste d'opérations change (version 2 : ViGEmBus) ; ensuite plus aucune invite.
     let marker = stores::base_dir().join("helper-v3.done");
-    if !marker.exists() {
+    if !marker.exists() && oobe::is_done() {
         // Marqueur global (tous profils), posé avant la tentative : jamais plus d'une invite par version.
         let _ = std::fs::write(&marker, "1");
         std::thread::spawn(|| {
@@ -509,6 +522,11 @@ fn main() -> Result<(), slint::PlatformError> {
             }
         });
     }
+    let s = shell.clone();
+    shell.ui.on_oobe_key(move |a| s.oobe_key(a));
+    let s = shell.clone();
+    shell.ui.on_oobe_click(move |i| s.oobe_click(i));
+    shell.oobe_start();
     mark("before_run");
     shell.ui.run()
 }
@@ -781,6 +799,7 @@ impl Shell {
             }
             settings::Outcome::Connect(ssid) => self.connect(ssid, None),
             settings::Outcome::LangChanged => self.refresh_lang(),
+            settings::Outcome::Oobe => self.oobe_restart(),
             settings::Outcome::ThemeChanged => {
                 self.apply_theme();
                 self.open_cat_keep(13);
@@ -922,19 +941,25 @@ impl Shell {
                 } else if self.kb_login.replace(false) {
                     5
                 } else if self.kb_sgdb.replace(false) {
-                    3
+                    self.home_zone()
+                } else if self.kb_oobe_name.replace(false) {
+                    13
                 } else if self.rename_id.borrow_mut().take().is_some() {
                     0
                 } else if self.scmd_stage.get() != 0 {
                     self.scmd_cancel();
                     0
                 } else {
-                    3
+                    self.home_zone()
                 };
                 self.ui.set_zone(back);
             }
             settings::Kb::Done(ssid, text) => {
                 let renaming = self.rename_id.borrow_mut().take();
+                if self.kb_oobe_name.replace(false) {
+                    self.oobe_profile_name(text);
+                    return;
+                }
                 if self.kb_profile.replace(false) {
                     self.profile_named(text);
                 } else if self.scmd_stage.get() != 0 {
@@ -943,7 +968,7 @@ impl Shell {
                     self.ui.set_zone(0);
                     self.rename_game(&id, text.trim());
                 } else if self.kb_sgdb.replace(false) {
-                    self.ui.set_zone(3);
+                    self.ui.set_zone(self.home_zone());
                     i18n::set_pref("steamgriddb_key", text.trim());
                     self.push_notif("SteamGridDB", &tr(if text.trim().is_empty() { "Clé supprimée" } else { "Clé enregistrée" }));
                     self.start_art();
@@ -963,7 +988,7 @@ impl Shell {
                     self.ui.set_search_query(text.clone().into());
                     self.load_catalog(if text.trim().is_empty() { None } else { Some(text.trim().to_string()) });
                 } else {
-                    self.ui.set_zone(3);
+                    self.ui.set_zone(self.home_zone());
                     self.connect(ssid, Some(text));
                 }
             }
@@ -992,6 +1017,7 @@ impl Shell {
         self.ui.set_shint(hint.into());
         let max = self.settings.row_count().saturating_sub(1) as i32;
         self.ui.set_srow(self.ui.get_srow().min(max));
+        self.oobe_sync();
     }
 
     fn display_changed(&self) {
@@ -1139,6 +1165,7 @@ impl Shell {
 
     /// Chaque seconde : jeux terminés, et ré-application du sans-bordure (certains jeux le retirent).
     fn tick(&self) {
+        self.oobe_guard();
         self.set_clock();
         self.maybe_prompt_update();
         // Musique d'ambiance : seulement quand la console est devant (pas pendant un jeu).

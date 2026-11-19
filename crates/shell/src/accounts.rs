@@ -78,7 +78,7 @@ impl Shell {
             self.ui.set_qr_hint(tr("Scannez avec l'application Steam sur votre téléphone puis validez").into());
             self.ui.set_qr_action("".into());
         }
-        self.ui.set_qr_return(3);
+        self.ui.set_qr_return(self.home_zone());
         self.ui.set_zone(5);
         *self.login.borrow_mut() = Some(ch.clone());
         if !ch.needs_code {

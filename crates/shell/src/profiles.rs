@@ -128,6 +128,10 @@ impl Shell {
     }
 
     pub fn avatar_pick(&self, a: i32) {
+        if self.oobe_avatar.replace(false) && self.oobe_active() {
+            self.oobe_avatar_set(a);
+            return;
+        }
         let name = std::mem::take(&mut *self.new_profile.borrow_mut());
         let mut s = load();
         let id = format!("p{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0));
