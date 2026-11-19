@@ -47,8 +47,9 @@ const MAP: [(u16, Nav); 8] = [
 ];
 
 const POLL: Duration = Duration::from_millis(10);
-const REPEAT_DELAY: Duration = Duration::from_millis(400);
-const REPEAT_RATE: Duration = Duration::from_millis(120);
+const REPEAT_DELAY: Duration = Duration::from_millis(260);
+const REPEAT_RATE: Duration = Duration::from_millis(80);
+const REPEAT_FAST: Duration = Duration::from_millis(48);
 const STICK: f64 = 0.5; // seuil de déviation du stick, 0..1
 
 type GetState = unsafe extern "system" fn(u32, *mut XINPUT_STATE) -> u32;
@@ -65,6 +66,7 @@ pub fn spawn(on_nav: impl Fn(Nav) + Send + 'static) {
         }
         let mut prev = 0u16;
         let mut next_repeat = Instant::now();
+        let mut hold_start = Instant::now();
         loop {
             while let Some(nav) = poll_hotkey() {
                 on_nav(nav);
@@ -85,13 +87,15 @@ pub fn spawn(on_nav: impl Fn(Nav) + Send + 'static) {
             let now = Instant::now();
             if pressed & DIRS != 0 {
                 next_repeat = now + REPEAT_DELAY;
+                hold_start = now;
             } else if cur & DIRS != 0 && now >= next_repeat {
                 for (bit, nav) in &MAP[..4] {
                     if cur & bit != 0 {
                         on_nav(*nav);
                     }
                 }
-                next_repeat = now + REPEAT_RATE;
+                // Maintenu : la répétition accélère après 1,2 s (défilement rapide des longues listes).
+                next_repeat = now + if now.duration_since(hold_start) > Duration::from_millis(1200) { REPEAT_FAST } else { REPEAT_RATE };
             }
             prev = cur;
             thread::sleep(POLL);

@@ -54,6 +54,14 @@ struct Game {
     hidden: bool,
 }
 
+/// Jeu lancé par le client d'une boutique (Steam…) : seule sa fenêtre est connue, il n'est pas encapsulé.
+struct ExtGame {
+    tile: usize,
+    hwnd: wm::HWND,
+    started: std::time::Instant,
+    closing: bool,
+}
+
 /// Jeu en cours : `tile` est l'indice du jeu dans `Shell::games`.
 struct Running {
     tile: usize,
@@ -79,6 +87,8 @@ struct Shell {
     scmd_stage: Cell<u8>,
     steam_wait: Cell<bool>,
     anim_n: Cell<u32>,
+    ext_game: RefCell<Option<ExtGame>>,
+    ext_pending: Cell<Option<(usize, std::time::Instant)>>,
     last_tab: Cell<i32>,
     profile_rows: Rc<VecModel<ProfileRow>>,
     kb_profile: Cell<bool>,
@@ -166,6 +176,8 @@ fn main() -> Result<(), slint::PlatformError> {
         scmd_stage: Cell::new(0),
         steam_wait: Cell::new(false),
         anim_n: Cell::new(0),
+        ext_game: RefCell::new(None),
+        ext_pending: Cell::new(None),
         last_tab: Cell::new(0),
         profile_rows: Rc::new(VecModel::default()),
         kb_profile: Cell::new(false),
@@ -244,7 +256,7 @@ fn main() -> Result<(), slint::PlatformError> {
     *shell.store_status.borrow_mut() = stores::all().iter().map(|s| (s.name().to_string(), s.detected(), shell.games.borrow().iter().filter(|g| g.store == s.name()).count())).collect();
     i18n::init();
     i18n::init_audio_prefs();
-    std::thread::spawn(system::sfx::init);
+    system::sfx::init();
     shell.refresh_lang();
     shell.ui.set_rows(shell.settings.rows.clone().into());
     shell.ui.set_offers(shell.offers.clone().into());
@@ -415,13 +427,19 @@ impl Shell {
             self.install_owned(&g);
             return;
         }
-        if self.is_scmd_game(&g.exe) && !self.steam_ready(i, &g) {
+        // Jeux Steam : client lancé et connecté, superposition Steam coupée (une fois), fenêtre Steam réduite.
+        let steam_uri = g.uri.is_some() && g.store == "Steam";
+        if (self.is_scmd_game(&g.exe) || steam_uri) && !self.steam_ready(i, &g) {
             return;
         }
         self.start_splash(i, g.uri.is_some());
         if let Some(uri) = &g.uri {
-            // Lancement par le client de la boutique : le jeu n'est pas encapsulé.
+            // Lancement par le client de la boutique : le jeu n'est pas encapsulé, on suivra sa fenêtre (tick).
             let _ = Command::new("cmd").args(["/c", "start", "", uri]).spawn();
+            self.ext_pending.set(Some((i, std::time::Instant::now())));
+            if steam_uri {
+                self.steam_keep(1800);
+            }
             return;
         }
         let exe = Path::new(&g.exe);
@@ -466,6 +484,12 @@ impl Shell {
         }
         let fg = wm::foreground();
         let target = self.running.borrow().iter().find(|r| r.session.owns(fg)).map(|r| (r.tile, r.hands_off));
+        // Jeu lancé par le client Steam : son menu s'ouvre par-dessus, quelle que soit la fenêtre devant (jeu, Steam, console).
+        let ext_tile = self.ext_game.borrow().as_ref().map(|e| e.tile);
+        if let (None, Some(tile)) = (target, ext_tile) {
+            self.open_guide(tile);
+            return;
+        }
         match target {
             // Jeu protégé ou plein écran exclusif : pas d'overlay, retour propre au shell.
             Some((_, true)) => {
@@ -739,7 +763,7 @@ impl Shell {
 
     fn open_guide(&self, tile: usize) {
         self.guide_tile.set(tile);
-        let closing = self.running.borrow().iter().any(|r| r.tile == tile && r.closing);
+        let closing = self.running.borrow().iter().any(|r| r.tile == tile && r.closing) || self.ext_game.borrow().as_ref().is_some_and(|e| e.tile == tile && e.closing);
         self.guide.set_game(self.games.borrow()[tile].name.as_str().into());
         self.guide.set_art(self.tile_for(tile).map(|t| t.cover).unwrap_or_default());
         self.guide.set_closing(closing);
@@ -765,7 +789,9 @@ impl Shell {
 
     fn guide_action(&self, item: i32, delta: i32) {
         let tile = self.guide_tile.get();
-        let game = || self.running.borrow().iter().find(|r| r.tile == tile).and_then(|r| r.session.main_window());
+        let game = || {
+            self.running.borrow().iter().find(|r| r.tile == tile).and_then(|r| r.session.main_window()).or_else(|| self.ext_game.borrow().as_ref().filter(|e| e.tile == tile).map(|e| e.hwnd))
+        };
         match (item, delta) {
             (-1, _) | (0, 0) => {
                 self.hide_guide();
@@ -792,6 +818,17 @@ impl Shell {
                     }
                 }
                 drop(running);
+                {
+                    let mut ext = self.ext_game.borrow_mut();
+                    if let Some(e) = ext.as_mut().filter(|e| e.tile == tile) {
+                        if e.closing {
+                            wm::kill_owner(e.hwnd);
+                        } else {
+                            e.closing = true;
+                            wm::close_window(e.hwnd);
+                        }
+                    }
+                }
                 // Laisse le jeu afficher sa propre confirmation éventuelle.
                 if let Some(h) = game() {
                     wm::focus(h);
@@ -831,6 +868,7 @@ impl Shell {
         } else if self.settings.confirming() {
             self.open_cat_keep(self.ui.get_cat());
         }
+        self.track_ext_game();
         let ended: Vec<(usize, u64)> = {
             let mut running = self.running.borrow_mut();
             let ended: Vec<(usize, u64)> = running.iter().filter(|r| !r.session.alive()).map(|r| (r.tile, r.started.elapsed().as_secs())).collect();
@@ -1433,7 +1471,10 @@ impl Shell {
         let cur = self.tiles.row_data(self.ui.get_sel().max(0) as usize).map(|t| t.gid);
         let cur_lib = self.library.row_data(self.ui.get_lsel().max(0) as usize).map(|t| t.gid);
         let pt = playtime::load();
-        let running: Vec<usize> = self.running.borrow().iter().map(|r| r.tile).collect();
+        let mut running: Vec<usize> = self.running.borrow().iter().map(|r| r.tile).collect();
+        if let Some(e) = self.ext_game.borrow().as_ref() {
+            running.push(e.tile);
+        }
         let all_tab = self.ui.get_tab() == 2;
         let (mut a, mut b): (Vec<(u64, Tile)>, Vec<Tile>) = (vec![], vec![]);
         for (i, g) in self.games.borrow().iter().enumerate() {
@@ -1624,4 +1665,30 @@ fn timed<R>(what: &str, f: impl FnOnce() -> R) -> R {
         }
     }
     r
+}
+
+impl Shell {
+    /// Jeux lancés par un client de boutique : retrouve leur fenêtre au premier plan après le lancement, et détecte leur fin.
+    fn track_ext_game(&self) {
+        if let Some((tile, t0)) = self.ext_pending.get() {
+            if t0.elapsed() > Duration::from_secs(240) {
+                self.ext_pending.set(None);
+            } else if let Some(h) = wm::foreground_game(&["steam.exe", "steamwebhelper.exe", "explorer.exe", "hearth-shell.exe", "hearth.exe", "claude.exe", "cmd.exe"]) {
+                *self.ext_game.borrow_mut() = Some(ExtGame { tile, hwnd: h, started: std::time::Instant::now(), closing: false });
+                self.ext_pending.set(None);
+                self.rebuild();
+            }
+        }
+        let ended = self.ext_game.borrow().as_ref().filter(|e| !wm::is_alive(e.hwnd)).map(|e| (e.tile, e.started.elapsed().as_secs()));
+        if let Some((tile, secs)) = ended {
+            *self.ext_game.borrow_mut() = None;
+            if let Some(g) = self.games.borrow().get(tile).cloned() {
+                playtime::record(&playtime_key(&g), secs);
+                self.notify(format!("{} {}", g.name, tr("s'est fermé")));
+            }
+            self.hide_guide();
+            self.rebuild();
+            self.home();
+        }
+    }
 }

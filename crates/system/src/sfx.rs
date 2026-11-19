@@ -134,50 +134,68 @@ fn build_music() -> Vec<u8> {
 }
 
 // ---------- Lecture ----------
+// Les périphériques MCI sont fermés quand le thread qui les a ouverts se termine : un seul thread audio permanent
+// ouvre et pilote tout (les autres threads lui envoient des commandes).
 
-static READY: OnceLock<bool> = OnceLock::new();
+enum Cmd {
+    Play(usize),
+    Music(bool),
+}
 
-/// Génère les fichiers au besoin et ouvre les sons (appel unique, hors thread UI de préférence).
+static TX: OnceLock<std::sync::mpsc::Sender<Cmd>> = OnceLock::new();
+static READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Démarre le thread audio : génère les fichiers au besoin, ouvre les sons, puis attend les commandes.
 pub fn init() {
-    READY.get_or_init(|| {
-        let d = dir();
-        if std::fs::create_dir_all(&d).is_err() {
-            return false;
-        }
-        for (i, n) in NAMES.iter().enumerate() {
-            let p = d.join(format!("{n}-{VERSION}.wav"));
-            if !p.exists() {
-                let _ = std::fs::write(&p, build(i));
+    TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<Cmd>();
+        std::thread::spawn(move || {
+            let d = dir();
+            if std::fs::create_dir_all(&d).is_err() {
+                return;
             }
-            mci(&format!("open \"{}\" type waveaudio alias hs_{n}", p.display()));
-        }
-        let m = d.join(format!("music-{VERSION}.wav"));
-        if !m.exists() {
-            let _ = std::fs::write(&m, build_music());
-        }
-        mci(&format!("open \"{}\" type waveaudio alias hs_music", m.display()));
-        true
+            for (i, n) in NAMES.iter().enumerate() {
+                let p = d.join(format!("{n}-{VERSION}.wav"));
+                if !p.exists() {
+                    let _ = std::fs::write(&p, build(i));
+                }
+                mci(&format!("open \"{}\" type waveaudio alias hs_{n}", p.display()));
+            }
+            let m = d.join(format!("music-{VERSION}.wav"));
+            if !m.exists() {
+                let _ = std::fs::write(&m, build_music());
+            }
+            mci(&format!("open \"{}\" type waveaudio alias hs_music", m.display()));
+            READY.store(true, std::sync::atomic::Ordering::SeqCst);
+            while let Ok(c) = rx.recv() {
+                match c {
+                    Cmd::Play(i) => mci(&format!("play hs_{} from 0", NAMES[i])),
+                    Cmd::Music(on) => {
+                        if on && !STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                            mci("play hs_music repeat");
+                        } else {
+                            mci(if on { "resume hs_music" } else { "pause hs_music" });
+                        }
+                    }
+                }
+            }
+        });
+        tx
     });
 }
 
 /// Joue un effet (asynchrone ; se superpose à la musique).
 pub fn play(s: Sfx) {
-    if READY.get().copied().unwrap_or(false) {
-        mci(&format!("play hs_{} from 0", NAMES[s as usize]));
+    if let Some(tx) = TX.get() {
+        let _ = tx.send(Cmd::Play(s as usize));
     }
 }
 
-static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Musique d'ambiance : lecture en boucle (la première fois), puis pause / reprise.
+/// Musique d'ambiance : lecture en boucle (la première fois), puis pause / reprise. Faux tant que le thread audio n'est pas prêt.
 pub fn music(on: bool) -> bool {
-    if !READY.get().copied().unwrap_or(false) {
+    if !READY.load(std::sync::atomic::Ordering::SeqCst) {
         return false;
     }
-    if on && !STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        mci("play hs_music repeat");
-    } else {
-        mci(if on { "resume hs_music" } else { "pause hs_music" });
-    }
-    true
+    TX.get().is_some_and(|tx| tx.send(Cmd::Music(on)).is_ok())
 }

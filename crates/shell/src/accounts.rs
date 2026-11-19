@@ -169,21 +169,45 @@ impl Shell {
     pub fn refresh_owned(&self) {
         self.refresh_onboard();
         // Sessions, bibliothèques distantes et lecture des jeux installés : tout hors du thread de l'interface.
-        std::thread::spawn(|| {
+        self.refresh_owned_try(0);
+    }
+
+    /// Un échec réseau (fréquent au démarrage du PC, Wi-Fi pas encore connecté) ne vide jamais la liste mémorisée : on la garde et on réessaie.
+    fn refresh_owned_try(&self, attempt: u32) {
+        std::thread::spawn(move || {
+            let old = account::owned_cache_load();
             let connected: Vec<&'static str> = ["Steam", "Epic Games"].into_iter().filter(|s| account::session(s).is_some()).collect();
             let mut items: Vec<(Owned, String)> = vec![];
+            let mut failed = false;
             for store in connected {
-                for o in account::library(store).into_iter().take(300) {
-                    let slug = if store == "Steam" { "steam" } else { "epic" };
-                    let id = format!("owned-{slug}-{}", o.key.replace([':', '/', '\\'], "_"));
-                    items.push((o, id));
+                let fetched: Vec<(Owned, String)> = account::library(store)
+                    .into_iter()
+                    .take(300)
+                    .map(|o| {
+                        let slug = if store == "Steam" { "steam" } else { "epic" };
+                        let id = format!("owned-{slug}-{}", o.key.replace([':', '/', '\\'], "_"));
+                        (o, id)
+                    })
+                    .collect();
+                if fetched.is_empty() {
+                    failed = true;
+                    items.extend(old.iter().filter(|(o, _)| o.store == store).cloned());
+                } else {
+                    items.extend(fetched);
                 }
             }
-            if !items.is_empty() {
+            if !items.is_empty() && !failed {
                 account::owned_cache_save(&items);
             }
             let installed = stores::installed();
-            let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.owned_ready(items, installed)));
+            let _ = slint::invoke_from_event_loop(move || {
+                with_shell(|s| {
+                    s.owned_ready(items, installed);
+                    if failed && attempt < 20 {
+                        slint::Timer::single_shot(Duration::from_secs(20), move || with_shell(|s| s.refresh_owned_try(attempt + 1)));
+                    }
+                })
+            });
         });
     }
 
