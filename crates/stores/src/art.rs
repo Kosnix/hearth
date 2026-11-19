@@ -43,14 +43,44 @@ pub(crate) fn encode(s: &str) -> String {
     s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
-/// Meilleure jaquette 600×900 de SteamGridDB (clé API dans `HEARTH_SGDB_KEY` ou `settings.json`).
-fn steamgriddb(title: &str, key: &str) -> Option<String> {
+/// Visuels SteamGridDB d'un jeu : identifiant trouvé par appid Steam (exact) ou par titre, puis jaquette, héros et logo.
+/// `Err(())` : réseau indisponible ; `Ok(None)` : jeu inconnu de SteamGridDB.
+struct Sgdb {
+    id: i64,
+    auth: String,
+}
+
+fn sgdb_find(id: &str, title: &str, key: &str) -> Result<Option<Sgdb>, ()> {
     let auth = format!("Bearer {key}");
     let h = [("Authorization", auth.as_str())];
-    let s = http::get_json(&format!("https://www.steamgriddb.com/api/v2/search/autocomplete/{}", encode(title)), &h)?;
-    let id = s["data"][0]["id"].as_i64()?;
-    let g = http::get_json(&format!("https://www.steamgriddb.com/api/v2/grids/game/{id}?dimensions=600x900"), &h)?;
-    g["data"][0]["url"].as_str().map(String::from)
+    let steam = id.strip_prefix("owned-steam-").or_else(|| id.strip_prefix("steam-")).filter(|a| !a.is_empty() && a.bytes().all(|b| b.is_ascii_digit()));
+    if let Some(app) = steam {
+        if let Some(j) = http::get_json(&format!("https://www.steamgriddb.com/api/v2/games/steam/{app}"), &h) {
+            if let Some(i) = j["data"]["id"].as_i64() {
+                return Ok(Some(Sgdb { id: i, auth }));
+            }
+        }
+    }
+    let s = http::get_json(&format!("https://www.steamgriddb.com/api/v2/search/autocomplete/{}", encode(title)), &h).ok_or(())?;
+    Ok(s["data"][0]["id"].as_i64().map(|i| Sgdb { id: i, auth }))
+}
+
+impl Sgdb {
+    fn url(&self, kind: &str) -> Option<String> {
+        let (path, dims) = match kind {
+            "cover" => ("grids", "&dimensions=600x900,342x482,660x930"),
+            "hero" => ("heroes", "&dimensions=1920x620,3840x1240"),
+            _ => ("logos", ""),
+        };
+        let h = [("Authorization", self.auth.as_str())];
+        let j = http::get_json(&format!("https://www.steamgriddb.com/api/v2/{path}/game/{}?mimes=image/png,image/jpeg{dims}", self.id), &h)?;
+        j["data"][0]["url"].as_str().map(String::from)
+    }
+}
+
+/// Jaquette de SteamGridDB pour un titre (jeux sans aucun visuel).
+fn steamgriddb(id: &str, title: &str, key: &str) -> Option<String> {
+    sgdb_find(id, title, key).ok()??.url("cover")
 }
 
 fn download(url: &str) -> Option<(Vec<u8>, &'static str)> {
@@ -65,25 +95,54 @@ pub fn ensure_art(game: &Game, sgdb_key: Option<&str>) -> bool {
 }
 
 /// Idem pour un identifiant et des URLs quelconques (jeux possédés non installés).
+/// Avec une clé SteamGridDB, ses visuels remplacent une fois ceux de la boutique (qui restent en repli) ; marqueur `.sgdb` par jeu.
 pub fn ensure_art_for(id: &str, title: &str, art: &crate::Art, sgdb_key: Option<&str>) -> bool {
-    let mut added = false;
-    for (kind, urls) in [("cover", &art.cover), ("hero", &art.hero), ("logo", &art.logo)] {
-        if asset(id, kind).is_some() {
-            continue;
-        }
-        let mut candidates: Vec<String> = urls.iter().filter_map(|u| if u.starts_with("gog-api:") { gog::resolve(u) } else { Some(u.clone()) }).collect();
-        if kind == "cover" && candidates.is_empty() {
-            candidates.extend(sgdb_key.and_then(|k| steamgriddb(title, k)));
-        }
-        for url in candidates {
-            if let Some((data, ext)) = download(&url) {
-                let dir = assets_dir().join(id);
-                if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(dir.join(format!("{kind}.{ext}")), data).is_ok() {
-                    added = true;
-                    break;
+    let key = sgdb_key.filter(|k| !k.trim().is_empty());
+    let dir = assets_dir().join(id);
+    let marker = dir.join(".sgdb");
+    let mut sg = None;
+    let mut redo = false;
+    if let Some(k) = key {
+        if !marker.exists() {
+            // Réseau indisponible : on réessaiera plus tard (pas de marqueur).
+            if let Ok(found) = sgdb_find(id, title, k) {
+                redo = found.is_some();
+                sg = found;
+                if !redo && std::fs::create_dir_all(&dir).is_ok() {
+                    let _ = std::fs::write(&marker, "none");
                 }
             }
         }
+    }
+    let mut added = false;
+    for (kind, urls) in [("cover", &art.cover), ("hero", &art.hero), ("logo", &art.logo)] {
+        if !redo && asset(id, kind).is_some() {
+            continue;
+        }
+        let mut candidates: Vec<String> = vec![];
+        if redo {
+            candidates.extend(sg.as_ref().and_then(|s| s.url(kind)));
+        }
+        candidates.extend(urls.iter().filter_map(|u| if u.starts_with("gog-api:") { gog::resolve(u) } else { Some(u.clone()) }));
+        if kind == "cover" && urls.is_empty() && !redo {
+            candidates.extend(key.and_then(|k| steamgriddb(id, title, k)));
+        }
+        for url in candidates {
+            if let Some((data, ext)) = download(&url) {
+                if std::fs::create_dir_all(&dir).is_ok() {
+                    for old in ["png", "jpg", "jpeg"] {
+                        let _ = std::fs::remove_file(dir.join(format!("{kind}.{old}")));
+                    }
+                    if std::fs::write(dir.join(format!("{kind}.{ext}")), data).is_ok() {
+                        added = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if redo {
+        let _ = std::fs::write(&marker, "ok");
     }
     added
 }
