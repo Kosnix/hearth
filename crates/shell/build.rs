@@ -37,7 +37,7 @@ fn esc(s: &str) -> String {
 fn gen_po(dir: &Path, tsv: &str) {
     let mut table: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for line in tsv.lines().filter(|l| !l.trim().is_empty()) {
-        let cols: Vec<&str> = line.split('|').collect();
+        let cols: Vec<&str> = line.trim_end_matches('\r').split('|').collect();
         if cols.len() == 10 {
             table.insert(cols[0], cols[1..].to_vec());
         }

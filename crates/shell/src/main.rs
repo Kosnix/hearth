@@ -11,6 +11,7 @@ use i18n::tr;
 use slint::{ComponentHandle, Model, SharedString, VecModel};
 
 mod addgame;
+mod desktop;
 mod accounts;
 mod addflow;
 mod i18n;
@@ -83,6 +84,12 @@ struct Shell {
     pad: PadOverlay,
     pad_acc: Cell<bool>,
     status_n: Cell<u32>,
+    desktop: RefCell<Option<DesktopWindow>>,
+    desk_games: Rc<VecModel<DeskGame>>,
+    desk_rows: Rc<VecModel<SettingRow>>,
+    desk_stores: Rc<VecModel<DeskStore>>,
+    desk_filter: Cell<i32>,
+    desk_query: RefCell<String>,
     photo_fresh: Cell<bool>,
     oobe_step: Cell<i32>,
     oobe_rows: Rc<VecModel<SettingRow>>,
@@ -170,9 +177,17 @@ fn main() -> Result<(), slint::PlatformError> {
     }));
     mark("start");
     let _profile = profiles::activate();
+    // `hearth-shell --desktop` : version bureau seule (fenêtre normale). Si la console tourne déjà, on lui demande d'ouvrir la fenêtre.
+    let desktop_only = std::env::args().any(|a| a == "--desktop");
+    if desktop_only && desktop::console_running(MAIN_TITLE) {
+        let _ = std::fs::write(desktop::request_file(), "1");
+        return Ok(());
+    }
     mark("profile");
     // set_fullscreen() avant run() est ignoré par winit : plein écran dès la création.
-    std::env::set_var("SLINT_FULLSCREEN", "1");
+    if !desktop_only {
+        std::env::set_var("SLINT_FULLSCREEN", "1");
+    }
     // Legendary (jeux Epic) lit sa configuration ici, y compris quand il est lancé par le gestionnaire de fenêtres.
     std::env::set_var("LEGENDARY_CONFIG_PATH", stores::epiccmd::config());
     // ponytail: femtovg cesse de se redessiner avec ce design (constaté sur l'Optiplex) ; rendu logiciel.
@@ -187,6 +202,12 @@ fn main() -> Result<(), slint::PlatformError> {
         pad: PadOverlay::new()?,
         pad_acc: Cell::new(false),
         status_n: Cell::new(0),
+        desktop: RefCell::new(None),
+        desk_games: Rc::new(VecModel::default()),
+        desk_rows: Rc::new(VecModel::default()),
+        desk_stores: Rc::new(VecModel::default()),
+        desk_filter: Cell::new(0),
+        desk_query: RefCell::new(String::new()),
         photo_fresh: Cell::new(false),
         oobe_step: Cell::new(-1),
         oobe_rows: Rc::new(VecModel::default()),
@@ -290,7 +311,9 @@ fn main() -> Result<(), slint::PlatformError> {
     keyboard::load();
     shell.apply_theme();
     i18n::init_audio_prefs();
-    system::sfx::init();
+    if !desktop_only {
+        system::sfx::init();
+    }
     i18n::init_volumes();
     shell.refresh_lang();
     shell.apply_font();
@@ -416,14 +439,18 @@ fn main() -> Result<(), slint::PlatformError> {
 
     // Le menu guide est créé une fois puis affiché/masqué en Win32, sans jamais prendre le focus
     // (un jeu plein écran qui perd le focus se réduit et clignote).
+    if !desktop_only {
     shell.guide.show()?;
     shell.splash.show()?;
     shell.pad.show()?;
+    shell.desktop_create(true);
+    }
     let s = shell.clone();
     shell.pad.on_press(move |x, y| s.pad_press(x, y));
     // Les fenêtres natives n'existent pas forcément dès le premier tour : on réessaie.
     let setup = Rc::new(slint::Timer::default());
     let t = setup.clone();
+    if !desktop_only {
     setup.start(slint::TimerMode::Repeated, Duration::from_millis(50), move || {
         if let (Some(h), Some(sp), Some(pd)) = (wm::find_window(GUIDE_TITLE), wm::find_window(SPLASH_TITLE), wm::find_window(PAD_TITLE)) {
             wm::make_overlay(pd);
@@ -443,6 +470,7 @@ fn main() -> Result<(), slint::PlatformError> {
             t.stop();
         }
     });
+    }
 
     // Rc n'est pas Send : le thread manette retrouve le Shell via un thread_local du thread UI.
     SHELL.with(|s| *s.borrow_mut() = Some(shell.clone()));
@@ -467,6 +495,7 @@ fn main() -> Result<(), slint::PlatformError> {
             }
         });
     }
+    if !desktop_only {
     input::spawn(|nav| {
         let _ = slint::invoke_from_event_loop(move || {
             SHELL.with(|s| {
@@ -476,6 +505,7 @@ fn main() -> Result<(), slint::PlatformError> {
             });
         });
     });
+    }
 
     // Détecteur de blocages (HEARTH_PERF=1) : un timer de 8 ms qui journalise tout retard > 25 ms du thread UI.
     let s = shell.clone();
@@ -541,8 +571,14 @@ fn main() -> Result<(), slint::PlatformError> {
     shell.ui.on_oobe_key(move |a| s.oobe_key(a));
     let s = shell.clone();
     shell.ui.on_oobe_click(move |i| s.oobe_click(i));
-    shell.oobe_start();
+    if !desktop_only {
+        shell.oobe_start();
+    }
     mark("before_run");
+    if desktop_only {
+        shell.desktop_open();
+        return slint::run_event_loop();
+    }
     shell.ui.run()
 }
 
@@ -813,6 +849,7 @@ impl Shell {
             settings::Outcome::Connect(ssid) => self.connect(ssid, None),
             settings::Outcome::LangChanged => self.refresh_lang(),
             settings::Outcome::Oobe => self.oobe_restart(),
+            settings::Outcome::Desktop => self.desktop_open(),
             settings::Outcome::ThemeChanged => {
                 self.apply_theme();
                 self.open_cat_keep(13);
@@ -1028,6 +1065,7 @@ impl Shell {
     /// Rafraîchit les lignes sans recharger les données (garde les choix en cours).
     fn open_cat_keep(&self, cat: i32) {
         let hint = self.settings.refresh(cat);
+        self.desktop_sync_rows_with(&hint);
         self.ui.set_shint(hint.into());
         let max = self.settings.row_count().saturating_sub(1) as i32;
         self.ui.set_srow(self.ui.get_srow().min(max));
@@ -1093,6 +1131,7 @@ impl Shell {
         set!(self.guide);
         set!(self.splash);
         set!(self.pad);
+        self.desktop_theme_changed();
     }
 
     fn open_guide(&self, tile: usize) {
@@ -1195,6 +1234,10 @@ impl Shell {
     /// Chaque seconde : jeux terminés, et ré-application du sans-bordure (certains jeux le retirent).
     fn tick(&self) {
         self.oobe_guard();
+        if desktop::request_file().exists() {
+            let _ = std::fs::remove_file(desktop::request_file());
+            self.desktop_open();
+        }
         let n = self.status_n.get().wrapping_add(1);
         self.status_n.set(n);
         if n % 5 == 1 {
@@ -1686,6 +1729,7 @@ impl Shell {
 
     /// Un visuel vient d'arriver : on met à jour uniquement la tuile concernée (pas de reconstruction de toute la liste).
     pub fn reload_art(&self, id: &str) {
+        self.desktop_refresh_games();
         self.art_cache.borrow_mut().remove(id);
         self.lib_cover.borrow_mut().remove(id);
         self.lib_last.set((-1, 0));
@@ -1864,6 +1908,7 @@ impl Shell {
         let lsel = cur_lib.and_then(|g| b.iter().position(|t| t.gid == g)).unwrap_or((self.ui.get_lsel().max(0) as usize).min(b.len().saturating_sub(1)));
         self.tiles.set_vec(a);
         self.library.set_vec(b);
+        self.desktop_refresh_games();
         self.lib_last.set((-1, 0));
         self.ui.set_sel(sel as i32);
         self.ui.set_lsel(lsel as i32);

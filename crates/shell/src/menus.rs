@@ -170,7 +170,7 @@ impl Shell {
         self.rebuild();
     }
 
-    fn uninstall(&self, gid: usize) {
+    pub(crate) fn uninstall(&self, gid: usize) {
         let Some(g) = self.games.borrow().get(gid).cloned() else { return };
         if g.store.is_empty() {
             // Jeu ajouté à la main : on le retire seulement de Hearth, ses fichiers restent.

@@ -59,3 +59,6 @@
 - Assistant de première exécution (`oobe.rs`, zone 13) : 11 étapes, composants système en une validation, reprise (`oobe.step`), fin = `oobe.done` ; refaisable : Réglages > À propos. `HEARTH_OOBE=1` le force.
 - Écrans : barre d'état (réseau, volume, manette), clavier plus grand et opaque, temps de jeu sous le logo, badges discrets.
 - Qualité : avertissements de compilation supprimés, `tools/check.ps1` (tests, avertissements, CPU, mémoire, capture).
+- 10 langues (TSV `crates/shell/lang/strings-*.tsv` → `.po` générés par `build.rs`), anglais au premier démarrage, 10 dispositions de clavier (`keyboard.rs`, choix dans Langue).
+- Éditeur d'avatar (forme, couleur, photo importée), annulation de téléchargement avec confirmation, cache d'images des boutiques périmé après 24 h, jeux sans image recherchés au démarrage.
+- Version bureau (`desktop.rs`, fenêtre « Hearth Bureau ») : bibliothèque, ajout de jeux locaux, boutiques, réglages. Lancement : Réglages > À propos, raccourci « Hearth (bureau) » ou `hearth-shell --desktop` (dépose `desktop.request` si la console tourne). La fenêtre est créée au démarrage puis réduite (jamais `hide()` : winit refait OLE → `RPC_E_CHANGED_MODE`).

@@ -36,3 +36,10 @@ pub fn square_image(src: &std::path::Path, dest: &std::path::Path) -> bool {
     let sq = img.crop_imm(x, y, side, side).resize_exact(256, 256, image::imageops::FilterType::Lanczos3);
     sq.save_with_format(dest, image::ImageFormat::Png).is_ok()
 }
+
+/// Question Oui / Non (boîte Windows) ; vrai si l'utilisateur répond Oui.
+pub fn confirm(text: &str) -> bool {
+    use windows::core::HSTRING;
+    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, IDYES, MB_ICONQUESTION, MB_YESNO};
+    unsafe { MessageBoxW(None, &HSTRING::from(text), &HSTRING::from("Hearth"), MB_YESNO | MB_ICONQUESTION) == IDYES }
+}

@@ -77,6 +77,7 @@ impl Shell {
             self.ui.set_qr_hint(tr("Scannez avec l'application Steam sur votre téléphone puis validez").into());
             self.ui.set_qr_action("".into());
         }
+        self.desktop_show_login(&format!("{} — {store}", tr("Connexion")), self.ui.get_qr(), &self.ui.get_qr_hint(), ch.needs_code);
         self.ui.set_qr_return(self.home_zone());
         self.ui.set_zone(5);
         *self.login.borrow_mut() = Some(ch.clone());
@@ -144,6 +145,7 @@ impl Shell {
             self.ui.set_zone(3);
         }
         self.push_notif(&tr("Connexion"), &format!("{} {store} : {name}", tr("Connecté à")));
+        self.desktop_login_close();
         if self.ui.get_zone() == 3 && self.ui.get_cat() == 12 {
             self.open_cat(12);
         }

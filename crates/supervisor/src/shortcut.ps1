@@ -39,3 +39,11 @@ $s.Arguments = 'console'
 $s.IconLocation = $Icon
 $s.Description = 'Revenir à la console Hearth'
 $s.Save()
+# Version bureau : fenêtre Windows classique pour gérer la bibliothèque, les boutiques et les réglages.
+$shellExe = Join-Path (Split-Path $Exe) 'hearth-shell.exe'
+$d = (New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Desktop') + '\Hearth (bureau).lnk')
+$d.TargetPath = $shellExe
+$d.Arguments = '--desktop'
+$d.IconLocation = $Icon
+$d.Description = 'Gérer Hearth depuis le bureau Windows'
+$d.Save()

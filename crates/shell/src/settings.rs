@@ -81,6 +81,7 @@ pub enum Outcome {
     LangChanged,
     ThemeChanged,
     Oobe,
+    Desktop,
     CheckUpdates(bool),
     BtScan,
     BtPair(String, String),
@@ -336,6 +337,7 @@ impl Settings {
                 let mut v: Vec<SettingRow> = s.data.about.iter().map(|(k, val)| row(k, val.clone(), false)).collect();
                 v.push(row("Hearth", env!("CARGO_PKG_VERSION").into(), false));
                 v.push(row("Assistant de démarrage", tr("Revoir"), false));
+                v.push(row("Ouvrir la version bureau", String::new(), false));
                 v
             }
             _ => vec![],
@@ -375,6 +377,7 @@ impl Settings {
                 out = Outcome::ThemeChanged;
             }
             (11, r, 0) if r as usize == s.data.about.len() + 1 => out = Outcome::Oobe,
+            (11, r, 0) if r as usize == s.data.about.len() + 2 => out = Outcome::Desktop,
             (13, 3, 0) => {
                 theme::reset();
                 out = Outcome::ThemeChanged;

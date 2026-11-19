@@ -34,7 +34,7 @@ fn table() -> &'static std::collections::HashMap<&'static str, Vec<&'static str>
     T.get_or_init(|| {
         TSV.lines()
             .filter_map(|l| {
-                let c: Vec<&str> = l.split('|').collect();
+                let c: Vec<&str> = l.trim_end_matches('\r').split('|').collect();
                 (c.len() == 10).then(|| (c[0], c[1..].to_vec()))
             })
             .collect()
