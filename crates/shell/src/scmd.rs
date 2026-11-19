@@ -366,14 +366,16 @@ impl Shell {
         let busy = |a: &String| dl.iter().any(|d| d.appid == *a && matches!(d.state, DlState::Queued | DlState::Active));
         let outdated: Vec<String> = self.updates.borrow().iter().filter(|a| !busy(a)).cloned().collect();
         let mut rows: Vec<(DlRow, RowAct)> = vec![];
-        let row = |name: String, status: String, pct: i32, kind: i32| DlRow { name: name.into(), status: status.into(), pct, kind };
+        let row = |name: String, status: String, pct: i32, kind: i32| DlRow { name: name.into(), status: status.into(), pct, kind, cancel: false };
         rows.push((row(tr("Rechercher les mises à jour"), String::new(), -1, 3), RowAct::Search));
         if outdated.len() > 1 {
             rows.push((row(format!("{} ({})", tr("Tout mettre à jour"), outdated.len()), String::new(), -1, 3), RowAct::UpdateAll));
         }
         for d in dl.iter().filter(|d| matches!(d.state, DlState::Active | DlState::Queued)) {
             let (status, pct) = if d.state == DlState::Active { (active_status(d), d.pct as i32) } else { (tr("En attente"), -1) };
-            rows.push((row(d.name.clone(), status, pct, 0), RowAct::Item(d.appid.clone())));
+            let mut r = row(d.name.clone(), status, pct, 0);
+            r.cancel = true;
+            rows.push((r, RowAct::Item(d.appid.clone())));
         }
         for a in &outdated {
             rows.push((row(self.name_of(a), tr("Mise à jour disponible"), -1, 1), RowAct::Outdated(a.clone())));
@@ -407,19 +409,12 @@ impl Shell {
             }
             RowAct::Outdated(a) => self.steam_install(&format!("steam-{a}")),
             RowAct::Item(a) => {
-                let state = self.dl.borrow().iter().find(|d| d.appid == a).map(|d| d.state.clone());
-                match state {
-                    Some(DlState::Active) => {
-                        self.dl.borrow_mut().retain(|d| d.appid != a);
-                        if a.starts_with("epic:") {
-                            stores::epiccmd::cancel(self.dl_pid.load(Ordering::SeqCst));
-                        } else {
-                            steamcmd::cancel(self.dl_pid.load(Ordering::SeqCst));
-                        }
-                        self.push_notif(&tr("Téléchargements"), &tr("Téléchargement annulé"));
-                    }
-                    _ => self.dl.borrow_mut().retain(|d| d.appid != a),
+                let busy = self.dl.borrow().iter().any(|d| d.appid == a && matches!(d.state, DlState::Active | DlState::Queued));
+                if busy {
+                    self.dl_cancel_ask(i);
+                    return;
                 }
+                self.dl.borrow_mut().retain(|d| d.appid != a);
             }
         }
         self.dl_refresh();
@@ -431,7 +426,7 @@ fn active_status(d: &Dl) -> String {
     let mut s = format!("{:.0} %", d.pct);
     if d.speed > 1.0 {
         let mbs = d.speed / 1_048_576.0;
-        s.push_str(&format!("  ·  {} {}", format!("{mbs:.1}").replace('.', if i18n::lang() == 1 { "." } else { "," }), tr("Mo/s")));
+        s.push_str(&format!("  ·  {} {}", format!("{mbs:.1}").replace('.', i18n::decimal_sep()), tr("Mo/s")));
         let left = d.eta.unwrap_or_else(|| ((d.total - d.done) / d.speed).max(0.0) as u64);
         let eta = if left < 60 {
             format!("{left} s")
@@ -527,5 +522,34 @@ pub fn user_key() -> String {
     match std::env::var("HEARTH_PROFILE_ID").ok().filter(|p| p != "default" && !p.is_empty()) {
         Some(p) => format!("steamcmd_user_{p}"),
         None => "steamcmd_user".into(),
+    }
+}
+
+impl Shell {
+    /// Demande confirmation avant d'annuler un téléchargement (bouton Annuler de la ligne).
+    pub fn dl_cancel_ask(&self, i: usize) {
+        let Some(RowAct::Item(a)) = self.dl_acts.borrow().get(i).cloned() else { return };
+        let name = self.dl.borrow().iter().find(|d| d.appid == a).map(|d| d.name.clone()).unwrap_or_default();
+        self.menu_show(
+            format!("{} : {name} ?", tr("Annuler le téléchargement")),
+            vec![(tr("Oui, annuler"), crate::menus::Act::CancelDl(i)), (tr("Non, continuer"), crate::menus::Act::Cancel)],
+        );
+    }
+
+    /// Annule réellement (après confirmation) : arrête le processus s'il est actif, ou retire l'élément de la file.
+    pub fn dl_cancel(&self, i: usize) {
+        let Some(RowAct::Item(a)) = self.dl_acts.borrow().get(i).cloned() else { return };
+        let active = self.dl.borrow().iter().any(|d| d.appid == a && d.state == DlState::Active);
+        self.dl.borrow_mut().retain(|d| d.appid != a);
+        if active {
+            if a.starts_with("epic:") {
+                stores::epiccmd::cancel(self.dl_pid.load(Ordering::SeqCst));
+            } else {
+                steamcmd::cancel(self.dl_pid.load(Ordering::SeqCst));
+            }
+        }
+        self.push_notif(&tr("Téléchargements"), &tr("Téléchargement annulé"));
+        self.ui.set_dlbtn(false);
+        self.dl_refresh();
     }
 }

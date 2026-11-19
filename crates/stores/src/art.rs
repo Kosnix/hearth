@@ -174,13 +174,31 @@ pub fn fetch_first(urls: &[String]) -> Option<PathBuf> {
     urls.iter().find_map(|u| fetch_image(u))
 }
 
+/// Images du catalogue : conservées 24 h, puis retéléchargées (prix, promotions et visuels de la boutique changent).
+const OFFER_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
+fn fresh(p: &std::path::Path) -> bool {
+    std::fs::metadata(p).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|e| e < OFFER_TTL)
+}
+
+/// Supprime les images du catalogue plus vieilles que 24 h (appelé au démarrage, en tâche de fond).
+pub fn purge_offers() {
+    if let Ok(rd) = std::fs::read_dir(assets_dir().join("_offers")) {
+        for e in rd.flatten() {
+            if !fresh(&e.path()) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+}
+
 /// Image distante (offre du catalogue) mise en cache ; renvoie son chemin local.
 fn fetch_image(url: &str) -> Option<PathBuf> {
     let hash = url.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
     let dir = assets_dir().join("_offers");
     for ext in ["jpg", "png"] {
         let p = dir.join(format!("{hash:016x}.{ext}"));
-        if p.exists() {
+        if p.exists() && fresh(&p) {
             return Some(p);
         }
     }
@@ -209,4 +227,9 @@ pub fn save_art(id: &str, offer: &crate::Offer) -> bool {
         }
     }
     added
+}
+
+/// Dossier des visuels d'un jeu (créé au besoin par l'appelant).
+pub fn asset_dir(id: &str) -> PathBuf {
+    assets_dir().join(id)
 }

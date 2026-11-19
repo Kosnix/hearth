@@ -48,8 +48,7 @@ pub fn label_in(map: &HashMap<String, Entry>, key: &str) -> String {
     let when = match days {
         0 => tr("aujourd'hui"),
         1 => tr("hier"),
-        n if crate::i18n::lang() == 1 => format!("{n} d ago"),
-        n => format!("il y a {n} j"),
+        n => tr("il y a {n} j").replace("{n}", &n.to_string()),
     };
     format!("{played} {} · {} {when}", tr("de jeu"), tr("dernière partie"))
 }
@@ -75,7 +74,6 @@ pub fn last_in(map: &HashMap<String, Entry>, key: &str) -> String {
     match now().saturating_sub(e.last) / 86_400 {
         0 => tr("aujourd'hui"),
         1 => tr("hier"),
-        n if crate::i18n::lang() == 1 => format!("{n} d ago"),
-        n => format!("il y a {n} j"),
+        n => tr("il y a {n} j").replace("{n}", &n.to_string()),
     }
 }

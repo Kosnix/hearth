@@ -16,6 +16,9 @@ pub struct Profile {
     pub id: String,
     pub name: String,
     pub avatar: i32,
+    /// Photo importée (fichier `avatar.png` du dossier du profil).
+    #[serde(default)]
+    pub photo: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -32,7 +35,7 @@ pub fn load() -> Store {
     let s: Option<Store> = std::fs::read_to_string(file()).ok().and_then(|t| serde_json::from_str(t.trim_start_matches('\u{feff}')).ok());
     let mut s = s.unwrap_or_else(|| Store { current: "default".into(), profiles: vec![] });
     if s.profiles.is_empty() {
-        s.profiles.push(Profile { id: "default".into(), name: std::env::var("USERNAME").unwrap_or_else(|_| "Joueur".into()), avatar: 3 });
+        s.profiles.push(Profile { id: "default".into(), name: std::env::var("USERNAME").unwrap_or_else(|_| "Joueur".into()), avatar: 3, photo: false });
         s.current = "default".into();
     }
     if !s.profiles.iter().any(|p| p.id == s.current) {
@@ -76,12 +79,13 @@ impl Shell {
         let p = self.profile_current();
         self.ui.set_user(p.name.into());
         self.ui.set_user_avatar(p.avatar);
+        self.ui.set_user_photo(photo_of(&p.id, p.photo));
     }
 
     pub fn profile_open(&self) {
         let s = load();
-        let mut rows: Vec<ProfileRow> = s.profiles.iter().map(|p| ProfileRow { name: p.name.as_str().into(), avatar: p.avatar, active: p.id == s.current, add: false }).collect();
-        rows.push(ProfileRow { name: tr("Nouveau profil").into(), avatar: 0, active: false, add: true });
+        let mut rows: Vec<ProfileRow> = s.profiles.iter().map(|p| ProfileRow { name: p.name.as_str().into(), avatar: p.avatar, photo: photo_of(&p.id, p.photo), active: p.id == s.current, add: false }).collect();
+        rows.push(ProfileRow { name: tr("Nouveau profil").into(), avatar: 0, photo: Default::default(), active: false, add: true });
         self.profile_rows.set_vec(rows);
         let max = self.profile_rows.row_count().saturating_sub(1) as i32;
         if self.ui.get_pfsel() > max {
@@ -122,7 +126,7 @@ impl Shell {
             return;
         }
         *self.new_profile.borrow_mut() = name;
-        self.ui.set_avsel(0);
+        self.avatar_editor_open(3, Default::default());
         self.ui.set_zone(12);
     }
 
@@ -135,7 +139,8 @@ impl Shell {
         let mut s = load();
         let id = format!("p{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0));
         let _ = std::fs::create_dir_all(dir_of(&id));
-        s.profiles.push(Profile { id, name: name.clone(), avatar: a });
+        let photo = self.avatar_commit_photo(&id);
+        s.profiles.push(Profile { id, name: name.clone(), avatar: a, photo });
         save(&s);
         self.push_notif(&tr("Profils"), &format!("{} : {name}", tr("Profil créé")));
         self.profile_open();
@@ -170,4 +175,55 @@ impl Shell {
         );
     }
 
+}
+
+/// Photo d'un profil (image vide s'il n'en a pas).
+fn photo_of(id: &str, has: bool) -> slint::Image {
+    if !has {
+        return Default::default();
+    }
+    slint::Image::load_from_path(&dir_of(id).join("avatar.png")).unwrap_or_default()
+}
+
+impl Shell {
+    /// Sélecteur de photo : l'avatar courant sert de point de départ.
+    pub fn avatar_editor_open(&self, kind: i32, photo: slint::Image) {
+        self.ui.set_avsel(kind.clamp(0, 95));
+        self.ui.set_avrow(0);
+        self.ui.set_av_photo(photo);
+        self.photo_fresh.set(false);
+        self.ui.set_zone(12);
+    }
+
+    /// « Importer une photo… » : boîte de dialogue Windows, image recadrée au carré.
+    pub fn avatar_photo(&self) {
+        let filter = format!("{}\0*.png;*.jpg;*.jpeg\0", tr("Images"));
+        let Some(path) = crate::native::open_file(&tr("Choisir une photo"), &filter) else { return };
+        let tmp = stores::base_dir().join("avatar-tmp.png");
+        if crate::native::square_image(&path, &tmp) {
+            if let Ok(img) = slint::Image::load_from_path(&tmp) {
+                self.ui.set_av_photo(img);
+                self.photo_fresh.set(true);
+                self.ui.set_avrow(3);
+            }
+        } else {
+            self.push_notif(&tr("Profils"), &tr("Image illisible"));
+        }
+    }
+
+    /// Photo retenue au moment de valider : copie la photo importée dans le dossier du profil. Renvoie vrai s'il y a une photo.
+    pub(crate) fn avatar_commit_photo(&self, id: &str) -> bool {
+        let has = self.ui.get_av_photo().size().width > 0;
+        if has && self.photo_fresh.replace(false) {
+            let _ = std::fs::create_dir_all(dir_of(id));
+            let _ = std::fs::copy(stores::base_dir().join("avatar-tmp.png"), dir_of(id).join("avatar.png"));
+        }
+        has
+    }
+
+    /// Photo du profil courant (barre du haut).
+    pub fn profile_photo_current(&self) -> slint::Image {
+        let p = self.profile_current();
+        photo_of(&p.id, p.photo)
+    }
 }

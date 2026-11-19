@@ -15,7 +15,9 @@ mod accounts;
 mod addflow;
 mod i18n;
 mod imgload;
+mod keyboard;
 mod menus;
+mod native;
 mod oobe;
 mod profiles;
 mod scmd;
@@ -81,6 +83,7 @@ struct Shell {
     pad: PadOverlay,
     pad_acc: Cell<bool>,
     status_n: Cell<u32>,
+    photo_fresh: Cell<bool>,
     oobe_step: Cell<i32>,
     oobe_rows: Rc<VecModel<SettingRow>>,
     oobe_content: Cell<usize>,
@@ -184,6 +187,7 @@ fn main() -> Result<(), slint::PlatformError> {
         pad: PadOverlay::new()?,
         pad_acc: Cell::new(false),
         status_n: Cell::new(0),
+        photo_fresh: Cell::new(false),
         oobe_step: Cell::new(-1),
         oobe_rows: Rc::new(VecModel::default()),
         oobe_content: Cell::new(0),
@@ -283,11 +287,13 @@ fn main() -> Result<(), slint::PlatformError> {
     mark("shell_built");
     i18n::init();
     theme::load();
+    keyboard::load();
     shell.apply_theme();
     i18n::init_audio_prefs();
     system::sfx::init();
     i18n::init_volumes();
     shell.refresh_lang();
+    shell.apply_font();
     shell.ui.set_rows(shell.settings.rows.clone().into());
     shell.ui.set_offers(shell.offers.clone().into());
     shell.ui.set_notifs(shell.notifs.clone().into());
@@ -507,6 +513,7 @@ fn main() -> Result<(), slint::PlatformError> {
             s.pad_show(v == "kbd");
         });
     }
+    std::thread::spawn(stores::purge_offers);
     shell.start_art();
     shell.refresh_owned();
     // Diagnostic de latence (HEARTH_PERF) : délai entre l'ordre de navigation et l'image suivante réellement rendue.
@@ -523,6 +530,14 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
     let s = shell.clone();
+    shell.ui.on_avatar_photo({
+        let s = shell.clone();
+        move || s.avatar_photo()
+    });
+    shell.ui.on_dl_cancel({
+        let s = shell.clone();
+        move |i| s.dl_cancel_ask(i as usize)
+    });
     shell.ui.on_oobe_key(move |a| s.oobe_key(a));
     let s = shell.clone();
     shell.ui.on_oobe_click(move |i| s.oobe_click(i));
@@ -633,11 +648,9 @@ impl Shell {
 
     fn pad_keys(&self) {
         let (up, acc) = (self.pad_up.get(), self.pad_acc.get());
-        let rows: [&str; 4] = if acc {
-            ["éèêëàâäùûü", "ôöîïçœæñÿ'", "@.-_,;:!?/", "+*=%€$#&()"]
-        } else {
-            ["1234567890", "azertyuiop", "qsdfghjklm", "wxcvbn.-_@"]
-        };
+        let l = keyboard::layout();
+        let rows: [&str; 4] = if acc { l.alt } else { l.main };
+        self.pad.set_kb_alt(l.alt_label.into());
         let keys: Vec<SharedString> = rows.iter().flat_map(|r| r.chars()).map(|c| if up { c.to_uppercase().to_string() } else { c.to_string() }.into()).collect();
         self.pad.set_keys(Rc::new(VecModel::from(keys)).into());
         self.pad.set_acc(acc);
@@ -901,6 +914,7 @@ impl Shell {
         let text = self.settings.kb_text();
         let shown = if self.scmd_stage.get() == 2 { "•".repeat(text.chars().count()) } else { text };
         self.ui.set_kb_text(shown.into());
+        self.ui.set_kb_alt(keyboard::layout().alt_label.into());
         let keys: Vec<SharedString> = self.settings.kb_keys().into_iter().map(Into::into).collect();
         self.ui.set_kb_keys(Rc::new(VecModel::from(keys)).into());
     }
@@ -1183,7 +1197,7 @@ impl Shell {
         self.oobe_guard();
         let n = self.status_n.get().wrapping_add(1);
         self.status_n.set(n);
-        if n % 10 == 1 {
+        if n % 5 == 1 {
             self.refresh_status();
         }
         self.set_clock();
@@ -1354,7 +1368,22 @@ fn with_shell(f: impl FnOnce(&Shell)) {
 
 impl Shell {
     /// Textes calculés en Rust après un changement de langue (les @tr de Slint suivent seuls).
+    /// Police de l'interface selon la langue (le chinois, l'hindi et le bengali exigent une police qui contient leurs caractères).
+    pub fn apply_font(&self) {
+        let f = match i18n::code() {
+            "zh" => "Microsoft YaHei UI",
+            "hi" | "bn" => "Nirmala UI",
+            "ar" | "ur" => "Segoe UI",
+            _ => "",
+        };
+        self.ui.set_ui_font(f.into());
+        self.guide.set_ui_font(f.into());
+        self.splash.set_ui_font(f.into());
+        self.pad.set_ui_font(f.into());
+    }
+
     fn refresh_lang(&self) {
+        self.apply_font();
         let cats: Vec<SharedString> = settings::cats().into_iter().map(Into::into).collect();
         self.ui.set_cats(Rc::new(VecModel::from(cats)).into());
         // Pas avant la création de la fenêtre : COM multithread sur ce thread ferait échouer winit.
@@ -1606,6 +1635,7 @@ impl Shell {
         let titleless: Vec<(String, String)> =
             self.games.borrow().iter().filter(|g| !g.id.starts_with("demo-") && stores::asset(&g.id, "cover").is_none()).map(|g| (g.id.clone(), g.name.clone())).collect();
         let installed = self.games.borrow().iter().any(|g| !g.store.is_empty() && !g.install);
+        let again = titleless.clone();
         std::thread::spawn(move || {
             if installed {
                 jobs.extend(stores::installed().into_iter().map(|g| (g.id, g.title, g.art)));
@@ -1633,6 +1663,24 @@ impl Shell {
                     });
                 }
             });
+            // Deuxième passe : jeux dont les visuels de la boutique n'ont pas pu être téléchargés (format non géré, lien mort…).
+            // Recherche par titre sur Steam, puis SteamGridDB ; un marqueur évite de réessayer pendant 24 h.
+            for (id, title) in &again {
+                let marker = stores::asset_dir(id).join(".noart");
+                let fresh = std::fs::metadata(&marker).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|e| e < Duration::from_secs(24 * 3600));
+                if fresh || stores::asset(id, "cover").is_some() {
+                    continue;
+                }
+                let art = stores::resolve_art(title).unwrap_or_default();
+                let got = stores::ensure_art_for(id, title, &art, key.as_deref());
+                if got || stores::asset(id, "cover").is_some() {
+                    let id = id.clone();
+                    let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.reload_art(&id)));
+                } else {
+                    let _ = std::fs::create_dir_all(stores::asset_dir(id));
+                    let _ = std::fs::write(&marker, "1");
+                }
+            }
         });
     }
 
@@ -1771,7 +1819,7 @@ impl Shell {
             running,
             install: g.install,
             sub: if g.install { "".into() } else { playtime::label_in(pt, &playtime_key(g)).into() },
-            store: if g.store.is_empty() { tr("Hearth") } else { g.store.clone() }.into(),
+            store: if g.store.is_empty() { tr("Local") } else { g.store.clone() }.into(),
             played: playtime::played_in(pt, &playtime_key(g)).into(),
             lastp: playtime::last_in(pt, &playtime_key(g)).into(),
         }

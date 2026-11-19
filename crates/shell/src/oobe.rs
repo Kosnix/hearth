@@ -275,8 +275,8 @@ impl Shell {
                 }
                 1 => {
                     self.oobe_avatar.set(true);
-                    self.ui.set_avsel(self.profile_current().avatar.clamp(0, 23));
-                    self.ui.set_zone(12);
+                    let p = self.profile_current();
+                    self.avatar_editor_open(p.avatar, self.profile_photo_current());
                 }
                 _ => {
                     if self.profile_current().name.trim().is_empty() {
@@ -366,8 +366,10 @@ impl Shell {
     pub fn oobe_avatar_set(&self, a: i32) {
         let mut s = crate::profiles::load();
         let cur = s.current.clone();
+        let photo = self.avatar_commit_photo(&cur);
         if let Some(p) = s.profiles.iter_mut().find(|p| p.id == cur) {
             p.avatar = a;
+            p.photo = photo;
         }
         crate::profiles::save(&s);
         self.profile_refresh_top();

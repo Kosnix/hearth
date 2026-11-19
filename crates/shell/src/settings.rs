@@ -305,7 +305,7 @@ impl Settings {
                     row("Réinitialiser le thème", String::new(), false),
                 ]
             }
-            5 => vec![row("Langue", i18n::LANGS[i18n::lang()].1.into(), true)],
+            5 => vec![row("Langue", i18n::LANGS[i18n::lang()].1.into(), true), row("Disposition du clavier", crate::keyboard::layout().name.into(), true)],
             6 => vec![row("Windows Update", if s.loading { tr("Recherche en cours…") } else if s.data.update.is_empty() { tr("Rechercher des mises à jour") } else { s.data.update.clone() }, false)],
             7 if s.loading => vec![row("Lecture…", String::new(), false)],
             7 => s.data.drives.iter().map(|d| row(&d.name, format!("{} {} {} {}", gb(d.free), tr("libres sur"), gb(d.total), if d.removable { "(USB)" } else { "" }), false)).collect(),
@@ -437,6 +437,11 @@ impl Settings {
             }
             (5, 0, d) if d != 0 => {
                 i18n::set(step(i18n::lang(), i18n::LANGS.len(), d), true);
+                crate::keyboard::follow_language();
+                out = Outcome::LangChanged;
+            }
+            (5, 1, d) if d != 0 => {
+                crate::keyboard::shift(d);
                 out = Outcome::LangChanged;
             }
             (6, 0, 0) if !s.loading => {
@@ -535,11 +540,8 @@ impl Settings {
             let s = self.state.borrow();
             (s.kb_shift, s.kb_acc)
         };
-        let rows: [&str; 4] = if acc {
-            ["éèêëàâäùûü", "ôöîïçœæñÿ'", "@.-_,;:!?/", "+*=%€$#&()"]
-        } else {
-            ["1234567890", "azertyuiop", "qsdfghjklm", "wxcvbn.-_@"]
-        };
+        let l = crate::keyboard::layout();
+        let rows: [&str; 4] = if acc { l.alt } else { l.main };
         rows.iter().flat_map(|r| r.chars()).map(|c| if up { c.to_uppercase().to_string() } else { c.to_string() }).collect()
     }
 

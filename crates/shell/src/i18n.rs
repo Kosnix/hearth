@@ -4,298 +4,68 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-pub const LANGS: [(&str, &str); 2] = [("fr", "Français"), ("en", "English")];
+/// Les dix langues les plus parlées (noms dans leur propre langue). Le français est la langue source des textes.
+pub const LANGS: [(&str, &str); 10] = [
+    ("en", "English"),
+    ("fr", "Français"),
+    ("zh", "中文"),
+    ("hi", "हिन्दी"),
+    ("es", "Español"),
+    ("ar", "العربية"),
+    ("bn", "বাংলা"),
+    ("pt", "Português"),
+    ("ru", "Русский"),
+    ("ur", "اردو"),
+];
 
 static LANG: AtomicUsize = AtomicUsize::new(0);
 static ANIM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
-const EN: &[(&str, &str)] = &[
-    ("Son", "Sound"),
-    ("Affichage", "Display"),
-    ("Manettes", "Controllers"),
-    ("Langue", "Language"),
-    ("Sortie audio", "Audio output"),
-    ("Garder ce réglage", "Keep this setting"),
-    ("Annuler", "Cancel"),
-    ("Mode souris", "Mouse mode"),
-    ("Clic", "Click"),
-    ("Clic droit", "Right click"),
-    ("Clavier", "Keyboard"),
-    ("Quitter", "Exit"),
-    ("Souris et clavier", "Mouse and keyboard"),
-    ("Entrée", "Enter"),
-    ("Fermer", "Close"),
-    ("Ajouter une boutique", "Add a store"),
-    ("Bienvenue", "Welcome"),
-    ("Bienvenue dans Hearth", "Welcome to Hearth"),
-    ("Quelques réglages avant de commencer. Tout reste modifiable plus tard dans les Réglages.", "A few settings before you start. Everything can be changed later in Settings."),
-    ("Choisissez la langue de l'interface.", "Choose the interface language."),
-    ("Résolution et fréquence de votre écran. Un retour automatique vous protège d'un mauvais choix.", "Your screen resolution and refresh rate. An automatic revert protects you from a bad choice."),
-    ("Sortie audio et volumes des effets et de la musique.", "Audio output and volumes for effects and music."),
-    ("Réseau", "Network"),
-    ("Connectez le Wi-Fi pour la boutique et les téléchargements (inutile en Ethernet).", "Connect Wi-Fi for the store and downloads (not needed on Ethernet)."),
-    ("Branchez ou appairez votre manette. Astuce : cliquez les deux sticks (L3 + R3) pour piloter la souris.", "Plug in or pair your controller. Tip: click both sticks (L3 + R3) to control the mouse."),
-    ("Votre profil", "Your profile"),
-    ("Votre nom et votre photo, affichés en haut de l'écran.", "Your name and picture, shown at the top of the screen."),
-    ("Couleur d'accentuation et fond de l'interface.", "Accent color and interface background."),
-    ("Reliez vos boutiques pour retrouver vos jeux. Vous pourrez le faire plus tard.", "Link your stores to find your games. You can do this later."),
-    ("Composants", "Components"),
-    ("Une seule autorisation Windows : elle permet à Hearth d'installer ce dont les jeux ont besoin (manette virtuelle, bibliothèques Visual C++).", "A single Windows permission lets Hearth install what games need (virtual controller, Visual C++ libraries)."),
-    ("Terminé", "Done"),
-    ("Tout est prêt", "All set"),
-    ("Commencer", "Start"),
-    ("Commencer à jouer", "Start playing"),
-    ("Continuer", "Continue"),
-    ("Continuer malgré l'échec", "Continue anyway"),
-    ("Passer cette étape", "Skip this step"),
-    ("Précédent", "Previous"),
-    ("Nom du profil", "Profile name"),
-    ("Photo de profil", "Profile picture"),
-    ("Avatar", "Avatar"),
-    ("En place", "Ready"),
-    ("Installation…", "Installing…"),
-    ("Échec", "Failed"),
-    ("À installer", "To install"),
-    ("Réessayer", "Retry"),
-    ("Installer maintenant", "Install now"),
-    ("Manette virtuelle (ViGEmBus)", "Virtual controller (ViGEmBus)"),
-    ("Visual C++ (x64)", "Visual C++ (x64)"),
-    ("Visual C++ (x86)", "Visual C++ (x86)"),
-    ("Hearth est configuré. Tout est modifiable dans les Réglages.", "Hearth is set up. Everything can be changed in Settings."),
-    ("Profil", "Profile"),
-    ("Écran", "Screen"),
-    ("Bienvenue ! Votre console est prête.", "Welcome! Your console is ready."),
-    ("Assistant de démarrage", "Setup assistant"),
-    ("Revoir", "Review"),
-    ("Thème", "Theme"),
-    ("Préréglage", "Preset"),
-    ("Teinte de l'accent", "Accent hue"),
-    ("Fond", "Background"),
-    ("Réinitialiser le thème", "Reset theme"),
-    ("Personnalisé", "Custom"),
-    ("Orange", "Orange"),
-    ("Bleu", "Blue"),
-    ("Rouge", "Red"),
-    ("Vert", "Green"),
-    ("Violet", "Purple"),
-    ("Rose", "Pink"),
-    ("Cyan", "Cyan"),
-    ("Blanc", "White"),
-    ("Anthracite", "Charcoal"),
-    ("Noir", "Black"),
-    ("Bleu nuit", "Night blue"),
-    ("Pourpre", "Plum"),
-    ("Forêt", "Forest"),
-    ("Le thème s'applique tout de suite, à tout Hearth.", "The theme applies instantly, everywhere in Hearth."),
-    ("Volume des effets", "Effects volume"),
-    ("Volume de la musique", "Music volume"),
-    ("Connectez-vous dans la fenêtre du client", "Sign in in the client window"),
-    ("Retour automatique à l'ancien mode dans", "Automatic revert to the previous mode in"),
-    ("Mode actuel :", "Current mode:"),
-    ("Résolution", "Resolution"),
-    ("Fréquence", "Refresh rate"),
-    ("Appliquer", "Apply"),
-    ("Recherche des réseaux…", "Searching for networks…"),
-    ("Connecté", "Connected"),
-    ("Sécurisé", "Secured"),
-    ("Lecture…", "Reading…"),
-    ("Aucune manette détectée", "No controller detected"),
-    ("Connectée", "Connected"),
-    ("Activé", "On"),
-    ("Coupé", "Off"),
-    ("Indisponible", "Unavailable"),
-    ("Connexion à", "Connecting to"),
-    ("Connecté à", "Connected to"),
-    ("Échec de la connexion à", "Could not connect to"),
-    ("Mot de passe :", "Password:"),
-    ("s'est fermé", "has closed"),
-    ("Impossible de lancer", "Cannot launch"),
-    ("Bientôt disponible", "Coming soon"),
-    ("aujourd'hui", "today"),
-    ("hier", "yesterday"),
-    ("il y a", "ago:"),
-    ("j", "d"),
-    ("de jeu", "played"),
-    ("dernière partie", "last played"),
-    ("Comptes", "Accounts"),
-    ("Connexion par QR code. Le client de la boutique s'installe tout seul quand il faut installer un jeu.", "Sign in with a QR code. The store client installs itself when a game needs installing."),
-    ("Bibliothèque locale", "Local library"),
-    ("Client non installé", "Client not installed"),
-    ("Se connecter", "Sign in"),
-    ("Installer le client", "Install the client"),
-    ("Automatique (winget)", "Automatic (winget)"),
-    ("Installation", "Installation"),
-    ("Installation du client", "Installing the client"),
-    ("client installé", "client installed"),
-    ("échec de l'installation du client", "client installation failed"),
-    ("Connexion", "Sign-in"),
-    ("service indisponible", "service unavailable"),
-    ("déconnecté", "signed out"),
-    ("demandée dans le client", "requested in the client"),
-    ("Scannez avec votre téléphone pour acheter", "Scan with your phone to buy"),
-    ("Connectez-vous sur votre téléphone, puis saisissez le code d'autorisation affiché", "Sign in on your phone, then enter the authorization code shown"),
-    ("Saisir le code", "Enter the code"),
-    ("Code d'autorisation", "Authorization code"),
-    ("Scannez avec l'application Steam sur votre téléphone puis validez", "Scan with the Steam app on your phone, then confirm"),
-    ("Dossier parent", "Parent folder"),
-    ("Choisissez le dossier puis l'exécutable (.exe) du jeu", "Pick the folder, then the game executable (.exe)"),
-    ("Identifier le jeu", "Identify the game"),
-    ("Recherche dans les boutiques :", "Searching the stores:"),
-    ("Saisir un autre nom…", "Type another name…"),
-    ("Recherche actuelle :", "Current search:"),
-    ("Utiliser", "Use"),
-    ("sans visuels", "without artwork"),
-    ("Nom du jeu", "Game name"),
-    ("Jeu ajouté", "Game added"),
-    ("Bureau", "Desktop"),
-    ("Téléchargements", "Downloads"),
-    ("Documents", "Documents"),
-    ("Résultats pour", "Results for"),
-    ("Rechercher un jeu", "Search for a game"),
-    ("Jamais", "Never"),
-    ("À proximité", "Nearby"),
-    ("Appairé", "Paired"),
-    ("Valider sur un appareil appairé pour l'oublier ; sur un appareil trouvé pour l'appairer.", "Select a paired device to forget it, or a found device to pair it."),
-    ("Rechercher des appareils", "Search for devices"),
-    ("Recherche d'appareils Bluetooth…", "Searching for Bluetooth devices…"),
-    ("Appairage de", "Pairing"),
-    ("appairé", "paired"),
-    ("échec de l'appairage", "pairing failed"),
-    ("oublié", "forgotten"),
-    ("Mode d'alimentation", "Power mode"),
-    ("Mise en veille après", "Sleep after"),
-    ("Extinction de l'écran après", "Turn off screen after"),
-    ("Alimentation", "Power"),
-    ("Notifications", "Notifications"),
-    ("À propos", "About"),
-    ("Afficher les bannières", "Show banners"),
-    ("Manettes", "Controllers"),
-    ("À la une", "Featured"),
-    ("jeux installés", "installed games"),
-    ("Non détecté", "Not detected"),
-    ("Gratuit", "Free"),
-    ("Pilotes", "Drivers"),
-    ("pilote", "driver"),
-    ("Pilotes Windows Update", "Windows Update drivers"),
-    ("Détection du matériel…", "Detecting hardware…"),
-    ("Fond animé", "Animated background"),
-    ("Windows exige l'autorisation de localisation pour lister les réseaux Wi-Fi.", "Windows requires location permission to list Wi-Fi networks."),
-    ("Mises à jour", "Updates"),
-    ("Stockage", "Storage"),
-    ("Recherche en cours…", "Searching…"),
-    ("Rechercher des mises à jour", "Check for updates"),
-    ("libres sur", "free of"),
-    ("Go", "GB"),
-    ("À jour", "Up to date"),
-    ("disponible(s)", "available"),
-    ("Non connecté", "Signed out"),
-    ("Installer", "Install"),
-    ("Jouer", "Play"),
-    ("Reprendre", "Resume"),
-    ("Modifier le nom", "Rename"),
-    ("Changer le visuel", "Change artwork"),
-    ("Cacher", "Hide"),
-    ("Retirer de Hearth", "Remove from Hearth"),
-    ("Désinstaller", "Uninstall"),
-    ("Ajouter un jeu depuis ce PC", "Add a game from this PC"),
-    ("Jeux cachés", "Hidden games"),
-    ("Ajouter", "Add"),
-    ("Jeu caché", "Game hidden"),
-    ("Confirmer", "Confirm"),
-    ("Jeu retiré", "Game removed"),
-    ("Désinstallation lancée (à valider dans le client si besoin)", "Uninstall started (confirm in the client if asked)"),
-    ("Désinstallez ce jeu depuis le client de sa boutique", "Uninstall this game from its store client"),
-    ("Visuel", "Artwork"),
-    ("Téléchargement du nouveau visuel…", "Downloading the new artwork…"),
-    ("à valider dans la fenêtre du client", "confirm in the client window"),
-    ("Choisissez un jeu pour le réafficher", "Pick a game to show it again"),
-    ("Autorisation administrateur", "Administrator permission"),
-    ("Visuels SteamGridDB (clé API)", "SteamGridDB artwork (API key)"),
-    ("Configurée", "Configured"),
-    ("Non configurée", "Not configured"),
-    ("Clé API SteamGridDB", "SteamGridDB API key"),
-    ("Clé gratuite : steamgriddb.com, Préférences, API", "Free key: steamgriddb.com, Preferences, API"),
-    ("Clé supprimée", "Key removed"),
-    ("Clé enregistrée", "Key saved"),
-    ("Activée", "Enabled"),
-    ("Activer (une seule fois)", "Enable (one time only)"),
-    ("Connectez-vous à Epic (Réglages > Comptes)", "Sign in to Epic (Settings > Accounts)"),
-    ("Préparation de l'installation impossible", "Could not prepare installation"),
-    ("Désinstallation en cours…", "Uninstalling…"),
-    ("Téléchargements", "Downloads"),
-    ("Déjà dans la file", "Already queued"),
-    ("ajouté à la file", "added to the queue"),
-    ("Vérification du code…", "Checking the code…"),
-    ("Saisissez le code Steam Guard (ou validez sur votre téléphone)", "Enter the Steam Guard code (or approve on your phone)"),
-    ("Téléchargement annulé", "Download cancelled"),
-    ("Connectez-vous à Steam (Réglages > Comptes) pour gérer les mises à jour", "Sign in to Steam (Settings > Accounts) to manage updates"),
-    ("Aucun jeu installé par Hearth à mettre à jour", "No Hearth-installed game to update"),
-    ("Recherche des mises à jour…", "Checking for updates…"),
-    ("Tous les jeux sont à jour", "All games are up to date"),
-    ("mise(s) à jour disponible(s)", "update(s) available"),
-    ("Rechercher les mises à jour", "Check for updates"),
-    ("Tout mettre à jour", "Update all"),
-    ("En attente", "Waiting"),
-    ("Mise à jour disponible", "Update available"),
-    ("Terminé", "Done"),
-    ("Mo/s", "MB/s"),
-    ("Jamais joué", "Never played"),
-    ("Nouveau profil", "New profile"),
-    ("Nom du profil", "Profile name"),
-    ("Profils", "Profiles"),
-    ("Profil créé", "Profile created"),
-    ("Profil supprimé", "Profile deleted"),
-    ("Ce profil ne peut pas être supprimé", "This profile cannot be deleted"),
-    ("Supprimer le profil", "Delete profile"),
-    ("Supprimer", "Delete"),
-    ("Effets sonores", "Sound effects"),
-    ("Musique d'ambiance", "Ambient music"),
-    ("Étape 2 : identifiant Steam pour télécharger les jeux", "Step 2: Steam username to download games"),
-    ("Préparation de Steam…", "Preparing Steam…"),
-    ("Démarrage de Steam…", "Starting Steam…"),
-    ("Connectez-vous dans la fenêtre Steam (une seule fois), puis relancez le jeu", "Sign in in the Steam window (one time only), then launch the game again"),
-    ("restant", "left"),
-    ("Vérifier / mettre à jour", "Check / update"),
-    ("Jeu désinstallé", "Game uninstalled"),
-    ("Désinstallation impossible", "Could not uninstall"),
-    ("Mise à jour disponible", "Update available"),
-    ("Mettre à jour maintenant", "Update now"),
-    ("Plus tard", "Later"),
-    ("Identifiant Steam", "Steam username"),
-    ("Mot de passe Steam", "Steam password"),
-    ("Code Steam Guard", "Steam Guard code"),
-    ("Code Steam Guard de l'application Steam (vide : validation sur le téléphone)", "Steam Guard code from the Steam app (empty: approve on your phone)"),
-    ("Connexion à Steam… (si besoin, validez sur votre téléphone, 1 minute)", "Signing in to Steam… (approve on your phone if asked, 1 minute)"),
-    ("Code Steam Guard, ou Valider (vide) si approuvé sur le téléphone", "Steam Guard code, or Confirm (empty) if approved on your phone"),
-    ("Connexion à Steam…", "Signing in to Steam…"),
-    ("Connecté à Steam :", "Signed in to Steam:"),
-    ("Saisissez le code Steam Guard", "Enter the Steam Guard code"),
-    ("Connexion refusée", "Sign-in refused"),
-    ("Déjà en cours", "Already in progress"),
-    ("téléchargement en cours (plusieurs minutes)…", "downloading (several minutes)…"),
-    ("installé", "installed"),
-    ("échec", "failed"),
-    ("Steam : installer sans le client", "Steam: install without the client"),
-    ("Autorisation administrateur requise : acceptez la fenêtre Windows (une seule fois)", "Administrator permission needed: accept the Windows prompt (one time only)"),
-];
 
 fn file() -> PathBuf {
     PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("Hearth").join("settings.json")
 }
 
+/// Textes traduits (colonnes : français | en | zh | hi | es | ar | bn | pt | ru | ur), générés par build.rs depuis lang/strings-*.tsv.
+const TSV: &str = include_str!(concat!(env!("OUT_DIR"), "/strings.tsv"));
+
+fn table() -> &'static std::collections::HashMap<&'static str, Vec<&'static str>> {
+    static T: std::sync::OnceLock<std::collections::HashMap<&'static str, Vec<&'static str>>> = std::sync::OnceLock::new();
+    T.get_or_init(|| {
+        TSV.lines()
+            .filter_map(|l| {
+                let c: Vec<&str> = l.split('|').collect();
+                (c.len() == 10).then(|| (c[0], c[1..].to_vec()))
+            })
+            .collect()
+    })
+}
+
+/// Code de la langue courante (« en », « fr »…).
+pub fn code() -> &'static str {
+    LANGS[lang()].0
+}
+
+/// Séparateur décimal : la virgule en français, espagnol, portugais et russe.
+pub fn decimal_sep() -> &'static str {
+    if matches!(code(), "fr" | "es" | "pt" | "ru") { "," } else { "." }
+}
+
 pub fn tr(fr: &str) -> String {
-    if lang() == 1 {
-        EN.iter().find(|(f, _)| *f == fr).map_or(fr, |(_, e)| e).into()
-    } else {
-        fr.into()
+    let c = code();
+    if c == "fr" {
+        return fr.into();
     }
+    // Colonnes : en = 0, zh = 1, hi = 2, es = 3, ar = 4, bn = 5, pt = 6, ru = 7, ur = 8.
+    let col = ["en", "zh", "hi", "es", "ar", "bn", "pt", "ru", "ur"].iter().position(|x| *x == c).unwrap_or(0);
+    table().get(fr).and_then(|v| v.get(col)).copied().filter(|s| !s.is_empty()).unwrap_or(fr).into()
 }
 
 pub fn lang() -> usize {
     LANG.load(Ordering::Relaxed)
 }
 
-/// Langue enregistrée, sinon celle de Windows (anglais si ce n'est pas le français).
+/// Langue enregistrée, sinon celle de Windows (anglais par défaut).
 pub fn init() {
     let saved = std::fs::read_to_string(file())
         .ok()
@@ -305,7 +75,8 @@ pub fn init() {
             TOASTS.store(v["toasts"].as_bool().unwrap_or(true), Ordering::Relaxed);
         })
         .and_then(|v| v["lang"].as_str().map(String::from));
-    let code = saved.unwrap_or_else(system_lang);
+    // Première exécution : l'assistant démarre toujours en anglais ; ensuite la langue choisie, sinon celle de Windows.
+    let code = saved.unwrap_or_else(|| if crate::oobe::is_done() { system_lang() } else { "en".into() });
     set(LANGS.iter().position(|(c, _)| *c == code).unwrap_or(0), false);
 }
 

@@ -13,7 +13,7 @@ pub mod steamcmd;
 pub mod account;
 pub mod qr;
 
-pub use art::{asset, clear_art, ensure_art, ensure_art_for, fetch_first, save_art};
+pub use art::{asset, asset_dir, clear_art, ensure_art, ensure_art_for, fetch_first, purge_offers, save_art};
 
 /// Façon de lancer un jeu.
 #[derive(Clone, Debug)]

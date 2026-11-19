@@ -21,6 +21,7 @@ pub enum Act {
     ShowHidden,
     UpdateYes(usize),
     DeleteProfile(usize),
+    CancelDl(usize),
     ConnectStore(usize),
     Cancel,
 }
@@ -126,6 +127,10 @@ impl Shell {
             Act::DeleteProfile(i) => {
                 self.ui.set_zone(back);
                 self.profile_delete(i);
+            }
+            Act::CancelDl(i) => {
+                self.ui.set_zone(back);
+                self.dl_cancel(i);
             }
             Act::ConnectStore(i) => {
                 self.ui.set_zone(back);
