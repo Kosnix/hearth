@@ -435,7 +435,7 @@ impl Shell {
         self.start_splash(i, g.uri.is_some());
         if let Some(uri) = &g.uri {
             // Lancement par le client de la boutique : le jeu n'est pas encapsulé, on suivra sa fenêtre (tick).
-            let _ = Command::new("cmd").args(["/c", "start", "", uri]).spawn();
+            system::open_uri(uri);
             self.ext_pending.set(Some((i, std::time::Instant::now())));
             if steam_uri {
                 self.steam_keep(1800);
@@ -1045,7 +1045,7 @@ impl Shell {
         let n = self.anim_n.get().wrapping_add(1);
         self.anim_n.set(n);
         if n % 5 == 0 {
-            if self.ui.get_tab() == 3 && !self.catalog_started.get() {
+            if self.ui.get_tab() == 2 && !self.catalog_started.get() {
                 self.load_catalog(None);
             }
             let pad = match std::env::var("HEARTH_PAD").as_deref() {
@@ -1059,7 +1059,7 @@ impl Shell {
             }
             self.fg_main.set(wm::find_window(MAIN_TITLE).is_some_and(|h| h == wm::foreground()));
             let tab = self.ui.get_tab();
-            if tab != self.last_tab.replace(tab) && (tab == 1 || tab == 2) {
+            if tab != self.last_tab.replace(tab) && tab == 1 {
                 self.ui.set_lsel(0);
                 self.rebuild();
             }
@@ -1196,8 +1196,11 @@ impl Shell {
                 price: if o.price == "Gratuit" { tr("Gratuit") } else { o.price.clone() }.into(),
                 store: o.store.as_str().into(),
                 art: p.as_ref().map(imgload::image).unwrap_or_default(),
+                owned: false,
             })
             .collect();
+        let own = self.owned_titles();
+        let rows: Vec<Offer> = rows.into_iter().map(|mut r| { r.owned = own.contains(&stores::norm_title(&r.title)); r }).collect();
         *self.offer_data.borrow_mut() = offers.to_vec();
         self.ui.set_offers_state(if rows.is_empty() { "empty" } else { "" }.into());
         self.offers.set_vec(rows);
@@ -1278,7 +1281,7 @@ impl Shell {
             self.owned.borrow().iter().map(|(o, id)| (id.clone(), o.title.clone(), stores::account::owned_art(o))).collect();
         // Jeux sans aucun visuel (ajoutés à la main, Rockstar, etc.) : recherche par titre.
         let titleless: Vec<(String, String)> =
-            self.games.borrow().iter().filter(|g| !g.install && !g.id.starts_with("demo-") && stores::asset(&g.id, "cover").is_none()).map(|g| (g.id.clone(), g.name.clone())).collect();
+            self.games.borrow().iter().filter(|g| (!g.install || g.id.starts_with("owned-rockstar-")) && !g.id.starts_with("demo-") && stores::asset(&g.id, "cover").is_none()).map(|g| (g.id.clone(), g.name.clone())).collect();
         let installed = self.games.borrow().iter().any(|g| !g.store.is_empty() && !g.install);
         std::thread::spawn(move || {
             if installed {
@@ -1473,7 +1476,7 @@ impl Shell {
         if let Some(e) = self.ext_game.borrow().as_ref() {
             running.push(e.tile);
         }
-        let all_tab = self.ui.get_tab() == 2;
+        let all_tab = false;
         let (mut a, mut b): (Vec<(u64, Tile)>, Vec<Tile>) = (vec![], vec![]);
         for (i, g) in self.games.borrow().iter().enumerate() {
             if g.hidden {

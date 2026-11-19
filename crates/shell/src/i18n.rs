@@ -17,6 +17,8 @@ const EN: &[(&str, &str)] = &[
     ("Sortie audio", "Audio output"),
     ("Garder ce réglage", "Keep this setting"),
     ("Annuler", "Cancel"),
+    ("Ajouter une boutique", "Add a store"),
+    ("à installer depuis le Rockstar Games Launcher", "install it from the Rockstar Games Launcher"),
     ("Retour automatique à l'ancien mode dans", "Automatic revert to the previous mode in"),
     ("Mode actuel :", "Current mode:"),
     ("Résolution", "Resolution"),

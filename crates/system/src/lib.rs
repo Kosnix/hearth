@@ -534,3 +534,9 @@ pub mod admin;
 pub mod sfx;
 mod extra;
 pub use extra::{about, bluetooth, install, net, power};
+
+/// Ouvre une adresse (steam://, com.epicgames.launcher://, https://…) dans l'application associée, sans fenêtre de console.
+pub fn open_uri(uri: &str) {
+    use std::os::windows::process::CommandExt;
+    let _ = std::process::Command::new("cmd").args(["/c", "start", "", uri]).creation_flags(0x0800_0000).spawn();
+}

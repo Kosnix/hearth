@@ -273,13 +273,13 @@ fn patch_overlay(text: &str) -> Option<String> {
     Some(format!("{}\n\t\t\"EnableGameOverlay\"\t\t\"0\"{}", &text[..=brace], &text[brace + 1..]))
 }
 
+
 /// Désactive Steam Input pour les manettes Xbox et PlayStation : sinon Steam accapare le bouton guide
-/// (grande fenêtre Steam) en même temps que Hearth.
+/// (grande fenêtre Steam) en même temps que Hearth, et traduit la manette à la place des jeux.
 fn patch_input(text: &str) -> Option<String> {
     const KEYS: [&str; 2] = ["SteamController_PSSupport", "SteamController_XBoxSupport"];
     let mut out: Vec<String> = text.lines().map(String::from).collect();
     let mut changed = false;
-    // Valeurs déjà présentes : forcées à 0.
     for l in out.iter_mut() {
         for k in KEYS {
             if l.contains(&format!("\"{k}\"")) && !l.trim_end().ends_with("\"0\"") {
@@ -288,7 +288,6 @@ fn patch_input(text: &str) -> Option<String> {
             }
         }
     }
-    // Valeurs absentes : ajoutées juste après l'accolade du bloc "Steam".
     let missing: Vec<&str> = KEYS.iter().copied().filter(|k| !text.contains(&format!("\"{k}\""))).collect();
     if !missing.is_empty() {
         let i = out.iter().position(|l| l.trim() == "\"Steam\"")?;

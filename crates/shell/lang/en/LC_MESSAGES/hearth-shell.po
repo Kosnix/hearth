@@ -495,3 +495,11 @@ msgstr "No installed games. Install one from \"Not installed\" or the Store, or 
 msgctxt "App"
 msgid "Aucun jeu."
 msgstr "No games."
+
+msgctxt "App"
+msgid "Aucun jeu à installer. Connectez vos boutiques pour retrouver vos achats."
+msgstr "No games to install. Connect your stores to find your purchases."
+
+msgctxt "App"
+msgid "Possédé"
+msgstr "Owned"

@@ -21,6 +21,7 @@ pub enum Act {
     ShowHidden,
     UpdateYes(usize),
     DeleteProfile(usize),
+    ConnectStore(usize),
     Cancel,
 }
 
@@ -126,6 +127,10 @@ impl Shell {
                 self.ui.set_zone(back);
                 self.profile_delete(i);
             }
+            Act::ConnectStore(i) => {
+                self.ui.set_zone(back);
+                self.connect_store(i);
+            }
             Act::UpdateYes(g) => {
                 self.ui.set_zone(back);
                 if let Some(id) = self.games.borrow().get(g).map(|g| g.id.clone()) {
@@ -196,7 +201,7 @@ impl Shell {
             return;
         }
         let started = match g.store.as_str() {
-            "Steam" =>g.id.strip_prefix("steam-").is_some_and(|id| Command::new("cmd").args(["/c", "start", "", &format!("steam://uninstall/{id}")]).spawn().is_ok()),
+            "Steam" =>g.id.strip_prefix("steam-").is_some_and(|id| { system::open_uri(&format!("steam://uninstall/{id}")); true }),
             "GOG" => {
                 let exe = Path::new(&g.exe);
                 let found = exe.ancestors().skip(1).take(3).find_map(|d| {
@@ -208,7 +213,7 @@ impl Shell {
                 found.is_some_and(|u| Command::new(u).arg("/SILENT").spawn().is_ok())
             }
             _ => {
-                let _ = Command::new("cmd").args(["/c", "start", "", "com.epicgames.launcher://store/library"]).spawn();
+                system::open_uri("com.epicgames.launcher://store/library");
                 false
             }
         };

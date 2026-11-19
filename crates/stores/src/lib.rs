@@ -223,3 +223,10 @@ pub fn base_dir() -> std::path::PathBuf {
 pub fn profile_dir() -> std::path::PathBuf {
     std::env::var_os("HEARTH_PROFILE_DIR").map(std::path::PathBuf::from).unwrap_or_else(base_dir)
 }
+
+/// Titre normalisé pour comparer deux catalogues (sans casse, ponctuation ni mention d'édition).
+pub fn norm_title(title: &str) -> String {
+    norm(title)
+}
+
+pub use rockstar::{launcher as rockstar_launcher, CATALOG as ROCKSTAR_CATALOG};

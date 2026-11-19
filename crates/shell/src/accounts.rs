@@ -11,6 +11,7 @@ use crate::i18n::tr;
 use crate::{with_shell, Game, Shell};
 
 static LOGIN_GEN: AtomicU32 = AtomicU32::new(0);
+const STORES: [&str; 4] = ["Steam", "Epic Games", "GOG", "Rockstar Games"];
 
 impl Shell {
     /// Recalcule la détection des clients et le nombre de jeux installés par boutique.
@@ -215,6 +216,27 @@ impl Shell {
         *self.owned.borrow_mut() = items;
         self.reload_games(installed);
         self.start_art();
+        self.mark_owned_offers();
+    }
+
+    /// Titres (normalisés) déjà dans la bibliothèque : achetés ou installés.
+    pub fn owned_titles(&self) -> std::collections::HashSet<String> {
+        let mut set: std::collections::HashSet<String> = self.owned.borrow().iter().map(|(o, _)| stores::norm_title(&o.title)).collect();
+        set.extend(self.games.borrow().iter().filter(|g| !g.install && !g.store.is_empty()).map(|g| stores::norm_title(&g.name)));
+        set
+    }
+
+    /// Met à jour la mention « Dans la bibliothèque » des offres déjà affichées.
+    pub fn mark_owned_offers(&self) {
+        let set = self.owned_titles();
+        for i in 0..self.offers.row_count() {
+            let Some(mut row) = self.offers.row_data(i) else { continue };
+            let own = set.contains(&stores::norm_title(&row.title));
+            if row.owned != own {
+                row.owned = own;
+                self.offers.set_row_data(i, row);
+            }
+        }
     }
 
     /// Ajoute à la liste les jeux possédés qui ne sont pas (encore) installés.
@@ -237,6 +259,20 @@ impl Shell {
             }
             games.push(game);
         }
+        // Rockstar : pas de compte lisible, on propose son catalogue dès que le lanceur est installé.
+        if stores::rockstar_launcher().is_some() {
+            for (title, slug) in stores::ROCKSTAR_CATALOG {
+                if games.iter().any(|g| !g.install && g.store == "Rockstar Games" && stores::norm_title(&g.name) == stores::norm_title(title)) {
+                    continue;
+                }
+                let id = format!("owned-rockstar-{slug}");
+                let mut game = Game { name: title.into(), id: id.clone(), uri: Some(String::new()), store: "Rockstar Games".into(), install: true, ..Default::default() };
+                if let Some(ov) = self.overrides.borrow().get(&id) {
+                    game.hidden = ov.hidden;
+                }
+                games.push(game);
+            }
+        }
     }
 
     /// Installe un jeu possédé via le client de sa boutique (installé au besoin).
@@ -249,13 +285,20 @@ impl Shell {
             self.steam_install(&g.id);
             return;
         }
+        if g.id.starts_with("owned-rockstar-") {
+            if let Some(exe) = stores::rockstar_launcher() {
+                let _ = std::process::Command::new(exe).spawn();
+                self.push_notif(&tr("Installation"), &format!("{} : {}", g.name, tr("à installer depuis le Rockstar Games Launcher")));
+            }
+            return;
+        }
         let detected = self.store_status.borrow().iter().any(|(n, d, _)| *n == g.store && *d);
         if !detected {
             self.account_install_client(g.store.clone());
             return;
         }
         if let Some(uri) = &g.uri {
-            let _ = Command::new("cmd").args(["/c", "start", "", uri]).spawn();
+            system::open_uri(uri);
             self.push_notif(&tr("Installation"), &format!("{} ({}) : {}", g.name, g.store, tr("à valider dans la fenêtre du client")));
         }
     }
@@ -264,16 +307,40 @@ impl Shell {
 impl Shell {
     /// Boutiques sans compte connecté (affichées comme invitations dans l'onglet Boutique).
     pub fn refresh_onboard(&self) {
-        let missing: Vec<slint::SharedString> = ["Steam", "Epic Games"].into_iter().filter(|s| account::session(s).is_none()).map(Into::into).collect();
-        self.ui.set_onboard(std::rc::Rc::new(slint::VecModel::from(missing)).into());
-        if self.ui.get_obsel() as usize >= self.ui.get_onboard().row_count() {
-            self.ui.set_obsel(0);
-        }
+        let label: Vec<slint::SharedString> = if self.missing_stores().is_empty() { vec![] } else { vec![tr("Ajouter une boutique").into()] };
+        self.ui.set_onboard(std::rc::Rc::new(slint::VecModel::from(label)).into());
+        self.ui.set_obsel(0);
     }
 
-    pub fn onboard_pick(&self, i: usize) {
-        let Some(store) = self.ui.get_onboard().row_data(i) else { return };
-        self.ui.set_qr_return(0);
-        self.begin_login(store.to_string());
+    /// Indices (dans `STORES`) des boutiques pas encore ajoutées : compte non connecté (Steam, Epic) ou client absent (GOG, Rockstar).
+    fn missing_stores(&self) -> Vec<usize> {
+        let st = self.store_status.borrow();
+        (0..STORES.len())
+            .filter(|&i| match STORES[i] {
+                "Steam" | "Epic Games" => account::session(STORES[i]).is_none(),
+                n => !st.iter().any(|(s, d, _)| s == n && *d),
+            })
+            .collect()
+    }
+
+    pub fn onboard_pick(&self, _i: usize) {
+        let items: Vec<(String, crate::menus::Act)> = self
+            .missing_stores()
+            .into_iter()
+            .map(|i| (STORES[i].to_string(), crate::menus::Act::ConnectStore(i)))
+            .chain([(tr("Annuler"), crate::menus::Act::Cancel)])
+            .collect();
+        self.menu_show(tr("Ajouter une boutique"), items);
+    }
+
+    pub fn connect_store(&self, i: usize) {
+        let Some(&store) = STORES.get(i) else { return };
+        match store {
+            "Steam" | "Epic Games" => {
+                self.ui.set_qr_return(0);
+                self.begin_login(store.to_string());
+            }
+            _ => self.account_install_client(store.to_string()),
+        }
     }
 }

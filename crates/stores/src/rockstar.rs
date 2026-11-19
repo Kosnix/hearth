@@ -15,7 +15,7 @@ impl Store for Rockstar {
     }
 
     fn detected(&self) -> bool {
-        std::path::Path::new(LAUNCHER).exists() || !reg::subkeys(HKEY_LOCAL_MACHINE, ROOT).is_empty()
+        launcher().is_some() || !reg::subkeys(HKEY_LOCAL_MACHINE, ROOT).is_empty()
     }
 
     fn installed(&self) -> Vec<Game> {
@@ -44,4 +44,35 @@ impl Store for Rockstar {
     fn search(&self, _query: &str) -> Vec<Offer> {
         vec![]
     }
+}
+
+/// Jeux Rockstar du lanceur (titre affiché, identifiant court) : proposés dans la Bibliothèque quand le lanceur est installé.
+pub const CATALOG: [(&str, &str); 5] = [
+    ("Grand Theft Auto V", "gtav"),
+    ("Red Dead Redemption 2", "rdr2"),
+    ("L.A. Noire", "lanoire"),
+    ("Max Payne 3", "maxpayne3"),
+    ("Grand Theft Auto IV", "gtaiv"),
+];
+
+/// Exécutable du Rockstar Games Launcher, s'il est installé.
+pub fn launcher() -> Option<std::path::PathBuf> {
+    let p = std::path::PathBuf::from(LAUNCHER);
+    if p.exists() {
+        return Some(p);
+    }
+    for root in [r"SOFTWARE\WOW6432Node\Rockstar Games\Launcher", r"SOFTWARE\Rockstar Games\Launcher"] {
+        if let Some(d) = reg::string(HKEY_LOCAL_MACHINE, root, "InstallFolder") {
+            let p = std::path::PathBuf::from(d.trim_end_matches('\\')).join("Launcher.exe");
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+/// Le titre est-il l'un des jeux du catalogue Rockstar ? (comparaison sans casse ni ponctuation)
+pub fn same_title(a: &str, b: &str) -> bool {
+    crate::norm_title(a) == crate::norm_title(b)
 }

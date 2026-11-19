@@ -47,7 +47,7 @@ impl Session {
             let si = STARTUPINFOW { cb: size_of::<STARTUPINFOW>() as u32, ..Default::default() };
             let mut pi = PROCESS_INFORMATION::default();
             // Suspendu le temps de l'ajouter au job, pour que ses enfants y soient aussi.
-            CreateProcessW(PCWSTR::null(), Some(PWSTR(line.as_mut_ptr())), None, None, false, CREATE_SUSPENDED, None, cwd, &si, &mut pi)?;
+            CreateProcessW(PCWSTR::null(), Some(PWSTR(line.as_mut_ptr())), None, None, false, CREATE_SUSPENDED | CREATE_NO_WINDOW, None, cwd, &si, &mut pi)?;
             let _ = AssignProcessToJobObject(job, pi.hProcess);
             ResumeThread(pi.hThread);
             let _ = CloseHandle(pi.hThread);
@@ -385,7 +385,8 @@ pub fn kill_owner(h: HWND) {
     let mut pid = 0;
     unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
     if pid != 0 && pid != std::process::id() {
-        let _ = std::process::Command::new("taskkill").args(["/pid", &pid.to_string(), "/t", "/f"]).status();
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("taskkill").args(["/pid", &pid.to_string(), "/t", "/f"]).creation_flags(0x0800_0000).status();
     }
 }
 
