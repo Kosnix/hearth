@@ -7,7 +7,6 @@ pub mod epiccmd;
 mod gog;
 mod http;
 mod reg;
-mod rockstar;
 mod steam;
 pub mod steamcmd;
 
@@ -97,7 +96,7 @@ pub trait Store: Send + Sync {
 }
 
 pub fn all() -> Vec<Box<dyn Store>> {
-    vec![Box::new(steam::Steam), Box::new(epic::Epic), Box::new(gog::Gog), Box::new(rockstar::Rockstar)]
+    vec![Box::new(steam::Steam), Box::new(epic::Epic), Box::new(gog::Gog)]
 }
 
 /// Tous les jeux installés, toutes boutiques confondues.
@@ -205,7 +204,7 @@ pub fn download(url: &str) -> Option<Vec<u8>> {
 pub use steam::{client_start as steam_client_start, client_user as steam_client_user};
 pub use steam::disable_overlay as steam_disable_overlay;
 
-/// Visuels d'un jeu sans visuel connu (ajouté à la main, Rockstar…) : recherche par titre sur Steam.
+/// Visuels d'un jeu sans visuel connu (ajouté à la main…) : recherche par titre sur Steam.
 pub fn resolve_art(title: &str) -> Option<Art> {
     let offers = steam::Steam.search(title);
     let n = norm(title);
@@ -229,4 +228,3 @@ pub fn norm_title(title: &str) -> String {
     norm(title)
 }
 
-pub use rockstar::{launcher as rockstar_launcher, CATALOG as ROCKSTAR_CATALOG};

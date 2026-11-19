@@ -140,7 +140,7 @@ fn install_gamepad_driver() {
 
 const ELEVATED_TASK: &str = "HearthElevated";
 /// Seuls ces paquets winget peuvent être installés par l'assistant administrateur.
-const ALLOWED_WINGET: [&str; 7] = ["Valve.Steam", "EpicGames.EpicGamesLauncher", "GOG.Galaxy", "ViGEm.ViGEmBus", "RockstarGames.Launcher", "Microsoft.VCRedist.2015+.x64", "Microsoft.VCRedist.2015+.x86"];
+const ALLOWED_WINGET: [&str; 6] = ["Valve.Steam", "EpicGames.EpicGamesLauncher", "GOG.Galaxy", "ViGEm.ViGEmBus", "Microsoft.VCRedist.2015+.x64", "Microsoft.VCRedist.2015+.x86"];
 
 /// À lancer élevé (un seul consentement UAC) : copie l'assistant dans Program Files (non modifiable
 /// sans droits) et crée la tâche planifiée « privilèges maximum » qui le lance sans invite.

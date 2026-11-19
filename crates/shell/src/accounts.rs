@@ -11,7 +11,7 @@ use crate::i18n::tr;
 use crate::{with_shell, Game, Shell};
 
 static LOGIN_GEN: AtomicU32 = AtomicU32::new(0);
-const STORES: [&str; 4] = ["Steam", "Epic Games", "GOG", "Rockstar Games"];
+const STORES: [&str; 3] = ["Steam", "Epic Games", "GOG"];
 
 impl Shell {
     /// Recalcule la détection des clients et le nombre de jeux installés par boutique.
@@ -34,7 +34,7 @@ impl Shell {
                     match r {
                         Ok(()) => {
                             s.push_notif(&tr("Installation"), &format!("{store} : {}", tr("client installé")));
-                            if store == "GOG" || store == "Rockstar Games" {
+                            if store == "GOG" {
                                 s.open_client(&store);
                             }
                         }
@@ -264,20 +264,6 @@ impl Shell {
             }
             games.push(game);
         }
-        // Rockstar : pas de compte lisible, on propose son catalogue dès que le lanceur est installé.
-        if stores::rockstar_launcher().is_some() {
-            for (title, slug) in stores::ROCKSTAR_CATALOG {
-                if games.iter().any(|g| !g.install && g.store == "Rockstar Games" && stores::norm_title(&g.name) == stores::norm_title(title)) {
-                    continue;
-                }
-                let id = format!("owned-rockstar-{slug}");
-                let mut game = Game { name: title.into(), id: id.clone(), uri: Some(String::new()), store: "Rockstar Games".into(), install: true, ..Default::default() };
-                if let Some(ov) = self.overrides.borrow().get(&id) {
-                    game.hidden = ov.hidden;
-                }
-                games.push(game);
-            }
-        }
     }
 
     /// Installe un jeu possédé via le client de sa boutique (installé au besoin).
@@ -288,13 +274,6 @@ impl Shell {
         }
         if g.id.starts_with("owned-steam-") {
             self.steam_install(&g.id);
-            return;
-        }
-        if g.id.starts_with("owned-rockstar-") {
-            if let Some(exe) = stores::rockstar_launcher() {
-                let _ = std::process::Command::new(exe).spawn();
-                self.push_notif(&tr("Installation"), &format!("{} : {}", g.name, tr("à installer depuis le Rockstar Games Launcher")));
-            }
             return;
         }
         let detected = self.store_status.borrow().iter().any(|(n, d, _)| *n == g.store && *d);
@@ -317,7 +296,7 @@ impl Shell {
         self.ui.set_obsel(0);
     }
 
-    /// Indices (dans `STORES`) des boutiques pas encore ajoutées : compte non connecté (Steam, Epic) ou client absent (GOG, Rockstar).
+    /// Indices (dans `STORES`) des boutiques pas encore ajoutées : compte non connecté (Steam, Epic) ou client absent (GOG).
     fn missing_stores(&self) -> Vec<usize> {
         let st = self.store_status.borrow();
         (0..STORES.len())
@@ -356,12 +335,9 @@ impl Shell {
         }
     }
 
-    /// Ouvre le client GOG / Rockstar (connexion au compte dans sa fenêtre) ; faux s'il n'est pas installé.
+    /// Ouvre le client GOG (connexion au compte dans sa fenêtre) ; faux s'il n'est pas installé.
     fn open_client(&self, store: &str) -> bool {
-        let exe = match store {
-            "Rockstar Games" => stores::rockstar_launcher(),
-            _ => [r"C:\Program Files (x86)\GOG Galaxy\GalaxyClient.exe", r"C:\Program Files\GOG Galaxy\GalaxyClient.exe"].into_iter().map(std::path::PathBuf::from).find(|p| p.exists()),
-        };
+        let exe = [r"C:\Program Files (x86)\GOG Galaxy\GalaxyClient.exe", r"C:\Program Files\GOG Galaxy\GalaxyClient.exe"].into_iter().map(std::path::PathBuf::from).find(|p| p.exists());
         let Some(exe) = exe else { return false };
         let _ = std::process::Command::new(exe).spawn();
         self.push_notif(store, &tr("Connectez-vous dans la fenêtre du client"));

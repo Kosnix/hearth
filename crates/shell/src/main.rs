@@ -1463,9 +1463,9 @@ impl Shell {
         let key = i18n::pref("steamgriddb_key").or_else(|| std::env::var("HEARTH_SGDB_KEY").ok());
         let mut jobs: Vec<(String, String, stores::Art)> =
             self.owned.borrow().iter().map(|(o, id)| (id.clone(), o.title.clone(), stores::account::owned_art(o))).collect();
-        // Jeux sans aucun visuel (ajoutés à la main, Rockstar, etc.) : recherche par titre.
+        // Jeux sans aucun visuel (ajoutés à la main, etc.) : recherche par titre.
         let titleless: Vec<(String, String)> =
-            self.games.borrow().iter().filter(|g| (!g.install || g.id.starts_with("owned-rockstar-")) && !g.id.starts_with("demo-") && stores::asset(&g.id, "cover").is_none()).map(|g| (g.id.clone(), g.name.clone())).collect();
+            self.games.borrow().iter().filter(|g| !g.id.starts_with("demo-") && stores::asset(&g.id, "cover").is_none()).map(|g| (g.id.clone(), g.name.clone())).collect();
         let installed = self.games.borrow().iter().any(|g| !g.store.is_empty() && !g.install);
         std::thread::spawn(move || {
             if installed {

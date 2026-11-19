@@ -186,7 +186,6 @@ pub mod install {
             "Steam" => Some("Valve.Steam"),
             "Epic Games" => Some("EpicGames.EpicGamesLauncher"),
             "GOG" => Some("GOG.Galaxy"),
-            "Rockstar Games" => Some("RockstarGames.Launcher"),
             _ => None,
         }
     }

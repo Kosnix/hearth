@@ -590,7 +590,7 @@ fn account_rows(accounts: &[(String, bool, Option<String>)]) -> Vec<(String, Str
             v.push((tr("Autorisation administrateur"), value, if *detected { Act::None } else { Act::Admin }));
             continue;
         }
-        if name == "GOG" || name == "Rockstar Games" {
+        if name == "GOG" {
             let value = if *detected { tr("Bibliothèque locale") } else { tr("Client non installé") };
             v.push((name.clone(), value, Act::None));
         } else if let Some(user) = session {
