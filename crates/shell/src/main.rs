@@ -136,6 +136,7 @@ struct Shell {
     kb_search: Cell<bool>,
     kb_identify: Cell<bool>,
     kb_login: Cell<bool>,
+    kb_sgdb: Cell<bool>,
     login: RefCell<Option<stores::account::Challenge>>,
     pick_mode: RefCell<addflow::PickMode>,
     pick_entries: RefCell<Vec<addgame::Entry>>,
@@ -227,6 +228,7 @@ fn main() -> Result<(), slint::PlatformError> {
         kb_search: Cell::new(false),
         kb_identify: Cell::new(false),
         kb_login: Cell::new(false),
+        kb_sgdb: Cell::new(false),
         login: RefCell::new(None),
         pick_mode: RefCell::new(addflow::PickMode::Root),
         pick_entries: RefCell::new(vec![]),
@@ -758,6 +760,16 @@ impl Shell {
                 });
             }
             settings::Outcome::SteamCmd => self.scmd_begin(None),
+            settings::Outcome::Sgdb => {
+                self.kb_sgdb.set(true);
+                self.settings.kb_open_text(&i18n::pref("steamgriddb_key").unwrap_or_default());
+                self.kb_refresh();
+                self.ui.set_kbx(0);
+                self.ui.set_kby(0);
+                self.ui.set_kb_title(tr("Clé API SteamGridDB").into());
+                self.ui.set_zone(4);
+                self.push_notif("SteamGridDB", &tr("Clé gratuite : steamgriddb.com, Préférences, API"));
+            }
             settings::Outcome::Login(store) => self.begin_login(store),
             settings::Outcome::Logout(store) => self.logout(&store),
             settings::Outcome::BtScan => {
@@ -854,6 +866,8 @@ impl Shell {
                     6
                 } else if self.kb_login.replace(false) {
                     5
+                } else if self.kb_sgdb.replace(false) {
+                    3
                 } else if self.rename_id.borrow_mut().take().is_some() {
                     0
                 } else if self.scmd_stage.get() != 0 {
@@ -873,6 +887,14 @@ impl Shell {
                 } else if let Some(id) = renaming {
                     self.ui.set_zone(0);
                     self.rename_game(&id, text.trim());
+                } else if self.kb_sgdb.replace(false) {
+                    self.ui.set_zone(3);
+                    i18n::set_pref("steamgriddb_key", text.trim());
+                    self.push_notif("SteamGridDB", &tr(if text.trim().is_empty() { "Clé supprimée" } else { "Clé enregistrée" }));
+                    self.start_art();
+                    if self.ui.get_cat() == 12 {
+                        self.spawn_fetch(12);
+                    }
                 } else if self.kb_login.replace(false) {
                     self.ui.set_zone(5);
                     self.login_exchange(text);

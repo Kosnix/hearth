@@ -59,6 +59,7 @@ pub fn fetch(cat: i32) -> Fetched {
         12 => {
             let mut accounts: Vec<(String, bool, Option<String>)> = stores::all().iter().map(|s| (s.name().to_string(), s.detected(), stores::account::session(s.name()).map(|a| a.name))).collect();
             accounts.push(("@admin".into(), system::admin::enabled(), None));
+            accounts.push(("@sgdb".into(), i18n::pref("steamgriddb_key").is_some_and(|k| !k.trim().is_empty()), None));
             Fetched { accounts, ..Default::default() }
         }
         _ => Fetched::default(),
@@ -84,6 +85,7 @@ pub enum Outcome {
     InstallClient(String),
     Admin,
     SteamCmd,
+    Sgdb,
     Login(String),
     Logout(String),
 }
@@ -438,6 +440,7 @@ impl Settings {
                     Some(Act::Install(n)) => Outcome::InstallClient(n),
                     Some(Act::Admin) => Outcome::Admin,
                     Some(Act::SteamCmd) => Outcome::SteamCmd,
+                    Some(Act::Sgdb) => Outcome::Sgdb,
                     Some(Act::Login(n)) => Outcome::Login(n),
                     Some(Act::Logout(n)) => Outcome::Logout(n),
                     _ => Outcome::None,
@@ -576,6 +579,7 @@ enum Act {
     Install(String),
     Admin,
     SteamCmd,
+    Sgdb,
     Login(String),
     Logout(String),
     None,
@@ -585,6 +589,10 @@ enum Act {
 fn account_rows(accounts: &[(String, bool, Option<String>)]) -> Vec<(String, String, Act)> {
     let mut v = vec![];
     for (name, detected, session) in accounts {
+        if name == "@sgdb" {
+            v.push((tr("Visuels SteamGridDB (clé API)"), tr(if *detected { "Configurée" } else { "Non configurée" }), Act::Sgdb));
+            continue;
+        }
         if name == "@admin" {
             let value = if *detected { tr("Activée") } else { tr("Activer (une seule fois)") };
             v.push((tr("Autorisation administrateur"), value, if *detected { Act::None } else { Act::Admin }));

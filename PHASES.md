@@ -47,3 +47,5 @@
 - Mode souris à la manette PlayStation (L3 + R3) : stick = curseur, Croix/Rond = clics, stick droit = défilement, Triangle = clavier visuel (overlay sans focus, texte Unicode) ; bandeau d'aide et ligne « Souris et clavier » dans le menu guide.
 
 - Prise en charge de Rockstar / Social Club supprimée (aucune API d'installation ; boutiques : Steam, Epic, GOG).
+
+- Réglages > Comptes : ligne « Visuels SteamGridDB (clé API) » (saisie au clavier visuel, enregistrée dans les préférences, relance la recherche des visuels manquants).
