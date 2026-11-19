@@ -10,10 +10,11 @@ use system::display::{self, Mode};
 use system::wifi::Net;
 
 use crate::i18n::{self, tr};
+use crate::theme;
 use crate::SettingRow;
 
-const CATS: [&str; 13] =
-    ["Son", "Affichage", "Wi-Fi", "Bluetooth", "Manettes", "Langue", "Mises à jour", "Stockage", "Pilotes", "Alimentation", "Notifications", "À propos", "Comptes"];
+const CATS: [&str; 14] =
+    ["Son", "Affichage", "Wi-Fi", "Bluetooth", "Manettes", "Langue", "Mises à jour", "Stockage", "Pilotes", "Alimentation", "Notifications", "À propos", "Comptes", "Thème"];
 
 pub fn cats() -> Vec<String> {
     CATS.iter().map(|c| tr(c)).collect()
@@ -78,6 +79,7 @@ pub enum Outcome {
     Password(String),
     Connect(String),
     LangChanged,
+    ThemeChanged,
     CheckUpdates(bool),
     BtScan,
     BtPair(String, String),
@@ -292,6 +294,15 @@ impl Settings {
             4 if s.loading => vec![row("Lecture…", String::new(), false)],
             4 if s.data.pads.is_empty() => vec![row("Aucune manette détectée", String::new(), false)],
             4 => s.data.pads.iter().map(|(p, b)| row(p, b.map_or(tr("Connectée"), |b| format!("{} · {b} %", tr("Connectée"))), false)).collect(),
+            13 => {
+                hint = tr("Le thème s'applique tout de suite, à tout Hearth.");
+                vec![
+                    row("Préréglage", theme_name(theme::preset()), true),
+                    row("Teinte de l'accent", format!("{}°", theme::hue()), true),
+                    row("Fond", tr(theme::TONES[theme::tone() as usize].0), true),
+                    row("Réinitialiser le thème", String::new(), false),
+                ]
+            }
             5 => vec![row("Langue", i18n::LANGS[i18n::lang()].1.into(), true)],
             6 => vec![row("Windows Update", if s.loading { tr("Recherche en cours…") } else if s.data.update.is_empty() { tr("Rechercher des mises à jour") } else { s.data.update.clone() }, false)],
             7 if s.loading => vec![row("Lecture…", String::new(), false)],
@@ -348,6 +359,22 @@ impl Settings {
             (0, 2, d) if d != 0 => i18n::set_sfx_vol((i18n::sfx_vol() as i32 + d * 10).clamp(0, 100) as u32),
             (0, 3, d) if d != 0 => i18n::set_music_vol((i18n::music_vol() as i32 + d * 10).clamp(0, 100) as u32),
             (0, 4, 0) => i18n::set_music(!i18n::music()),
+            (13, 0, d) if d != 0 => {
+                theme::set_preset(theme::preset() as i32 + d);
+                out = Outcome::ThemeChanged;
+            }
+            (13, 1, d) if d != 0 => {
+                theme::shift_hue(d * 10);
+                out = Outcome::ThemeChanged;
+            }
+            (13, 2, d) if d != 0 => {
+                theme::set_tone(theme::tone() as i32 + d);
+                out = Outcome::ThemeChanged;
+            }
+            (13, 3, 0) => {
+                theme::reset();
+                out = Outcome::ThemeChanged;
+            }
             (1, r, d) if s.revert.is_none() => match (r, d) {
                 (0, d) if d != 0 => {
                     s.ri = step(s.ri, s.res.len(), d);
@@ -613,4 +640,11 @@ fn account_rows(accounts: &[(String, bool, Option<String>)]) -> Vec<(String, Str
         }
     }
     v
+}
+
+fn theme_name(i: u32) -> String {
+    match theme::PRESETS.get(i as usize) {
+        Some((name, _)) => tr(name),
+        None => tr("Personnalisé"),
+    }
 }

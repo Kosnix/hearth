@@ -21,6 +21,7 @@ mod scmd;
 mod playtime;
 mod prefs;
 mod settings;
+mod theme;
 
 slint::include_modules!();
 
@@ -264,6 +265,8 @@ fn main() -> Result<(), slint::PlatformError> {
     shell.guide.set_notes(shell.notes.clone().into());
     *shell.store_status.borrow_mut() = stores::all().iter().map(|s| (s.name().to_string(), s.detected(), shell.games.borrow().iter().filter(|g| g.store == s.name()).count())).collect();
     i18n::init();
+    theme::load();
+    shell.apply_theme();
     i18n::init_audio_prefs();
     system::sfx::init();
     i18n::init_volumes();
@@ -752,6 +755,10 @@ impl Shell {
             }
             settings::Outcome::Connect(ssid) => self.connect(ssid, None),
             settings::Outcome::LangChanged => self.refresh_lang(),
+            settings::Outcome::ThemeChanged => {
+                self.apply_theme();
+                self.open_cat_keep(13);
+            }
             settings::Outcome::InstallClient(store) => self.account_install_client(store),
             settings::Outcome::Admin => {
                 self.push_notif(&tr("Autorisation administrateur"), &tr("Autorisation administrateur requise : acceptez la fenêtre Windows (une seule fois)"));
@@ -981,6 +988,30 @@ impl Shell {
             wm::focus(h);
         }
         self.ui.invoke_nav(Nav::Guide as i32);
+    }
+
+    /// Applique le thème courant (couleurs) à toutes les fenêtres de Hearth.
+    fn apply_theme(&self) {
+        let p = theme::palette();
+        let c = |v: [u8; 3]| slint::Color::from_rgb_u8(v[0], v[1], v[2]);
+        macro_rules! set {
+            ($w:expr) => {{
+                let t = $w.global::<Theme>();
+                t.set_accent(c(p.accent));
+                t.set_on_accent(c(p.on_accent));
+                t.set_bg(c(p.bg));
+                t.set_bg_settings(c(p.bg));
+                t.set_band(c(p.band));
+                t.set_tile(c(p.tile));
+                t.set_bg_guide(c(p.guide));
+                t.set_deep(c(p.deep));
+                t.set_panel(slint::Color::from_argb_u8(0xf2, p.band[0], p.band[1], p.band[2]));
+            }};
+        }
+        set!(self.ui);
+        set!(self.guide);
+        set!(self.splash);
+        set!(self.pad);
     }
 
     fn open_guide(&self, tile: usize) {

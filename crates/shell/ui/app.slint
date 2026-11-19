@@ -66,17 +66,21 @@ export struct Offer {
 }
 
 export global Theme {
-    out property <brush> bg: #1b1b1d;
-    out property <brush> bg-settings: #1b1b1d;
-    out property <brush> bg-guide: #202022;
-    out property <color> band: #262628;
-    out property <color> on-accent: #111111;
-    out property <color> panel: #262628f2;
-    out property <color> glass: #ffffff14;
-    out property <color> tile: #2b2b2e;
-    out property <color> accent: #ffa500;
-    out property <color> text: #ffffff;
-    out property <color> dim: #b4b4b9;
+    // Jetons de couleur : renseignés par le shell (thème personnalisable, voir theme.rs) ; valeurs ci-dessous = thème par défaut.
+    in-out property <color> bg: #1b1b1d;
+    in-out property <color> bg-settings: #1b1b1d;
+    in-out property <color> bg-guide: #202022;
+    in-out property <color> deep: #0d0d0f;
+    in-out property <color> band: #262628;
+    in-out property <color> on-accent: #111111;
+    in-out property <color> panel: #262628f2;
+    in-out property <color> glass: #ffffff14;
+    in-out property <color> tile: #2b2b2e;
+    in-out property <color> accent: #ffa500;
+    in-out property <color> text: #ffffff;
+    in-out property <color> dim: #b4b4b9;
+    in-out property <color> ok: #4fd18f;
+    in-out property <color> danger: #ff5b5b;
     out property <string> icons: "Segoe MDL2 Assets";
 }
 
@@ -297,7 +301,7 @@ component GameTile inherits Rectangle {
             text: "\u{E896}";
             font-family: Theme.icons;
             font-size: 18px;
-            color: #4fd18f;
+            color: Theme.ok;
         }
     }
     Rectangle {
@@ -354,7 +358,7 @@ component TopIcon inherits Rectangle {
         width: 30px;
         height: 30px;
         border-radius: 15px;
-        background: #ff5b5b;
+        background: Theme.danger;
         Text {
             text: badge > 9 ? "9+" : badge;
             font-size: 16px;
@@ -495,7 +499,7 @@ export component App inherits Window {
 
     title: "Hearth";
     no-frame: true;
-    background: #1b1b1d;
+    background: Theme.bg;
     preferred-width: 1280px;
     preferred-height: 720px;
     forward-focus: keys;
@@ -674,21 +678,21 @@ export component App inherits Window {
         y: 728px;
         width: 1500px;
         height: 712px;
-        background: @linear-gradient(90deg, #1b1b1d 0%, #1b1b1de0 40%, #1b1b1d00 100%);
+        background: @linear-gradient(90deg, Theme.bg 0%, Theme.bg.transparentize(0.12) 40%, Theme.bg.transparentize(1) 100%);
     }
     if tab == 0 && games.length > 0: Rectangle {
         x: 0px;
         y: 1140px;
         width: 2560px;
         height: 300px;
-        background: @linear-gradient(180deg, #1b1b1d00 0%, #1b1b1d 100%);
+        background: @linear-gradient(180deg, Theme.bg.transparentize(1) 0%, Theme.bg 100%);
     }
     if tab == 0 && games.length > 0: Rectangle {
         x: 0px;
         y: 728px;
         width: parent.width;
         height: 260px;
-        background: @linear-gradient(180deg, #1b1b1d 0%, #1b1b1d00 100%);
+        background: @linear-gradient(180deg, Theme.bg 0%, Theme.bg.transparentize(1) 100%);
     }
     // Bandeau : la jaquette sélectionnée est agrandie, les autres défilent autour d'elle.
     if tab == 0: Rectangle {
@@ -969,7 +973,7 @@ export component App inherits Window {
                     text: o.owned ? @tr("Possédé") : o.price;
                     font-size: o.owned ? 22px : 24px;
                     font-weight: 800;
-                    color: o.owned ? #4fd18f : Theme.accent;
+                    color: o.owned ? Theme.ok : Theme.accent;
                     overflow: elide;
                 }
                 Text {
@@ -1098,21 +1102,21 @@ export component App inherits Window {
             y: 0px;
             width: parent.width;
             height: 760px;
-            background: #1b1b1d99;
+            background: Theme.bg.transparentize(0.4);
         }
         Rectangle {
             x: 0px;
             y: 380px;
             width: parent.width;
             height: 380px;
-            background: @linear-gradient(180deg, #1b1b1d00 0%, #1b1b1d 100%);
+            background: @linear-gradient(180deg, Theme.bg.transparentize(1) 0%, Theme.bg 100%);
         }
         Rectangle {
             x: 0px;
             y: 0px;
             width: 2100px;
             height: 760px;
-            background: @linear-gradient(90deg, #1b1b1df0 0%, #1b1b1d00 100%);
+            background: @linear-gradient(90deg, Theme.bg.transparentize(0.06) 0%, Theme.bg.transparentize(1) 100%);
         }
         Rectangle {
             x: 100px;
@@ -1541,15 +1545,15 @@ export component App inherits Window {
         }
         for c[i] in cats: Rectangle {
             x: 80px;
-            y: 250px + i * 80px;
+            y: 250px + i * 76px;
             width: 440px;
-            height: 68px;
+            height: 64px;
             border-radius: 14px;
             background: i != cat ? transparent : sfocus == 0 ? Theme.accent : Theme.glass;
             animate background { duration: 100ms; }
             Text {
                 x: 26px;
-                text: ["\u{E767}", "\u{E7F4}", "\u{E701}", "\u{E702}", "\u{E7FC}", "\u{E774}", "\u{E895}", "\u{EDA2}", "\u{E950}", "\u{E7E8}", "\u{E7ED}", "\u{E946}", "\u{E77B}"][i];
+                text: ["\u{E767}", "\u{E7F4}", "\u{E701}", "\u{E702}", "\u{E7FC}", "\u{E774}", "\u{E895}", "\u{EDA2}", "\u{E950}", "\u{E7E8}", "\u{E7ED}", "\u{E946}", "\u{E77B}", "\u{E790}"][i];
                 font-family: Theme.icons;
                 font-size: 28px;
                 color: i == cat ? (sfocus == 0 ? Theme.on-accent : Theme.text) : Theme.dim;
@@ -1629,7 +1633,7 @@ export component App inherits Window {
         width: 700px;
         height: 120px;
         border-radius: 18px;
-        background: #262628f2;
+        background: Theme.panel;
         opacity: toast-on ? 1 : 0;
         animate x, opacity { duration: 220ms; easing: ease-out; }
         Rectangle {
@@ -1708,7 +1712,7 @@ export component App inherits Window {
                     width: 12px;
                     height: 12px;
                     border-radius: 6px;
-                    background: #ff5b5b;
+                    background: Theme.danger;
                 }
                 Text {
                     x: 40px;
@@ -1753,7 +1757,7 @@ export component App inherits Window {
 
     // Sélecteur générique (explorateur de fichiers, identification d'un jeu…).
     if zone == 6: Rectangle {
-        background: #1b1b1d;
+        background: Theme.bg;
         TouchArea {
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.up && (e.button == PointerEventButton.right || e.button == PointerEventButton.back)) { root.nav(5); }
@@ -1849,7 +1853,7 @@ export component App inherits Window {
 
     // QR code d'achat : à scanner avec un téléphone.
     if zone == 5: Rectangle {
-        background: #1b1b1dee;
+        background: Theme.bg.transparentize(0.07);
         TouchArea {
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.up && (e.button == PointerEventButton.right || e.button == PointerEventButton.back)) { root.nav(5); }
@@ -1915,7 +1919,7 @@ export component App inherits Window {
 
     // Clavier virtuel (mots de passe, saisies).
     if zone == 4: Rectangle {
-        background: #1b1b1dee;
+        background: Theme.bg.transparentize(0.07);
         TouchArea {
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.up && (e.button == PointerEventButton.right || e.button == PointerEventButton.back)) { root.nav(5); }
@@ -2063,7 +2067,7 @@ export component GuideMenu inherits Window {
     title: "Hearth Guide";
     no-frame: true;
     always-on-top: true;
-    background: #1b1b1d;
+    background: Theme.bg;
     forward-focus: keys;
 
     public function nav(a: int) {
@@ -2220,11 +2224,11 @@ export component Splash inherits Window {
     title: "Hearth Splash";
     no-frame: true;
     always-on-top: true;
-    background: #0d0d0f;
+    background: Theme.deep;
     TouchArea { }
     // Sans image large : dégradé à la couleur du jeu.
     Rectangle {
-        background: @linear-gradient(135deg, launch-hue.darker(0.4) 0%, #0d0d0f 100%);
+        background: @linear-gradient(135deg, launch-hue.darker(0.4) 0%, Theme.deep 100%);
     }
     if launch-art.width > 0: Image {
         x: -(parent.width * (0.05 - 0.05 * launch-t)) / 2;
@@ -2267,7 +2271,7 @@ export component PadOverlay inherits Window {
     title: "Hearth Pad";
     no-frame: true;
     always-on-top: true;
-    background: #1b1b1d;
+    background: Theme.bg;
 
     public function nav(a: int) {
         if (a == 0) { kby = max(0, kby - 1); }
@@ -2280,7 +2284,7 @@ export component PadOverlay inherits Window {
     }
 
     if !kbd: Rectangle {
-        background: #1b1b1d;
+        background: Theme.bg;
         HorizontalLayout {
             alignment: center;
             spacing: 36px;
