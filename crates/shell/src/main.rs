@@ -454,7 +454,6 @@ impl Shell {
             }
             Err(e) => {
                 self.hide_splash();
-                self.notify(format!("{} {} : {}", tr("Impossible de lancer"), g.name, e.message()));
             }
         }
     }
@@ -878,7 +877,6 @@ impl Shell {
         for &(tile, secs) in &ended {
             let key = playtime_key(&self.games.borrow()[tile]);
             playtime::record(&key, secs);
-            self.notify(format!("{} {}", self.games.borrow()[tile].name, tr("s'est fermé")));
         }
         if !ended.is_empty() {
             self.rebuild();
@@ -1684,7 +1682,6 @@ impl Shell {
             *self.ext_game.borrow_mut() = None;
             if let Some(g) = self.games.borrow().get(tile).cloned() {
                 playtime::record(&playtime_key(&g), secs);
-                self.notify(format!("{} {}", g.name, tr("s'est fermé")));
             }
             self.hide_guide();
             self.rebuild();

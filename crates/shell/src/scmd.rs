@@ -456,7 +456,7 @@ impl Shell {
                 let _ = std::fs::write(f, id);
             }
         }
-        let overlay_done = i18n::pref("steam_overlay_off").is_some();
+        let overlay_done = i18n::pref("steam_overlay_off").is_some() && i18n::pref("steam_input_off").is_some();
         if stores::steam_client_user() != 0 && overlay_done {
             self.steam_keep(30);
             return true;
@@ -481,6 +481,7 @@ impl Shell {
                     s.steam_wait.set(false);
                     if patched {
                         i18n::set_pref("steam_overlay_off", "1");
+                        i18n::set_pref("steam_input_off", "1");
                     }
                     if ok {
                         s.launch(i);
