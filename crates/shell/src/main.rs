@@ -938,6 +938,7 @@ impl Shell {
     }
 
     fn open_guide(&self, tile: usize) {
+        input::set_capture(true);
         self.guide_tile.set(tile);
         let closing = self.running.borrow().iter().any(|r| r.tile == tile && r.closing) || self.ext_game.borrow().as_ref().is_some_and(|e| e.tile == tile && e.closing);
         self.guide.set_game(self.games.borrow()[tile].name.as_str().into());
@@ -1079,6 +1080,7 @@ impl Shell {
     }
 
     fn hide_guide(&self) {
+        input::set_capture(false);
         if let Some(h) = wm::find_window(GUIDE_TITLE) {
             wm::hide(h);
         }

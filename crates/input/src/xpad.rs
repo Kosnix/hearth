@@ -35,7 +35,7 @@ pub fn spawn() {
         let mut last = XGamepad::default();
         let mut missing: Option<Instant> = None;
         loop {
-            match read().map(|p| if crate::mouse::active() { XGamepad::default() } else { p }) {
+            match read().map(|p| if captured() { XGamepad::default() } else { p }) {
                 Some(pad) => {
                     missing = None;
                     PRESENT.store(true, Ordering::Relaxed);
@@ -116,4 +116,33 @@ fn read() -> Option<XGamepad> {
         thumb_rx: axis(st[2]),
         thumb_ry: -axis(st[3]),
     })
+}
+
+static CAPTURE: AtomicBool = AtomicBool::new(false);
+
+/// Un overlay de Hearth (menu guide…) est ouvert : la manette lui appartient, le jeu ne reçoit rien.
+pub fn set_capture(on: bool) {
+    CAPTURE.store(on, Ordering::Relaxed);
+}
+
+#[link(name = "user32")]
+extern "system" {
+    fn GetForegroundWindow() -> isize;
+    fn GetWindowThreadProcessId(hwnd: isize, pid: *mut u32) -> u32;
+}
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetCurrentProcessId() -> u32;
+}
+
+/// La manette ne va aux jeux que si ni un overlay, ni la console elle-même (au premier plan) n'en ont l'usage.
+fn captured() -> bool {
+    if CAPTURE.load(Ordering::Relaxed) || crate::mouse::active() {
+        return true;
+    }
+    unsafe {
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(GetForegroundWindow(), &mut pid);
+        pid == GetCurrentProcessId()
+    }
 }

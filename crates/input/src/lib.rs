@@ -6,6 +6,10 @@ use std::time::{Duration, Instant};
 mod mouse;
 mod xpad;
 
+pub fn set_capture(on: bool) {
+    xpad::set_capture(on);
+}
+
 pub use mouse::{active as mouse_active, osk as osk_open, backspace, enter, send_text, set_active as set_mouse_active, set_osk};
 
 use windows::core::{w, PCSTR};
