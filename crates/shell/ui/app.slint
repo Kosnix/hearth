@@ -210,6 +210,40 @@ component Avatar inherits Rectangle {
     }
 }
 
+
+// Logo Hearth : arche de foyer et flamme (vectoriel, aux couleurs du thème). Chemins : tools/make-logo.ps1.
+component Logo inherits Rectangle {
+    in property <length> size: 64px;
+    width: size;
+    height: size;
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        commands: "M 14 92 L 14 52 C 14 26 30 8 50 8 C 70 8 86 26 86 52 L 86 92";
+        stroke: Theme.accent;
+        stroke-width: root.size * 0.07;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        commands: "M 50 19.9 C 53.5 34.1 68.9 43.5 68.9 62.4 C 68.9 76.6 60.6 86 50 86 C 39.4 86 31.1 76.6 31.1 62.4 C 31.1 53 35.8 45.9 40.6 40 C 41.7 47.1 45.3 50.6 48.8 50.6 C 46.5 38.8 46.5 29.4 50 19.9 Z";
+        fill: @linear-gradient(180deg, Theme.accent.brighter(0.35) 0%, Theme.accent 100%);
+    }
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        commands: "M 50 55.3 C 52.4 62.4 59.4 65.9 59.4 73 C 59.4 78.9 54.7 82.5 50 82.5 C 45.3 82.5 40.6 78.9 40.6 73 C 40.6 68.3 44.1 64.8 46.5 61.2 C 47.6 63.6 48.8 62.4 50 55.3 Z";
+        fill: Theme.accent.brighter(0.9);
+    }
+}
 // Deux calques d'image en fondu croisé : un changement de source n'apparaît jamais d'un coup.
 component HeroFade inherits Rectangle {
     cache-rendering-hint: true;
@@ -1002,8 +1036,13 @@ export component App inherits Window {
     }
 
     // --- Barre du haut : heure à gauche, onglets au centre, raccourcis et profil à droite (thème FireLike) ---
-    Text {
+    Logo {
         x: 80px;
+        y: 22px;
+        size: 76px;
+    }
+    Text {
+        x: 176px;
         y: 34px;
         text: clock;
         font-size: 34px;

@@ -98,6 +98,8 @@ fn apply_config() {
     }
 }
 
+const ICON: &[u8] = include_bytes!("../../../assets/hearth.ico");
+
 fn install() -> Result<String, String> {
     let dst = data_dir().join("app");
     fs::create_dir_all(&dst).map_err(|e| e.to_string())?;
@@ -106,6 +108,8 @@ fn install() -> Result<String, String> {
     }
     let exe = dst.join("hearth.exe");
     set_string(WINLOGON, "Shell", &exe.to_string_lossy()).map_err(|e| e.to_string())?;
+    // Icône du raccourci : le logo Hearth embarqué (remplace l'ancienne icône générée).
+    let _ = fs::write(data_dir().join("hearth.ico"), ICON);
     let script = data_dir().join("shortcut.ps1");
     // BOM : PowerShell 5.1 lit sinon le script en ANSI.
     fs::write(&script, format!("\u{feff}{}", include_str!("shortcut.ps1"))).map_err(|e| e.to_string())?;
