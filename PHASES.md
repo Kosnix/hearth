@@ -35,3 +35,5 @@
 - 2026-11-19 (soir) : Ã©cran de lancement rÃ©duit Ã  l'image de fond + roue en bas Ã  droite ; plus de notifications de lancement/fermeture de jeu ; Steam Input dÃ©sactivÃ© pour les manettes Xbox/PlayStation (config.vdf : SteamController_PSSupport / XBoxSupport = 0, appliquÃ© au prochain lancement d'un jeu Steam avec redÃ©marrage de Steam).
 
 - Plus de fenêtres cmd au lancement, Steam Input désactivé (manette gérée par Hearth/les jeux), barres de chargement gauche?droite, onglets Jeux/Bibliothèque/Boutique, jeux « Possédé » dans la boutique, bouton « Ajouter une boutique », catalogue Rockstar dans la Bibliothèque.
+
+- DualSense émulée en manette Xbox 360 (ViGEmBus, installé automatiquement via l'assistant administrateur, une seule validation Windows), connexion de compte dans Ajouter une boutique.

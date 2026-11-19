@@ -380,6 +380,22 @@ fn main() -> Result<(), slint::PlatformError> {
 
     // Rc n'est pas Send : le thread manette retrouve le Shell via un thread_local du thread UI.
     SHELL.with(|s| *s.borrow_mut() = Some(shell.clone()));
+    // Pilote de manette Xbox virtuelle (ViGEmBus) : installé automatiquement s'il manque (un seul essai).
+    // L'assistant administrateur (une seule validation Windows, au premier lancement) est réinstallé quand sa liste d'opérations change (version 2 : ViGEmBus) ; ensuite plus aucune invite.
+    if i18n::pref("helper_ver").as_deref() != Some("2") {
+        std::thread::spawn(|| {
+            use std::os::windows::process::CommandExt;
+            if system::admin::setup().is_ok() {
+                let _ = slint::invoke_from_event_loop(|| i18n::set_pref("helper_ver", "2"));
+            } else {
+                return;
+            }
+            let present = std::process::Command::new("sc").args(["query", "ViGEmBus"]).creation_flags(0x0800_0000).output().is_ok_and(|o| o.status.success());
+            if !present {
+                let _ = system::install::winget("ViGEm.ViGEmBus");
+            }
+        });
+    }
     input::spawn(|nav| {
         let _ = slint::invoke_from_event_loop(move || {
             SHELL.with(|s| {

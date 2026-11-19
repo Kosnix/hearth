@@ -32,7 +32,12 @@ impl Shell {
             let _ = slint::invoke_from_event_loop(move || {
                 with_shell(|s| {
                     match r {
-                        Ok(()) => s.push_notif(&tr("Installation"), &format!("{store} : {}", tr("client installé"))),
+                        Ok(()) => {
+                            s.push_notif(&tr("Installation"), &format!("{store} : {}", tr("client installé")));
+                            if store == "GOG" || store == "Rockstar Games" {
+                                s.open_client(&store);
+                            }
+                        }
                         Err(e) => s.push_notif(&tr("Installation"), &format!("{store} : {} ({e})", tr("échec de l'installation du client"))),
                     }
                     s.refresh_store_status();
@@ -340,7 +345,26 @@ impl Shell {
                 self.ui.set_qr_return(0);
                 self.begin_login(store.to_string());
             }
-            _ => self.account_install_client(store.to_string()),
+            _ => {
+                if self.open_client(store) {
+                    self.refresh_store_status();
+                    self.refresh_onboard();
+                } else {
+                    self.account_install_client(store.to_string());
+                }
+            }
         }
+    }
+
+    /// Ouvre le client GOG / Rockstar (connexion au compte dans sa fenêtre) ; faux s'il n'est pas installé.
+    fn open_client(&self, store: &str) -> bool {
+        let exe = match store {
+            "Rockstar Games" => stores::rockstar_launcher(),
+            _ => [r"C:\Program Files (x86)\GOG Galaxy\GalaxyClient.exe", r"C:\Program Files\GOG Galaxy\GalaxyClient.exe"].into_iter().map(std::path::PathBuf::from).find(|p| p.exists()),
+        };
+        let Some(exe) = exe else { return false };
+        let _ = std::process::Command::new(exe).spawn();
+        self.push_notif(store, &tr("Connectez-vous dans la fenêtre du client"));
+        true
     }
 }

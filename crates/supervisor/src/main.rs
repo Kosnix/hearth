@@ -120,9 +120,27 @@ fn install() -> Result<String, String> {
     Ok(format!("Installé dans {}. Actif à la prochaine ouverture de session.", dst.display()))
 }
 
+/// Pilote ViGEmBus (manette Xbox virtuelle pour la DualSense) : installé avec Hearth s'il manque, une validation administrateur.
+#[allow(dead_code)]
+fn install_gamepad_driver() {
+    // Si l'assistant administrateur existe déjà, la console installe le pilote sans invite (au démarrage du shell).
+    let present = Command::new("sc").args(["query", "ViGEmBus"]).output().is_ok_and(|o| o.status.success())
+        || Command::new("schtasks").args(["/query", "/tn", ELEVATED_TASK]).output().is_ok_and(|o| o.status.success());
+    if present {
+        return;
+    }
+    let _ = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "Start-Process winget -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList 'install','-e','--id','ViGEm.ViGEmBus','--silent','--accept-package-agreements','--accept-source-agreements'",
+        ])
+        .status();
+}
+
 const ELEVATED_TASK: &str = "HearthElevated";
 /// Seuls ces paquets winget peuvent être installés par l'assistant administrateur.
-const ALLOWED_WINGET: [&str; 3] = ["Valve.Steam", "EpicGames.EpicGamesLauncher", "GOG.Galaxy"];
+const ALLOWED_WINGET: [&str; 4] = ["Valve.Steam", "EpicGames.EpicGamesLauncher", "GOG.Galaxy", "ViGEm.ViGEmBus"];
 
 /// À lancer élevé (un seul consentement UAC) : copie l'assistant dans Program Files (non modifiable
 /// sans droits) et crée la tâche planifiée « privilèges maximum » qui le lance sans invite.

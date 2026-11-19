@@ -3,6 +3,8 @@
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
+mod xpad;
+
 use windows::core::{w, PCSTR};
 use windows::Gaming::Input::{GameControllerSwitchPosition as Hat, Gamepad, GamepadButtons, RawGameController};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
@@ -56,6 +58,7 @@ type GetState = unsafe extern "system" fn(u32, *mut XINPUT_STATE) -> u32;
 
 /// Lance le thread de lecture ; `on_nav` est appelé depuis ce thread.
 pub fn spawn(on_nav: impl Fn(Nav) + Send + 'static) {
+    xpad::spawn();
     thread::spawn(move || {
         unsafe { RoInitialize(RO_INIT_MULTITHREADED).ok() };
         let get_state = xinput_get_state_ex().unwrap_or(xinput_get_state);
