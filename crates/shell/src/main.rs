@@ -344,6 +344,31 @@ fn main() -> Result<(), slint::PlatformError> {
     let tick = slint::Timer::default();
     tick.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || timed("tick", || s.tick()));
 
+    // Curseur de souris masqué après 5 s sans mouvement, réaffiché au moindre mouvement.
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetCursorPos(p: *mut [i32; 2]) -> i32;
+        fn ShowCursor(show: i32) -> i32;
+    }
+    let cursor = Cell::new(([0i32; 2], std::time::Instant::now(), false));
+    let cursor_timer = slint::Timer::default();
+    cursor_timer.start(slint::TimerMode::Repeated, Duration::from_millis(250), move || {
+        let mut p = [0i32; 2];
+        if unsafe { GetCursorPos(&mut p) } == 0 {
+            return;
+        }
+        let (last, since, hidden) = cursor.get();
+        if p != last {
+            if hidden {
+                while unsafe { ShowCursor(1) } < 0 {}
+            }
+            cursor.set((p, std::time::Instant::now(), false));
+        } else if !hidden && since.elapsed() >= Duration::from_secs(5) {
+            while unsafe { ShowCursor(0) } >= 0 {}
+            cursor.set((last, since, true));
+        }
+    });
+
     let s = shell.clone();
     let poll = slint::Timer::default();
     poll.start(slint::TimerMode::Repeated, Duration::from_secs(20), move || s.poll_installed());
@@ -382,12 +407,13 @@ fn main() -> Result<(), slint::PlatformError> {
     SHELL.with(|s| *s.borrow_mut() = Some(shell.clone()));
     // Pilote de manette Xbox virtuelle (ViGEmBus) : installé automatiquement s'il manque (un seul essai).
     // L'assistant administrateur (une seule validation Windows, au premier lancement) est réinstallé quand sa liste d'opérations change (version 2 : ViGEmBus) ; ensuite plus aucune invite.
-    if i18n::pref("helper_ver").as_deref() != Some("2") {
+    let marker = stores::base_dir().join("helper-v2.done");
+    if !marker.exists() {
+        // Marqueur global (tous profils), posé avant la tentative : jamais plus d'une invite par version.
+        let _ = std::fs::write(&marker, "1");
         std::thread::spawn(|| {
             use std::os::windows::process::CommandExt;
-            if system::admin::setup().is_ok() {
-                let _ = slint::invoke_from_event_loop(|| i18n::set_pref("helper_ver", "2"));
-            } else {
+            if system::admin::setup().is_err() {
                 return;
             }
             let present = std::process::Command::new("sc").args(["query", "ViGEmBus"]).creation_flags(0x0800_0000).output().is_ok_and(|o| o.status.success());

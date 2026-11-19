@@ -39,3 +39,5 @@
 - DualSense émulée en manette Xbox 360 (ViGEmBus, installé automatiquement via l'assistant administrateur, une seule validation Windows), connexion de compte dans Ajouter une boutique.
 
 - Manette : copie virtuelle Xbox non relue par Hearth, débranchement différé, renvoi en cas d'échec ; sons en retard abandonnés (plus de rafales).
+
+- Assistant administrateur : une seule tentative par version (marqueur global) ; curseur de souris masqué après 5 s sans mouvement.
