@@ -5,7 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use vigem_client::{Client, TargetId, XButtons, XGamepad, Xbox360Wired};
-use windows::Gaming::Input::{GameControllerSwitchPosition as Hat, RawGameController};
+use windows::Gaming::Input::GameControllerSwitchPosition as Hat;
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 
 use std::sync::atomic::{AtomicBool, Ordering};

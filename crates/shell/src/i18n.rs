@@ -379,10 +379,6 @@ pub fn music() -> bool {
     MUSIC.load(Ordering::Relaxed)
 }
 
-pub fn set_sfx(on: bool) {
-    SFX.store(on, Ordering::Relaxed);
-    set_pref("sfx", if on { "1" } else { "0" });
-}
 
 pub fn set_music(on: bool) {
     MUSIC.store(on, Ordering::Relaxed);

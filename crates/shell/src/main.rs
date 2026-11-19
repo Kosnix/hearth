@@ -80,6 +80,7 @@ struct Shell {
     splash: Splash,
     pad: PadOverlay,
     pad_acc: Cell<bool>,
+    status_n: Cell<u32>,
     oobe_step: Cell<i32>,
     oobe_rows: Rc<VecModel<SettingRow>>,
     oobe_content: Cell<usize>,
@@ -154,7 +155,6 @@ struct Shell {
     guess_title: RefCell<String>,
     notifs: Rc<VecModel<Notif>>,
     toast_gen: Cell<u32>,
-    rebuild_pending: Cell<bool>,
     splash_timer: slint::Timer,
     splash_start: Cell<Option<std::time::Instant>>,
     splash_uri: Cell<bool>,
@@ -183,6 +183,7 @@ fn main() -> Result<(), slint::PlatformError> {
         splash: Splash::new()?,
         pad: PadOverlay::new()?,
         pad_acc: Cell::new(false),
+        status_n: Cell::new(0),
         oobe_step: Cell::new(-1),
         oobe_rows: Rc::new(VecModel::default()),
         oobe_content: Cell::new(0),
@@ -255,7 +256,6 @@ fn main() -> Result<(), slint::PlatformError> {
         guess_title: RefCell::new(String::new()),
         notifs: Rc::new(VecModel::default()),
         toast_gen: Cell::new(0),
-        rebuild_pending: Cell::new(false),
         splash_timer: slint::Timer::default(),
         splash_start: Cell::new(None),
         splash_uri: Cell::new(false),
@@ -583,7 +583,7 @@ impl Shell {
                 }
                 self.rebuild();
             }
-            Err(e) => {
+            Err(_e) => {
                 self.hide_splash();
                 system::sfx::play(system::sfx::Sfx::Error);
             }
@@ -1027,6 +1027,21 @@ impl Shell {
         }
     }
 
+    /// Barre d'état (réseau, volume, batterie de la manette) : lue hors du fil de l'interface, toutes les 10 s.
+    pub fn refresh_status(&self) {
+        let w = self.ui.as_weak();
+        std::thread::spawn(move || {
+            let net = system::net::current().map_or(-1, |l| if l.wifi { 1 } else { 0 });
+            let vol = system::audio::volume().map_or(-1, |v| v as i32);
+            let pad = system::pads::list().first().map_or(-1, |p| p.1.map_or(101, |b| b as i32));
+            let _ = w.upgrade_in_event_loop(move |ui| {
+                ui.set_st_net(net);
+                ui.set_st_vol(vol);
+                ui.set_st_pad(pad);
+            });
+        });
+    }
+
     fn set_clock(&self) {
         let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
         self.ui.set_clock(format!("{:02}:{:02}", t.wHour, t.wMinute).into());
@@ -1166,6 +1181,11 @@ impl Shell {
     /// Chaque seconde : jeux terminés, et ré-application du sans-bordure (certains jeux le retirent).
     fn tick(&self) {
         self.oobe_guard();
+        let n = self.status_n.get().wrapping_add(1);
+        self.status_n.set(n);
+        if n % 10 == 1 {
+            self.refresh_status();
+        }
         self.set_clock();
         self.maybe_prompt_update();
         // Musique d'ambiance : seulement quand la console est devant (pas pendant un jeu).
@@ -1216,10 +1236,6 @@ impl Shell {
         }
     }
 
-    /// Notification simple (titre « Hearth »).
-    fn notify(&self, msg: String) {
-        self.push_notif("Hearth", &msg);
-    }
 
     /// Ajoute une notification au centre, au menu en jeu, et l'affiche en toast quelques secondes.
     fn push_notif(&self, title: &str, text: &str) {
@@ -1335,11 +1351,6 @@ fn with_shell(f: impl FnOnce(&Shell)) {
     });
 }
 
-/// Visuel d'une tuile : `cover` du jeu, sinon assets\<id>\cover.* (cf. crate `stores`).
-fn cover_of(g: &Game) -> slint::Image {
-    let path = if g.cover.is_empty() { stores::asset(&g.id, "cover").unwrap_or_default() } else { PathBuf::from(&g.cover) };
-    slint::Image::load_from_path(&path).unwrap_or_default()
-}
 
 impl Shell {
     /// Textes calculés en Rust après un changement de langue (les @tr de Slint suivent seuls).
@@ -1408,14 +1419,7 @@ fn hue_of(name: &str) -> slint::Color {
     slint::Color::from_rgb_u8(((r + m) * 255.0) as u8, ((g + m) * 255.0) as u8, ((b + m) * 255.0) as u8)
 }
 
-/// Grand visuel du jeu, s'il en existe un (sinon rien : une jaquette agrandie serait floue).
-fn hero_of(g: &Game) -> slint::Image {
-    stores::asset(&g.id, "hero").and_then(|p| slint::Image::load_from_path(&p).ok()).unwrap_or_default()
-}
 
-fn logo_of(g: &Game) -> slint::Image {
-    stores::asset(&g.id, "logo").and_then(|p| slint::Image::load_from_path(&p).ok()).unwrap_or_default()
-}
 
 /// Images des offres, téléchargées en parallèle (mises en cache sur disque).
 fn fetch_all(offers: &[stores::Offer]) -> Vec<Option<PathBuf>> {
@@ -1646,17 +1650,6 @@ impl Shell {
         }
     }
 
-    pub fn rebuild_soon(&self) {
-        if self.rebuild_pending.replace(true) {
-            return;
-        }
-        slint::Timer::single_shot(Duration::from_millis(500), || {
-            with_shell(|s| {
-                s.rebuild_pending.set(false);
-                s.rebuild();
-            })
-        });
-    }
 }
 
 impl Shell {

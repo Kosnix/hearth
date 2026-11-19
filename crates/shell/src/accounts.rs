@@ -1,6 +1,5 @@
 //! Comptes des boutiques : connexion (QR code), bibliothèque possédée, installation des clients et des jeux.
 
-use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 

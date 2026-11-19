@@ -1,10 +1,9 @@
 //! Profils utilisateurs de Hearth : chacun a ses comptes de boutiques, sa liste de jeux, son temps de jeu et ses personnalisations.
 //! Ce ne sont pas des comptes Windows : les jeux installés et les visuels sont partagés.
 
-use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
-use slint::{Model, VecModel};
+use slint::Model;
 
 use crate::i18n::tr;
 use crate::{ProfileRow, Shell};
@@ -171,7 +170,4 @@ impl Shell {
         );
     }
 
-    pub fn profile_model() -> Rc<VecModel<ProfileRow>> {
-        Rc::new(VecModel::default())
-    }
 }

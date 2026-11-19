@@ -82,12 +82,6 @@ pub fn get_json(url: &str, headers: &[(&str, &str)]) -> Option<serde_json::Value
     serde_json::from_slice(&get(url, headers)?).ok()
 }
 
-/// POST de formulaire (`application/x-www-form-urlencoded`), réponse JSON.
-pub fn post_form(url: &str, headers: &[(&str, &str)], form: &str) -> Option<serde_json::Value> {
-    let mut h = headers.to_vec();
-    h.push(("Content-Type", "application/x-www-form-urlencoded"));
-    serde_json::from_slice(&request("POST", url, &h, Some(form.as_bytes()))?).ok()
-}
 
 /// POST de formulaire, renvoie le code HTTP et le JSON (même en cas d'erreur).
 pub fn post_form_status(url: &str, headers: &[(&str, &str)], form: &str) -> Option<(u32, serde_json::Value)> {

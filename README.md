@@ -54,3 +54,9 @@ Secours si l'interface ne s'affiche pas : Ctrl+Alt+Suppr → Gestionnaire des t�
 
 - `tools/enable-ssh.cmd` : à double-cliquer une fois sur la machine de test (active OpenSSH, autorise la clé de dev).
 - Le code est poussé dans un dépôt nu `C:\dev\hearth.git` (remote `optiplex`) ; copie de travail : `C:\dev\hearth`.
+
+## Première exécution, thème, logo
+- Au premier lancement, un assistant guide la configuration (langue, affichage, son, réseau, manette, profil, thème, comptes, composants système). Il se relance depuis Réglages > À propos.
+- Réglages > Thème : couleur d'accent (8 préréglages ou teinte libre) et fond (5 tons), appliqués immédiatement.
+- Logo : `assets/` (SVG, PNG, `.ico`), régénérable avec `tools/make-logo.ps1`.
+- Contrôle rapide : `. .\tools\check.ps1; Check`.

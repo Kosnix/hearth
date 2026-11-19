@@ -51,3 +51,11 @@
 - R�glages > Comptes : ligne � Visuels SteamGridDB (cl� API) � (saisie au clavier visuel, enregistr�e dans les pr�f�rences, relance la recherche des visuels manquants).
 
 - Sons : moteur audio maison (mixeur waveOut, volumes effets/musique dans R�glages > Son, fondus), 11 effets synth�tis�s (cloches douces en r� majeur), musique d'ambiance au piano doux de 96 s en boucle.
+
+## Refonte « console » (19/11/2026)
+- Thème : jetons de couleur dans `Theme` (Slint), calculés par `theme.rs` (8 préréglages, teinte libre, 5 fonds), appliqués à toutes les fenêtres ; Réglages > Thème.
+- Performances : repos ~3 % CPU (minuteries lâches, lecture de manette mémorisée par thread, watchdog seulement en diagnostic), cache d'images réduit au téléchargement, repères `MARK` dans `perf.log` (`HEARTH_PERF=1`).
+- Identité : logo arche + flamme (`tools/make-logo.ps1` → `assets/`), icône de l'exécutable (`hearth.rc` + embed-resource) et du raccourci, marque dans la barre du haut.
+- Assistant de première exécution (`oobe.rs`, zone 13) : 11 étapes, composants système en une validation, reprise (`oobe.step`), fin = `oobe.done` ; refaisable : Réglages > À propos. `HEARTH_OOBE=1` le force.
+- Écrans : barre d'état (réseau, volume, manette), clavier plus grand et opaque, temps de jeu sous le logo, badges discrets.
+- Qualité : avertissements de compilation supprimés, `tools/check.ps1` (tests, avertissements, CPU, mémoire, capture).

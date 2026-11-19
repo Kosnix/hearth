@@ -87,6 +87,7 @@ pub enum Outcome {
     BtUnpair(String, String),
     InstallClient(String),
     Admin,
+    #[allow(dead_code)]
     SteamCmd,
     Sgdb,
     Login(String),
@@ -610,6 +611,7 @@ fn gb(bytes: u64) -> String {
 enum Act {
     Install(String),
     Admin,
+    #[allow(dead_code)]
     SteamCmd,
     Sgdb,
     Login(String),

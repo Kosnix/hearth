@@ -29,3 +29,9 @@ Phases 1 à 3 faites, phase 4 (détection pilotes) faite, phase 5 largement avan
 - `menus.rs` (options d'un jeu, menu « + »), `prefs.rs` (`overrides.json` : nom, caché), `Shell::rebuild()` reconstruit les deux listes de tuiles (le gid d'une tuile = indice dans `Shell::games`).
 - Assistant administrateur : `crates/system/src/admin.rs` (côté shell) + `setup-admin` / `elevated` dans `crates/supervisor/src/main.rs`. **Non testé** : demande une confirmation UAC la première fois (Réglages > Comptes > Autorisation administrateur, ou au premier « installer le client »).
 - Installer un jeu Steam : `steam://install/<id>` ouvre la fenêtre Steam, à valider à la souris (pas de mode silencieux).
+
+## Mise à jour du 19/11 (refonte console)
+- Nouveaux modules : `theme.rs` (jetons de couleur, `apply_theme` dans `main.rs`), `oobe.rs` (assistant), moteur audio maison dans `crates/system/src/sfx.rs` (mixeur waveOut, volumes `sfx_vol`/`music_vol`), `crates/input/src/mouse.rs` (mode souris L3+R3, clavier visuel `PadOverlay`), `xpad.rs` (DualSense → manette Xbox virtuelle ViGEm).
+- Zones : 13 = assistant ; `home_zone()` renvoie 13 si l'assistant est ouvert (clavier, QR, sélecteur d'avatar y reviennent).
+- Pièges : `Theme` est une global Slint par fenêtre (App, GuideMenu, Splash, PadOverlay) — `apply_theme` les met toutes à jour ; ne jamais utiliser `sed` pour les `\u{…}` ; `Press` injecte des touches dans la session réelle (ne pas l'utiliser pendant que l'utilisateur teste).
+- Mesures de référence (Optiplex) : fenêtre en 0,75 s, 1re image ~1,25 s (4 fenêtres Skia), ~52 images/s max, repos ~3 % CPU.

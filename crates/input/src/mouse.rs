@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use windows::Gaming::Input::{GameControllerSwitchPosition as Hat, RawGameController};
+use windows::Gaming::Input::GameControllerSwitchPosition as Hat;
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 

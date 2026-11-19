@@ -491,6 +491,9 @@ export component App inherits Window {
     in property <string> clock;
     in property <float> phase; // animation du fond (degrés), pilotée par le shell
     in property <[string]> cats;
+    in property <int> st-net: -1; // -1 hors ligne, 0 Ethernet, 1 Wi-Fi
+    in property <int> st-vol: -1;
+    in property <int> st-pad: -1; // -1 aucune, 0..100 batterie, 101 inconnue
     in property <bool> oobe-on;
     in property <[SettingRow]> oobe-rows;
     in-out property <int> oobe-sel: 0;
@@ -792,6 +795,15 @@ export component App inherits Window {
         color: Theme.text;
         wrap: word-wrap;
     }
+    if tab == 0 && games.length > 0 && games[sel].played != "": Text {
+        x: 160px;
+        y: 1128px;
+        width: 1200px;
+        text: games[sel].played;
+        font-size: 26px;
+        color: Theme.dim;
+        overflow: elide;
+    }
     // Bouton Jouer (orange) et menu d'options.
     if tab == 0 && games.length > 0: Rectangle {
         x: 160px;
@@ -1048,6 +1060,48 @@ export component App inherits Window {
         }
     }
 
+    // Barre d'état : réseau, volume, batterie de la manette.
+    Rectangle {
+        x: 1690px;
+        y: 96px;
+        width: 260px;
+        height: 56px;
+        Text {
+            x: 0px;
+            text: st-net == 0 ? "\u{E839}" : "\u{E701}";
+            font-family: Theme.icons;
+            font-size: 30px;
+            color: st-net < 0 ? Theme.danger : Theme.dim;
+        }
+        Text {
+            x: 54px;
+            text: "\u{E767}";
+            font-family: Theme.icons;
+            font-size: 30px;
+            color: Theme.dim;
+        }
+        Text {
+            x: 92px;
+            y: 8px;
+            text: st-vol < 0 ? "" : st-vol + "";
+            font-size: 22px;
+            color: Theme.dim;
+        }
+        if st-pad >= 0: Text {
+            x: 160px;
+            text: "\u{E7FC}";
+            font-family: Theme.icons;
+            font-size: 30px;
+            color: st-pad >= 0 && st-pad <= 15 ? Theme.danger : Theme.dim;
+        }
+        if st-pad >= 0 && st-pad <= 100: Text {
+            x: 198px;
+            y: 8px;
+            text: st-pad + "%";
+            font-size: 22px;
+            color: st-pad <= 15 ? Theme.danger : Theme.dim;
+        }
+    }
     // --- Barre du haut : heure à gauche, onglets au centre, raccourcis et profil à droite (thème FireLike) ---
     Logo {
         x: 80px;
@@ -2153,7 +2207,7 @@ export component App inherits Window {
 
     // Clavier virtuel (mots de passe, saisies).
     if zone == 4: Rectangle {
-        background: Theme.bg.transparentize(0.07);
+        background: Theme.bg;
         TouchArea {
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.up && (e.button == PointerEventButton.right || e.button == PointerEventButton.back)) { root.nav(5); }
@@ -2168,9 +2222,9 @@ export component App inherits Window {
             color: Theme.text;
         }
         Rectangle {
-            x: (parent.width - 1100px) / 2;
+            x: (parent.width - 1400px) / 2;
             y: 280px;
-            width: 1100px;
+            width: 1400px;
             height: 90px;
             border-radius: 14px;
             background: Theme.glass;
@@ -2182,10 +2236,10 @@ export component App inherits Window {
             }
         }
         for k[i] in kb-keys: Rectangle {
-            x: (parent.width - 1100px) / 2 + mod(i, 10) * 110px;
-            y: 410px + floor(i / 10) * 100px;
-            width: 100px;
-            height: 90px;
+            x: (parent.width - 1400px) / 2 + mod(i, 10) * 140px;
+            y: 400px + floor(i / 10) * 118px;
+            width: 128px;
+            height: 108px;
             border-radius: 14px;
             background: kbx == mod(i, 10) && kby == floor(i / 10) ? Theme.accent : Theme.glass;
             Text {
@@ -2202,15 +2256,15 @@ export component App inherits Window {
             }
         }
         for lbl[i] in [@tr("Maj"), "é è à", @tr("Espace"), @tr("Effacer"), @tr("Valider"), @tr("Annuler")]: Rectangle {
-            x: (parent.width - 1100px) / 2 + i * 184px;
-            y: 410px + 4 * 100px;
-            width: 174px;
-            height: 90px;
+            x: (parent.width - 1400px) / 2 + i * 234px;
+            y: 400px + 4 * 118px;
+            width: 224px;
+            height: 108px;
             border-radius: 14px;
             background: kbx == i && kby == 4 ? Theme.accent : (i == 1 && kb-acc ? #ffffff44 : Theme.glass);
             Text {
                 text: lbl;
-                font-size: 28px;
+                font-size: 32px;
                 color: kbx == i && kby == 4 ? Theme.on-accent : Theme.text;
             }
             TouchArea {
