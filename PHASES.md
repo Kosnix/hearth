@@ -37,3 +37,5 @@
 - Plus de fenêtres cmd au lancement, Steam Input désactivé (manette gérée par Hearth/les jeux), barres de chargement gauche?droite, onglets Jeux/Bibliothèque/Boutique, jeux « Possédé » dans la boutique, bouton « Ajouter une boutique », catalogue Rockstar dans la Bibliothèque.
 
 - DualSense émulée en manette Xbox 360 (ViGEmBus, installé automatiquement via l'assistant administrateur, une seule validation Windows), connexion de compte dans Ajouter une boutique.
+
+- Manette : copie virtuelle Xbox non relue par Hearth, débranchement différé, renvoi en cas d'échec ; sons en retard abandonnés (plus de rafales).

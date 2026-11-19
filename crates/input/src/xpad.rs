@@ -8,7 +8,17 @@ use vigem_client::{Client, TargetId, XButtons, XGamepad, Xbox360Wired};
 use windows::Gaming::Input::{GameControllerSwitchPosition as Hat, RawGameController};
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
+
 const SONY: u16 = 0x054C;
+
+static PRESENT: AtomicBool = AtomicBool::new(false);
+
+/// Une manette Sony est branchée (sa version virtuelle Xbox n'est alors pas relue par Hearth : pas de double lecture).
+pub fn present() -> bool {
+    PRESENT.load(Ordering::Relaxed)
+}
 
 pub fn spawn() {
     thread::spawn(|| {
@@ -23,9 +33,12 @@ pub fn spawn() {
         let mut target = Xbox360Wired::new(client, TargetId::XBOX360_WIRED);
         let mut plugged = false;
         let mut last = XGamepad::default();
+        let mut missing: Option<Instant> = None;
         loop {
             match read() {
                 Some(pad) => {
+                    missing = None;
+                    PRESENT.store(true, Ordering::Relaxed);
                     if !plugged {
                         plugged = target.plugin().is_ok() && target.wait_ready().is_ok();
                         last = XGamepad { thumb_lx: 1, ..Default::default() };
@@ -33,17 +46,27 @@ pub fn spawn() {
                     if plugged && (pad.buttons.raw != last.buttons.raw || pad.left_trigger != last.left_trigger || pad.right_trigger != last.right_trigger
                         || (pad.thumb_lx, pad.thumb_ly, pad.thumb_rx, pad.thumb_ry) != (last.thumb_lx, last.thumb_ly, last.thumb_rx, last.thumb_ry))
                     {
-                        let _ = target.update(&pad);
-                        last = pad;
+                        // Échec d'envoi : on ne mémorise pas l'état (renvoyé au tour suivant), manette virtuelle rebranchée.
+                        if target.update(&pad).is_ok() {
+                            last = pad;
+                        } else {
+                            let _ = target.unplug();
+                            plugged = false;
+                        }
                     }
                     thread::sleep(Duration::from_millis(4));
                 }
                 None => {
-                    if plugged {
-                        let _ = target.unplug();
-                        plugged = false;
+                    // Une lecture ratée isolée ne débranche pas la manette virtuelle (sinon boutons bloqués dans le jeu).
+                    let since = *missing.get_or_insert_with(Instant::now);
+                    if since.elapsed() > Duration::from_millis(1500) {
+                        PRESENT.store(false, Ordering::Relaxed);
+                        if plugged {
+                            let _ = target.unplug();
+                            plugged = false;
+                        }
                     }
-                    thread::sleep(Duration::from_secs(1));
+                    thread::sleep(Duration::from_millis(50));
                 }
             }
         }

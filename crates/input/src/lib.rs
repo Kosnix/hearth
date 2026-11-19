@@ -74,7 +74,9 @@ pub fn spawn(on_nav: impl Fn(Nav) + Send + 'static) {
             while let Some(nav) = poll_hotkey() {
                 on_nav(nav);
             }
-            let (sony, other) = (read_sony(), read_wgi() | xinput.read());
+            // Avec une manette Sony, sa copie virtuelle Xbox (ViGEm) n'est pas relue : une seule source, pas de double lecture.
+            let sony = read_sony();
+            let other = if xpad::present() { 0 } else { read_wgi() | xinput.read() };
             if sony != 0 {
                 LAST_PAD.store(1, Ordering::Relaxed);
             } else if other != 0 {

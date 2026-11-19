@@ -138,7 +138,7 @@ fn build_music() -> Vec<u8> {
 // ouvre et pilote tout (les autres threads lui envoient des commandes).
 
 enum Cmd {
-    Play(usize),
+    Play(usize, std::time::Instant),
     Music(bool),
 }
 
@@ -170,7 +170,12 @@ pub fn init() {
             READY.store(true, std::sync::atomic::Ordering::SeqCst);
             while let Ok(c) = rx.recv() {
                 match c {
-                    Cmd::Play(i) => mci(&format!("play hs_{} from 0", NAMES[i])),
+                    Cmd::Play(i, at) => {
+                        // Sons en retard (interface bloquée un instant) abandonnés : jamais de rafale de sons à la suite.
+                        if at.elapsed() < std::time::Duration::from_millis(150) {
+                            mci(&format!("play hs_{} from 0", NAMES[i]));
+                        }
+                    }
                     Cmd::Music(on) => {
                         if on && !STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
                             mci("play hs_music repeat");
@@ -188,7 +193,7 @@ pub fn init() {
 /// Joue un effet (asynchrone ; se superpose à la musique).
 pub fn play(s: Sfx) {
     if let Some(tx) = TX.get() {
-        let _ = tx.send(Cmd::Play(s as usize));
+        let _ = tx.send(Cmd::Play(s as usize, std::time::Instant::now()));
     }
 }
 
