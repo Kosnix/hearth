@@ -103,7 +103,8 @@ pub fn spawn(on_event: Arc<dyn Fn(Nav) + Send + Sync>) {
             }
             chord = both;
             if active() && !osk() {
-                let (x, y) = (curve(r.a.first().copied().unwrap_or(0.5)), curve(r.a.get(1).copied().unwrap_or(0.5)));
+                let (st, _) = split(&r.a);
+                let (x, y) = (curve(st[0]), curve(st[1]));
                 fx += x * 9.0;
                 fy += y * 9.0;
                 let (dx, dy) = (fx as i32, fy as i32);
@@ -112,7 +113,7 @@ pub fn spawn(on_event: Arc<dyn Fn(Nav) + Send + Sync>) {
                     fx -= dx as f64;
                     fy -= dy as f64;
                 }
-                wheel += -curve(r.a.get(3).copied().unwrap_or(0.5)) * 18.0;
+                wheel += -curve(st[3]) * 18.0;
                 if wheel.abs() >= 1.0 {
                     mouse(0, 0, wheel as i32, MOUSEEVENTF_WHEEL);
                     wheel -= wheel.trunc();
@@ -150,4 +151,29 @@ pub fn backspace() {
 
 pub fn enter() {
     key(VK_RETURN);
+}
+
+static KINDS: std::sync::Mutex<Vec<bool>> = std::sync::Mutex::new(Vec::new());
+
+/// Sépare les axes d'une manette Sony sans dépendre de leur ordre : repos à 0 = gâchette, repos à 0,5 = stick
+/// (sticks dans l'ordre gauche X, Y, droit X, Y ; gâchettes gauche, droite). Classement fait à la première lecture.
+pub fn split(a: &[f64]) -> ([f64; 4], [f64; 2]) {
+    let mut k = KINDS.lock().unwrap_or_else(|e| e.into_inner());
+    if k.len() != a.len() {
+        *k = a.iter().map(|v| *v < 0.1).collect();
+    }
+    let (mut s, mut t) = ([0.5; 4], [0.0; 2]);
+    let (mut si, mut ti) = (0, 0);
+    for (i, v) in a.iter().enumerate() {
+        if k[i] {
+            if ti < 2 {
+                t[ti] = *v;
+                ti += 1;
+            }
+        } else if si < 4 {
+            s[si] = *v;
+            si += 1;
+        }
+    }
+    (s, t)
 }

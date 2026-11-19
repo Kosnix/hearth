@@ -105,17 +105,15 @@ fn read() -> Option<XGamepad> {
         Hat::UpLeft => 0x1 | 0x4,
         _ => 0,
     };
-    let get = |i: usize| a.get(i).copied().unwrap_or(0.5);
-    let trig = |i: usize, pressed: bool| if pressed { 255 } else { (get(i).max(0.0) * 255.0) as u8 };
-    // Gâchette : analogique (axe 0..1 au repos à 0), sinon repli sur le bouton numérique.
-    let (lt, rt) = (if on(6) { 255 } else { trig(4, false) }, if on(7) { 255 } else { trig(5, false) });
+    let (st, tr) = crate::mouse::split(&a);
+    let (lt, rt) = (if on(6) { 255 } else { (tr[0].clamp(0.0, 1.0) * 255.0) as u8 }, if on(7) { 255 } else { (tr[1].clamp(0.0, 1.0) * 255.0) as u8 });
     Some(XGamepad {
         buttons: XButtons { raw: raw_bits },
         left_trigger: lt,
         right_trigger: rt,
-        thumb_lx: axis(get(0)),
-        thumb_ly: -axis(get(1)),
-        thumb_rx: axis(get(2)),
-        thumb_ry: -axis(get(3)),
+        thumb_lx: axis(st[0]),
+        thumb_ly: -axis(st[1]),
+        thumb_rx: axis(st[2]),
+        thumb_ry: -axis(st[3]),
     })
 }
