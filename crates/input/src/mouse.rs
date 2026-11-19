@@ -60,12 +60,12 @@ struct Raw {
 }
 
 fn read() -> Option<Raw> {
-    let raw = RawGameController::RawGameControllers().ok()?.into_iter().find(|r| r.HardwareVendorId() == Ok(0x054C))?;
+    let raw = crate::sony_pads().into_iter().next()?;
     let (nb, ns, na) = (raw.ButtonCount().ok()?, raw.SwitchCount().ok()?, raw.AxisCount().ok()?);
     let mut b = vec![false; nb as usize];
     let mut s = vec![Hat::Center; ns as usize];
     let mut a = vec![0.5; na as usize];
-    raw.GetCurrentReading(&mut b, &mut s, &mut a).ok()?;
+    raw.GetCurrentReading(&mut b, &mut s, &mut a).map_err(|_| crate::sony_invalidate()).ok()?;
     Some(Raw { b, a })
 }
 
@@ -140,7 +140,7 @@ pub fn spawn(on_event: Arc<dyn Fn(Nav) + Send + Sync>) {
                 }
                 tri = on(3);
             }
-            thread::sleep(Duration::from_millis(6));
+            thread::sleep(Duration::from_millis(if active() { 6 } else { 30 }));
         }
     });
 }

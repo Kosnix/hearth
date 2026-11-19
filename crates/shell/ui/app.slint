@@ -212,6 +212,7 @@ component Avatar inherits Rectangle {
 
 // Deux calques d'image en fondu croisé : un changement de source n'apparaît jamais d'un coup.
 component HeroFade inherits Rectangle {
+    cache-rendering-hint: true;
     in property <image> source;
     property <image> a;
     property <image> b;
@@ -241,6 +242,7 @@ component HeroFade inherits Rectangle {
 
 // Tuile portrait (jaquette). Largeur/hauteur fixées par l'appelant.
 component GameTile inherits Rectangle {
+    cache-rendering-hint: true;
     in property <Tile> tile;
     in property <bool> selected;
     in property <bool> compact: false;

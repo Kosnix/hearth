@@ -54,7 +54,7 @@ pub fn spawn() {
                             plugged = false;
                         }
                     }
-                    thread::sleep(Duration::from_millis(4));
+                    thread::sleep(Duration::from_millis(8));
                 }
                 None => {
                     // Une lecture ratée isolée ne débranche pas la manette virtuelle (sinon boutons bloqués dans le jeu).
@@ -80,13 +80,13 @@ fn axis(v: f64) -> i16 {
 /// État de la première manette Sony : boutons 0 Carré, 1 Croix, 2 Rond, 3 Triangle, 4 L1, 5 R1, 6 L2, 7 R2, 8 Create, 9 Options, 10 L3, 11 R3 ;
 /// axes 0/1 stick gauche, 2/3 stick droit, 4/5 gâchettes (ordre du descripteur HID).
 fn read() -> Option<XGamepad> {
-    let raws = RawGameController::RawGameControllers().ok()?;
+    let raws = crate::sony_pads();
     let raw = raws.into_iter().find(|r| r.HardwareVendorId() == Ok(SONY))?;
     let (nb, ns, na) = (raw.ButtonCount().ok()?, raw.SwitchCount().ok()?, raw.AxisCount().ok()?);
     let mut b = vec![false; nb as usize];
     let mut s = vec![Hat::Center; ns as usize];
     let mut a = vec![0.5; na as usize];
-    raw.GetCurrentReading(&mut b, &mut s, &mut a).ok()?;
+    raw.GetCurrentReading(&mut b, &mut s, &mut a).map_err(|_| crate::sony_invalidate()).ok()?;
     let on = |i: usize| b.get(i) == Some(&true);
     let mut raw_bits = 0u16;
     for (i, bit) in [(1, 0x1000), (2, 0x2000), (0, 0x4000), (3, 0x8000), (4, 0x0100), (5, 0x0200), (8, 0x0020), (9, 0x0010), (10, 0x0040), (11, 0x0080)] {

@@ -72,7 +72,10 @@ pub fn spawn(on_nav: impl Fn(Nav) + Send + Sync + 'static) {
     mouse::spawn(on_nav.clone());
     xpad::spawn();
     thread::spawn(move || {
-        let on_nav = move |n: Nav| (*on_nav)(n);
+        let on_nav = move |n: Nav| {
+            stamp();
+            (*on_nav)(n)
+        };
         unsafe { RoInitialize(RO_INIT_MULTITHREADED).ok() };
         let get_state = xinput_get_state_ex().unwrap_or(xinput_get_state);
         let mut xinput = XInput { get_state, connected: [true; 4], tick: 0 };
@@ -201,17 +204,15 @@ const SONY: u16 = 0x054C;
 /// DualShock 4 / DualSense (HID) : boutons 0 Carré, 1 Croix, 2 Rond, 9 Options, 12 PS ; chapeau 0 = croix ; axes 0/1 = stick gauche (0..1).
 // ponytail: seul le schéma Sony est mappé ; autres manettes HID en phase 4.
 fn read_sony() -> u16 {
-    let Ok(raws) = RawGameController::RawGameControllers() else { return 0 };
+    let raws = sony_pads();
     let mut bits = 0;
     for raw in raws {
-        if raw.HardwareVendorId() != Ok(SONY) {
-            continue;
-        }
         let (Ok(nb), Ok(ns), Ok(na)) = (raw.ButtonCount(), raw.SwitchCount(), raw.AxisCount()) else { continue };
         let mut b = vec![false; nb as usize];
         let mut s = vec![Hat::Center; ns as usize];
         let mut a = vec![0.5; na as usize];
         if raw.GetCurrentReading(&mut b, &mut s, &mut a).is_err() {
+            sony_invalidate();
             continue;
         }
         for (i, bit) in [(1, A), (2, B), (9, START), (12, GUIDE)] {
@@ -302,4 +303,46 @@ pub fn last_pad() -> u8 {
 
 fn sony_present() -> bool {
     RawGameController::RawGameControllers().is_ok_and(|l| l.into_iter().any(|r| r.HardwareVendorId() == Ok(SONY)))
+}
+
+static LAST_INPUT: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+
+/// Instant du dernier ordre de navigation (mesure de latence : voir HEARTH_PERF dans le shell).
+pub fn last_input() -> Option<Instant> {
+    *LAST_INPUT.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+pub fn take_last_input() -> Option<Instant> {
+    LAST_INPUT.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
+fn stamp() {
+    *LAST_INPUT.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+}
+
+thread_local! {
+    static SONY_CACHE: std::cell::RefCell<(Option<Instant>, Vec<RawGameController>)> = const { std::cell::RefCell::new((None, Vec::new())) };
+}
+
+/// Manettes Sony (liste mémorisée par thread : l'énumération WinRT à chaque lecture coûtait du CPU en permanence).
+/// Vide : nouvelle recherche au plus une fois par seconde ; non vide : revérifiée toutes les 5 s.
+pub(crate) fn sony_pads() -> Vec<RawGameController> {
+    SONY_CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        let age = c.0.map(|t| t.elapsed());
+        let stale = match age {
+            None => true,
+            Some(a) => a > if c.1.is_empty() { Duration::from_secs(1) } else { Duration::from_secs(5) },
+        };
+        if stale {
+            c.1 = RawGameController::RawGameControllers().map(|l| l.into_iter().filter(|r| r.HardwareVendorId() == Ok(SONY)).collect()).unwrap_or_default();
+            c.0 = Some(Instant::now());
+        }
+        c.1.clone()
+    })
+}
+
+/// Une lecture a échoué : la liste sera relue au prochain appel.
+pub(crate) fn sony_invalidate() {
+    SONY_CACHE.with(|c| c.borrow_mut().0 = None);
 }

@@ -158,7 +158,9 @@ fn main() -> Result<(), slint::PlatformError> {
     std::panic::set_hook(Box::new(|info| {
         let _ = std::fs::write(games_file().with_file_name("panic.log"), info.to_string());
     }));
+    mark("start");
     let _profile = profiles::activate();
+    mark("profile");
     // set_fullscreen() avant run() est ignoré par winit : plein écran dès la création.
     std::env::set_var("SLINT_FULLSCREEN", "1");
     // Legendary (jeux Epic) lit sa configuration ici, y compris quand il est lancé par le gestionnaire de fenêtres.
@@ -167,6 +169,7 @@ fn main() -> Result<(), slint::PlatformError> {
     std::env::set_var("SLINT_BACKEND", std::env::var("HEARTH_BACKEND").unwrap_or_else(|_| "winit-skia".into()));
     let overrides = prefs::load();
     let games = load_games(stores::installed(), &overrides);
+    mark("games");
     let shell = Rc::new(Shell {
         ui: App::new()?,
         guide: GuideMenu::new()?,
@@ -264,6 +267,7 @@ fn main() -> Result<(), slint::PlatformError> {
     shell.rebuild();
     shell.guide.set_notes(shell.notes.clone().into());
     *shell.store_status.borrow_mut() = stores::all().iter().map(|s| (s.name().to_string(), s.detected(), shell.games.borrow().iter().filter(|g| g.store == s.name()).count())).collect();
+    mark("shell_built");
     i18n::init();
     theme::load();
     shell.apply_theme();
@@ -389,7 +393,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let s = shell.clone();
     let phase = Cell::new(0.0f32);
     let anim = slint::Timer::default();
-    anim.start(slint::TimerMode::Repeated, Duration::from_millis(40), move || timed("animate", || s.animate(&phase)));
+    anim.start(slint::TimerMode::Repeated, Duration::from_millis(100), move || timed("animate", || s.animate(&phase)));
 
     // Le menu guide est créé une fois puis affiché/masqué en Win32, sans jamais prendre le focus
     // (un jeu plein écran qui perd le focus se réduit et clignote).
@@ -458,7 +462,8 @@ fn main() -> Result<(), slint::PlatformError> {
     let s = shell.clone();
     let last = Cell::new(std::time::Instant::now());
     let watchdog = slint::Timer::default();
-    watchdog.start(slint::TimerMode::Repeated, Duration::from_millis(8), move || {
+    if std::env::var_os("HEARTH_PERF").is_some() {
+        watchdog.start(slint::TimerMode::Repeated, Duration::from_millis(8), move || {
         let gap = last.replace(std::time::Instant::now()).elapsed().as_secs_f64() * 1000.0;
         if gap > 25.0 && std::env::var_os("HEARTH_PERF").is_some() {
             use std::io::Write;
@@ -467,6 +472,7 @@ fn main() -> Result<(), slint::PlatformError> {
             }
         }
     });
+    }
     Shell::schedule_updates();
     let s = shell.clone();
     let upd = slint::Timer::default();
@@ -490,6 +496,20 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     shell.start_art();
     shell.refresh_owned();
+    // Diagnostic de latence (HEARTH_PERF) : délai entre l'ordre de navigation et l'image suivante réellement rendue.
+    if std::env::var_os("HEARTH_PERF").is_some() {
+        let _ = shell.ui.window().set_rendering_notifier(|state, _| {
+            if let slint::RenderingState::AfterRendering = state {
+                if let Some(t) = input::take_last_input() {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(games_file().with_file_name("perf.log")) {
+                        let _ = writeln!(f, "LAT entree->image {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
+                    }
+                }
+            }
+        });
+    }
+    mark("before_run");
     shell.ui.run()
 }
 
@@ -633,6 +653,12 @@ impl Shell {
     }
 
     fn on_nav(&self, nav: Nav) {
+        if let Some(t) = input::last_input() {
+            let ms = t.elapsed().as_secs_f64() * 1000.0;
+            if ms > 8.0 {
+                timed_ms("LAT file_attente", ms);
+            }
+        }
         // Mode souris : L3 + R3 (ou menu guide) l'active ; Triangle ouvre le clavier visuel qui écrit dans la fenêtre active.
         match nav {
             Nav::Mouse => {
@@ -1301,10 +1327,14 @@ impl Shell {
 
     /// Fond animé (arrêté quand la console n'est pas devant : économise le CPU en jeu) et pictogrammes.
     fn animate(&self, phase: &Cell<f32>) {
+        static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+        if FIRST.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            mark("first_animate");
+        }
         // Tick à 25 Hz pour un mouvement fluide ; les vérifications coûteuses (fenêtres, manette) une fois sur cinq.
         let n = self.anim_n.get().wrapping_add(1);
         self.anim_n.set(n);
-        if n % 5 == 0 {
+        if n % 2 == 0 {
             if self.ui.get_tab() == 2 && !self.catalog_started.get() {
                 self.load_catalog(None);
             }
@@ -1325,7 +1355,7 @@ impl Shell {
                 self.rebuild();
             }
         }
-        if n % 2 == 0 {
+        {
             timed("sync_library_art", || self.sync_library_art());
         }
         if i18n::anim() && self.ui.get_zone() < 3 && self.fg_main.get() {
@@ -1995,5 +2025,27 @@ fn clipboard_text() -> Option<String> {
         }
         CloseClipboard();
         out
+    }
+}
+
+static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Repère de démarrage (HEARTH_PERF) : temps écoulé depuis le début de main.
+fn mark(what: &str) {
+    let t0 = *START.get_or_init(std::time::Instant::now);
+    if std::env::var_os("HEARTH_PERF").is_some() {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(games_file().with_file_name("perf.log")) {
+            let _ = writeln!(f, "MARK {what} {:.0} ms", t0.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
+}
+
+fn timed_ms(what: &str, ms: f64) {
+    if std::env::var_os("HEARTH_PERF").is_some() {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(games_file().with_file_name("perf.log")) {
+            let _ = writeln!(f, "{what} {ms:.0} ms");
+        }
     }
 }
