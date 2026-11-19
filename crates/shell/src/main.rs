@@ -849,6 +849,17 @@ impl Shell {
 
     /// Saisie au clavier physique.
     fn kb_char(&self, t: &str) {
+        // Ctrl+V : colle le texte du presse-papiers (une seule ligne).
+        let pasted;
+        let t = if t == "\u{16}" {
+            pasted = clipboard_text().unwrap_or_default().replace(['\r', '\n'], " ").trim().to_string();
+            pasted.as_str()
+        } else {
+            t
+        };
+        if t.is_empty() {
+            return;
+        }
         let k = self.settings.kb_char(t);
         self.kb_apply(k);
     }
@@ -1896,5 +1907,40 @@ impl Shell {
             self.rebuild();
             self.home();
         }
+    }
+}
+
+/// Texte du presse-papiers Windows (Unicode), s'il y en a.
+fn clipboard_text() -> Option<String> {
+    #[link(name = "user32")]
+    extern "system" {
+        fn OpenClipboard(owner: isize) -> i32;
+        fn CloseClipboard() -> i32;
+        fn GetClipboardData(format: u32) -> isize;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GlobalLock(h: isize) -> *const u16;
+        fn GlobalUnlock(h: isize) -> i32;
+    }
+    unsafe {
+        if OpenClipboard(0) == 0 {
+            return None;
+        }
+        let h = GetClipboardData(13); // CF_UNICODETEXT
+        let mut out = None;
+        if h != 0 {
+            let p = GlobalLock(h);
+            if !p.is_null() {
+                let mut n = 0;
+                while *p.add(n) != 0 {
+                    n += 1;
+                }
+                out = Some(String::from_utf16_lossy(std::slice::from_raw_parts(p, n)));
+                GlobalUnlock(h);
+            }
+        }
+        CloseClipboard();
+        out
     }
 }
