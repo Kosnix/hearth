@@ -140,7 +140,7 @@ fn install_gamepad_driver() {
 
 const ELEVATED_TASK: &str = "HearthElevated";
 /// Seuls ces paquets winget peuvent être installés par l'assistant administrateur.
-const ALLOWED_WINGET: [&str; 4] = ["Valve.Steam", "EpicGames.EpicGamesLauncher", "GOG.Galaxy", "ViGEm.ViGEmBus"];
+const ALLOWED_WINGET: [&str; 7] = ["Valve.Steam", "EpicGames.EpicGamesLauncher", "GOG.Galaxy", "ViGEm.ViGEmBus", "RockstarGames.Launcher", "Microsoft.VCRedist.2015+.x64", "Microsoft.VCRedist.2015+.x86"];
 
 /// À lancer élevé (un seul consentement UAC) : copie l'assistant dans Program Files (non modifiable
 /// sans droits) et crée la tâche planifiée « privilèges maximum » qui le lance sans invite.
@@ -183,6 +183,19 @@ fn elevated() {
                 Ok(o) if matches!(o.status.code().map(|c| c as u32), Some(0x8A15_002B | 0x8A15_0061)) => Ok(()),
                 Ok(o) => Err(String::from_utf8_lossy(&o.stdout).lines().rev().find(|l| l.trim().len() > 3).unwrap_or("échec de winget").trim().to_string()),
                 Err(e) => Err(format!("winget introuvable : {e}")),
+            }
+        }
+        // Règle de pare-feu entrant pour l'exécutable d'un jeu lancé par Hearth : Windows ne pose plus sa question en plein jeu.
+        (Some("firewall"), Some(path)) if path.to_lowercase().ends_with(".exe") && std::path::Path::new(path).is_absolute() && std::path::Path::new(path).is_file() => {
+            let name = format!("Hearth - {path}");
+            let exists = Command::new("netsh").args(["advfirewall", "firewall", "show", "rule", &format!("name={name}")]).output().is_ok_and(|o| o.status.success());
+            if exists {
+                Ok(())
+            } else {
+                let st = Command::new("netsh")
+                    .args(["advfirewall", "firewall", "add", "rule", &format!("name={name}"), "dir=in", "action=allow", &format!("program={path}"), "enable=yes", "profile=any"])
+                    .output();
+                if st.is_ok_and(|o| o.status.success()) { Ok(()) } else { Err("règle de pare-feu refusée".into()) }
             }
         }
         _ => Err("opération refusée".into()),

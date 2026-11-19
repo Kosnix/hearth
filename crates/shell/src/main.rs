@@ -407,7 +407,7 @@ fn main() -> Result<(), slint::PlatformError> {
     SHELL.with(|s| *s.borrow_mut() = Some(shell.clone()));
     // Pilote de manette Xbox virtuelle (ViGEmBus) : installé automatiquement s'il manque (un seul essai).
     // L'assistant administrateur (une seule validation Windows, au premier lancement) est réinstallé quand sa liste d'opérations change (version 2 : ViGEmBus) ; ensuite plus aucune invite.
-    let marker = stores::base_dir().join("helper-v2.done");
+    let marker = stores::base_dir().join("helper-v3.done");
     if !marker.exists() {
         // Marqueur global (tous profils), posé avant la tentative : jamais plus d'une invite par version.
         let _ = std::fs::write(&marker, "1");
@@ -419,6 +419,10 @@ fn main() -> Result<(), slint::PlatformError> {
             let present = std::process::Command::new("sc").args(["query", "ViGEmBus"]).creation_flags(0x0800_0000).output().is_ok_and(|o| o.status.success());
             if !present {
                 let _ = system::install::winget("ViGEm.ViGEmBus");
+            }
+            // Bibliothèques Visual C++ à jour : les jeux n'ont plus à lancer leur propre installateur (fenêtre + UAC).
+            for id in ["Microsoft.VCRedist.2015+.x64", "Microsoft.VCRedist.2015+.x86"] {
+                let _ = system::install::winget(id);
             }
         });
     }
@@ -488,6 +492,15 @@ impl Shell {
         let compat = wm::compat::lookup(exe);
         compat.apply_ini();
         let args: Vec<String> = g.args.iter().chain(&compat.args).cloned().collect();
+        // Pare-feu : règle d'autorisation posée une fois par jeu (assistant administrateur), pour qu'aucune fenêtre Windows n'apparaisse en jeu.
+        {
+            let path = g.exe.clone();
+            std::thread::spawn(move || {
+                if system::admin::enabled() {
+                    let _ = system::admin::request(&format!("firewall {path}"));
+                }
+            });
+        }
         match wm::Session::launch(exe, &args) {
             Ok(session) => {
                 let hands_off = g.anticheat || compat.anticheat || !compat.borderless;

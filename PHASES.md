@@ -41,3 +41,5 @@
 - Manette : copie virtuelle Xbox non relue par Hearth, débranchement différé, renvoi en cas d'échec ; sons en retard abandonnés (plus de rafales).
 
 - Assistant administrateur : une seule tentative par version (marqueur global) ; curseur de souris masqué après 5 s sans mouvement.
+
+- Installation sans invite pour l'utilisateur final : assistant administrateur v3 (VC++ x64/x86, ViGEmBus, Rockstar, règles de pare-feu par jeu), une seule validation au premier lancement.
