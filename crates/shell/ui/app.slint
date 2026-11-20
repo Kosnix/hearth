@@ -529,6 +529,7 @@ export component App inherits Window {
     in-out property <bool> dlbtn: false; // focus sur le bouton Annuler du téléchargement sélectionné
     callback dl-cancel(int);
     in property <bool> oobe-on;
+    in property <bool> oobe-pad;
     in property <[SettingRow]> oobe-rows;
     in-out property <int> oobe-sel: 0;
     in property <int> oobe-step;
@@ -1999,17 +2000,99 @@ export component App inherits Window {
                 color: Theme.dim;
                 wrap: word-wrap;
             }
+            // Tutoriel visuel : connecter la manette (étape 1), avec détection en direct (st-pad).
+            if oobe-pad: Rectangle {
+                x: 640px;
+                y: 320px;
+                width: parent.width - 640px - 80px;
+                height: 330px;
+                for c[k] in [
+                    { n: "1", ic: "\u{E88E}", t: @tr("Câble USB"), d: @tr("Branchez la manette au PC avec son câble.") },
+                    { n: "2", ic: "\u{E702}", t: @tr("Bluetooth"), d: @tr("Maintenez PS + Créer (DualSense) ou le bouton de connexion (Xbox) jusqu'au clignotement.") },
+                    { n: "3", ic: "\u{E7FC}", t: @tr("Appuyez sur un bouton"), d: @tr("Dès qu'elle est reconnue, le cadre ci-dessous devient vert.") },
+                ]: Rectangle {
+                    x: k * (parent.width - 48px) / 3 + k * 24px;
+                    y: 0px;
+                    width: (parent.width - 48px) / 3;
+                    height: 250px;
+                    border-radius: 18px;
+                    background: Theme.glass;
+                    Rectangle {
+                        x: 20px;
+                        y: 20px;
+                        width: 44px;
+                        height: 44px;
+                        border-radius: 22px;
+                        background: Theme.accent;
+                        Text { text: c.n; font-size: 24px; font-weight: 800; color: Theme.on-accent; }
+                    }
+                    Text {
+                        x: parent.width - self.width - 28px;
+                        y: 8px;
+                        text: c.ic;
+                        font-family: Theme.icons;
+                        font-size: 84px;
+                        color: Theme.accent;
+                    }
+                    Text {
+                        x: 24px;
+                        y: 100px;
+                        width: parent.width - 48px;
+                        text: c.t;
+                        font-size: 30px;
+                        font-weight: 700;
+                        color: Theme.text;
+                    }
+                    Text {
+                        x: 24px;
+                        y: 146px;
+                        width: parent.width - 48px;
+                        height: 96px;
+                        text: c.d;
+                        font-size: 22px;
+                        color: Theme.dim;
+                        wrap: word-wrap;
+                    }
+                }
+                Rectangle {
+                    y: 266px;
+                    width: parent.width;
+                    height: 64px;
+                    border-radius: 14px;
+                    border-width: 3px;
+                    border-color: st-pad >= 0 ? Theme.ok : Theme.dim;
+                    background: st-pad >= 0 ? Theme.ok.with-alpha(0.18) : transparent;
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 16px;
+                        Text {
+                            text: st-pad >= 0 ? "\u{E73E}" : "\u{E895}";
+                            font-family: Theme.icons;
+                            font-size: 30px;
+                            vertical-alignment: center;
+                            color: st-pad >= 0 ? Theme.ok : Theme.dim;
+                        }
+                        Text {
+                            text: st-pad >= 0 ? @tr("Manette détectée") : @tr("En attente d'une manette…");
+                            font-size: 28px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                            color: st-pad >= 0 ? Theme.ok : Theme.dim;
+                        }
+                    }
+                }
+            }
             Rectangle {
                 x: 640px;
-                y: 340px;
+                y: 340px + (oobe-pad ? 330px : 0px);
                 width: parent.width - 640px - 80px;
-                height: min(oobe-rows.length, 8) * 104px + 24px;
+                height: min(oobe-rows.length, oobe-pad ? 4 : 8) * 104px + 24px;
                 clip: true;
                 border-radius: 18px;
                 background: Theme.glass;
                 for r[i] in oobe-rows: Rectangle {
                     x: 12px;
-                    y: 12px + (i - max(0, oobe-sel - 7)) * 104px;
+                    y: 12px + (i - max(0, oobe-sel - (oobe-pad ? 3 : 7))) * 104px;
                     width: parent.width - 24px;
                     height: 96px;
                     border-radius: 14px;
@@ -2033,7 +2116,7 @@ export component App inherits Window {
             }
             Text {
                 x: 640px;
-                y: 340px + min(oobe-rows.length, 8) * 104px + 56px;
+                y: 340px + (oobe-pad ? 330px : 0px) + min(oobe-rows.length, oobe-pad ? 4 : 8) * 104px + 56px;
                 width: parent.width - 640px - 80px;
                 text: oobe-hint;
                 font-size: 24px;

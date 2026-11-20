@@ -65,3 +65,4 @@
 - Version bureau : fenêtre créée au démarrage puis masquée en Win32 (invisible tant qu'on ne l'ouvre pas) ; « Identifier le jeu » cherche d'abord sur SteamGridDB (`addgame::identify`, repli sur les boutiques sans clé).
 - Import des jeux déjà installés (`stores/src/import.rs`, `Shell::import_games`) : relecture Steam/Epic/GOG + jeux non-Steam de Steam (`shortcuts.vdf`) ; Réglages > À propos > « Importer mes jeux », bouton de la fenêtre bureau.
 - Installateur : `tools/make-installer.ps1` → `dist\Hearth-Setup.exe` (crate `setup`, embarque `hearth.exe` + `hearth-shell.exe`, demande confirmation puis `hearth install`), copié sur `\192.168.1.254\fusion_storage\Drive`.
+- Assistant : première étape après l'accueil = « Connecter la manette » (tutoriel visuel USB / Bluetooth / bouton, détection en direct `st-pad`), puis langue, affichage, etc.

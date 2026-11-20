@@ -27,11 +27,11 @@ struct Step {
 
 const STEPS: [Step; 11] = [
     Step { kind: Kind::Welcome, title: "Bienvenue", desc: "Quelques réglages avant de commencer. Tout reste modifiable plus tard dans les Réglages.", skippable: false },
+    Step { kind: Kind::Cat(4), title: "Connecter la manette", desc: "Branchez ou appairez votre manette : Hearth la détecte tout seul. Sans manette, continuez à la souris et au clavier. Astuce : cliquez les deux sticks (L3 + R3) pour piloter la souris.", skippable: true },
     Step { kind: Kind::Cat(5), title: "Langue", desc: "Choisissez la langue de l'interface.", skippable: false },
     Step { kind: Kind::Cat(1), title: "Affichage", desc: "Résolution et fréquence de votre écran. Un retour automatique vous protège d'un mauvais choix.", skippable: true },
     Step { kind: Kind::Cat(0), title: "Son", desc: "Sortie audio et volumes des effets et de la musique.", skippable: true },
     Step { kind: Kind::Cat(2), title: "Réseau", desc: "Connectez le Wi-Fi pour la boutique et les téléchargements (inutile en Ethernet).", skippable: true },
-    Step { kind: Kind::Cat(4), title: "Manettes", desc: "Branchez ou appairez votre manette. Astuce : cliquez les deux sticks (L3 + R3) pour piloter la souris.", skippable: true },
     Step { kind: Kind::Profile, title: "Votre profil", desc: "Votre nom et votre photo, affichés en haut de l'écran.", skippable: false },
     Step { kind: Kind::Cat(13), title: "Thème", desc: "Couleur d'accentuation et fond de l'interface.", skippable: true },
     Step { kind: Kind::Cat(12), title: "Comptes", desc: "Reliez vos boutiques pour retrouver vos jeux. Vous pourrez le faire plus tard.", skippable: true },
@@ -113,6 +113,7 @@ impl Shell {
         self.ui.set_oobe_title(tr(if step == STEPS.len() as i32 - 1 { "Tout est prêt" } else if step == 0 { "Bienvenue dans Hearth" } else { s.title }).into());
         self.ui.set_oobe_desc(tr(s.desc).into());
         self.ui.set_oobe_sel(0);
+        self.ui.set_oobe_pad(matches!(s.kind, Kind::Cat(4)));
         self.ui.set_zone(13);
         match s.kind {
             Kind::Cat(c) => {
