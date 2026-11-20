@@ -32,7 +32,7 @@ pub struct Fetched {
     link: Option<system::net::Link>,
     bt_on: Option<bool>,
     bt_paired: Vec<Dev>,
-    pads: Vec<(String, Option<u32>)>,
+    pads: Vec<system::pads::Pad>,
     wifi_err: String,
     drives: Vec<system::storage::Drive>,
     update: String,
@@ -45,6 +45,32 @@ pub struct Fetched {
     accounts: Vec<(String, bool, Option<String>)>,
 }
 
+/// Ordre choisi par l'utilisateur (identifiants de manettes, le premier est la « principale »,
+/// transmise aux jeux). Les manettes non classées suivent, dans l'ordre où Windows les signale.
+fn pad_order() -> Vec<String> {
+    i18n::pref("pad_order").map(|s| s.split(',').map(String::from).filter(|s| !s.is_empty()).collect()).unwrap_or_default()
+}
+
+fn set_pad_order(ids: &[String]) {
+    i18n::set_pref("pad_order", &ids.join(","));
+    input::set_primary_pad(ids.first().cloned());
+}
+
+pub fn ordered_pads(raw: Vec<system::pads::Pad>) -> Vec<system::pads::Pad> {
+    let order = pad_order();
+    let mut out: Vec<system::pads::Pad> = vec![];
+    let mut rest = raw;
+    for id in &order {
+        if let Some(i) = rest.iter().position(|p| &p.id == id) {
+            out.push(rest.remove(i));
+        }
+    }
+    out.extend(rest);
+    // La manette en tête (choisie ou, à défaut, la première détectée) est celle transmise aux jeux.
+    input::set_primary_pad(out.first().map(|p| p.id.clone()));
+    out
+}
+
 pub fn fetch(cat: i32) -> Fetched {
     match cat {
         2 => {
@@ -52,7 +78,7 @@ pub fn fetch(cat: i32) -> Fetched {
             Fetched { wifi_on: system::radio::wifi_on(), nets, link: system::net::current(), wifi_err: system::wifi::last_error(), ..Default::default() }
         }
         3 => Fetched { bt_on: system::radio_ext::bluetooth_on(), bt_paired: system::bluetooth::devices(true), ..Default::default() },
-        4 => Fetched { pads: system::pads::list(), ..Default::default() },
+        4 => Fetched { pads: ordered_pads(system::pads::list()), ..Default::default() },
         7 => Fetched { drives: system::storage::drives(), ..Default::default() },
         8 => Fetched { gpus: system::drivers::gpus(), ..Default::default() },
         9 => Fetched { plans: system::power::plans(), sleep_min: system::power::timeout(true), screen_min: system::power::timeout(false), ..Default::default() },
@@ -83,7 +109,6 @@ pub enum Outcome {
     Oobe,
     Desktop,
     Import,
-    HearthUpdate,
     SoundPicker(bool),
     CheckUpdates(bool),
     BtScan,
@@ -301,7 +326,12 @@ impl Settings {
             }
             4 if s.loading => vec![row("Lecture…", String::new(), false)],
             4 if s.data.pads.is_empty() => vec![row("Aucune manette détectée", String::new(), false)],
-            4 => s.data.pads.iter().map(|(p, b)| row(p, b.map_or(tr("Connectée"), |b| format!("{} · {b} %", tr("Connectée"))), false)).collect(),
+            4 => {
+                if s.data.pads.len() > 1 {
+                    hint = tr("‹ › pour changer l'ordre : la première est la manette transmise aux jeux.");
+                }
+                s.data.pads.iter().map(|p| row(&p.name, p.battery.map_or(tr("Connectée"), |b| format!("{} · {b} %", tr("Connectée"))), s.data.pads.len() > 1)).collect()
+            }
             13 => {
                 hint = tr("Le thème s'applique tout de suite, à tout Hearth.");
                 vec![
@@ -344,7 +374,6 @@ impl Settings {
                 v.push(row("Assistant de démarrage", tr("Revoir"), false));
                 v.push(row("Ouvrir la version bureau", String::new(), false));
                 v.push(row("Importer mes jeux", String::new(), false));
-                v.push(row("Rechercher les mises à jour de Hearth", String::new(), false));
                 v
             }
             _ => vec![],
@@ -371,6 +400,13 @@ impl Settings {
             (0, 2, d) if d != 0 => i18n::set_sfx_vol((i18n::sfx_vol() as i32 + d * 10).clamp(0, 100) as u32),
             (0, 3, d) if d != 0 => i18n::set_music_vol((i18n::music_vol() as i32 + d * 10).clamp(0, 100) as u32),
             (0, 4, 0) => i18n::set_music(!i18n::music()),
+            (4, r, d) if d != 0 && s.data.pads.len() > 1 && (r as usize) < s.data.pads.len() => {
+                let r = r as usize;
+                let n = step(r, s.data.pads.len(), d);
+                s.data.pads.swap(r, n);
+                let ids: Vec<String> = s.data.pads.iter().map(|p| p.id.clone()).collect();
+                set_pad_order(&ids);
+            }
             (0, 5, 0) => out = Outcome::SoundPicker(false),
             (0, 6, 0) => out = Outcome::SoundPicker(true),
             (13, 0, d) if d != 0 => {
@@ -388,7 +424,6 @@ impl Settings {
             (11, r, 0) if r as usize == s.data.about.len() + 1 => out = Outcome::Oobe,
             (11, r, 0) if r as usize == s.data.about.len() + 2 => out = Outcome::Desktop,
             (11, r, 0) if r as usize == s.data.about.len() + 3 => out = Outcome::Import,
-            (11, r, 0) if r as usize == s.data.about.len() + 4 => out = Outcome::HearthUpdate,
             (13, 3, 0) => {
                 theme::reset();
                 out = Outcome::ThemeChanged;

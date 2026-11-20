@@ -11,8 +11,6 @@ use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-const SONY: u16 = 0x054C;
-
 static PRESENT: AtomicBool = AtomicBool::new(false);
 
 /// Une manette Sony est branchée (sa version virtuelle Xbox n'est alors pas relue par Hearth : pas de double lecture).
@@ -81,7 +79,11 @@ fn axis(v: f64) -> i16 {
 /// axes 0/1 stick gauche, 2/3 stick droit, 4/5 gâchettes (ordre du descripteur HID).
 fn read() -> Option<XGamepad> {
     let raws = crate::sony_pads();
-    let raw = raws.into_iter().find(|r| r.HardwareVendorId() == Ok(SONY))?;
+    // Plusieurs manettes Sony branchées : celle choisie dans Réglages > Manettes (sinon la première trouvée).
+    let raw = match crate::primary_pad() {
+        Some(id) => raws.iter().find(|r| r.NonRoamableId().ok().is_some_and(|n| n.to_string() == id)).or(raws.first()).cloned(),
+        None => raws.into_iter().next(),
+    }?;
     let (nb, ns, na) = (raw.ButtonCount().ok()?, raw.SwitchCount().ok()?, raw.AxisCount().ok()?);
     let mut b = vec![false; nb as usize];
     let mut s = vec![Hat::Center; ns as usize];

@@ -294,6 +294,18 @@ mod tests {
     }
 }
 
+/// Manette Sony choisie comme « principale » (Réglages > Manettes) : celle transmise aux jeux quand
+/// plusieurs sont branchées. `None` : la première trouvée, peu importe laquelle.
+static PRIMARY_PAD: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+pub fn set_primary_pad(id: Option<String>) {
+    *PRIMARY_PAD.lock().unwrap_or_else(|e| e.into_inner()) = id;
+}
+
+pub(crate) fn primary_pad() -> Option<String> {
+    PRIMARY_PAD.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 /// Dernière manette utilisée (pour afficher les bons pictogrammes) : 0 Xbox/générique, 1 PlayStation.
 static LAST_PAD: AtomicU8 = AtomicU8::new(0);
 

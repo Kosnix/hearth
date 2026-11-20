@@ -318,8 +318,16 @@ pub mod wifi {
 pub mod pads {
     use windows::Gaming::Input::RawGameController;
 
-    /// Manettes connectées avec niveau de batterie (%), si le pilote l'expose.
-    pub fn list() -> Vec<(String, Option<u32>)> {
+    /// Manette connectée : nom, batterie (%) si le pilote l'expose, identifiant stable (ordre, bureau).
+    pub struct Pad {
+        pub name: String,
+        pub battery: Option<u32>,
+        pub id: String,
+    }
+
+    /// Manettes connectées, dans l'ordre où Windows les signale (voir `shell::settings::ordered_pads`
+    /// pour l'ordre choisi par l'utilisateur).
+    pub fn list() -> Vec<Pad> {
         RawGameController::RawGameControllers()
             .map(|l| {
                 l.into_iter()
@@ -330,7 +338,9 @@ pub mod pads {
                             let full = r.FullChargeCapacityInMilliwattHours().ok()?.Value().ok()?;
                             (full > 0).then(|| (cur as u32 * 100 / full as u32).min(100))
                         });
-                        Some((name, battery))
+                        // Stable d'une session à l'autre pour la même manette (branchement/appairage) ; à défaut, le nom.
+                        let id = c.NonRoamableId().map(|s| s.to_string()).unwrap_or_else(|_| name.clone());
+                        Some(Pad { name, battery, id })
                     })
                     .collect()
             })

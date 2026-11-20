@@ -336,6 +336,8 @@ fn main() -> Result<(), slint::PlatformError> {
     i18n::init();
     theme::load();
     keyboard::load();
+    // Manette principale (Réglages > Manettes), transmise aux jeux quand plusieurs sont branchées.
+    settings::ordered_pads(system::pads::list());
     shell.apply_theme();
     i18n::init_audio_prefs();
     if !desktop_only {
@@ -849,9 +851,21 @@ impl Shell {
     fn open_cat(&self, cat: i32) {
         let hint = self.settings.open(cat);
         self.ui.set_shint(hint.into());
+        if cat == 6 {
+            self.settings.rows.push(self.hearth_update_row());
+        }
         if settings::needs_fetch(cat) {
             self.spawn_fetch(cat);
         }
+    }
+
+    /// Ligne « Hearth » ajoutée à côté de Windows Update (cat 6) : les deux mises à jour au même endroit.
+    fn hearth_update_row(&self) -> SettingRow {
+        let value = match self.hearth_update.borrow().as_ref() {
+            Some((ver, _)) => format!("{} {ver}", tr("Mise à jour disponible :")),
+            None => format!("{} · {}", env!("CARGO_PKG_VERSION"), tr("à jour")),
+        };
+        SettingRow { label: tr("Hearth").into(), value: value.into(), adjustable: false }
     }
 
     /// Lecture WinRT hors du thread UI, résultat renvoyé au thread UI.
@@ -871,6 +885,12 @@ impl Shell {
     }
 
     fn setting(&self, cat: i32, row: i32, delta: i32) {
+        // Ligne « Hearth » ajoutée après coup (hearth_update_row) : pas connue de Settings::act.
+        if cat == 6 && row == 1 && delta == 0 {
+            self.check_hearth_update(true);
+            self.open_cat_keep(cat);
+            return;
+        }
         match self.settings.act(cat, row, delta) {
             settings::Outcome::DisplayChanged => self.display_changed(),
             settings::Outcome::Toggle { wifi, on } => {
@@ -898,7 +918,6 @@ impl Shell {
             settings::Outcome::Oobe => self.oobe_restart(),
             settings::Outcome::Desktop => self.desktop_open(),
             settings::Outcome::Import => self.import_games(),
-            settings::Outcome::HearthUpdate => self.check_hearth_update(true),
             settings::Outcome::SoundPicker(music) => self.sound_picker(music),
             settings::Outcome::ThemeChanged => {
                 self.apply_theme();
@@ -1115,6 +1134,9 @@ impl Shell {
     /// Rafraîchit les lignes sans recharger les données (garde les choix en cours).
     fn open_cat_keep(&self, cat: i32) {
         let hint = self.settings.refresh(cat);
+        if cat == 6 {
+            self.settings.rows.push(self.hearth_update_row());
+        }
         self.desktop_sync_rows_with(&hint);
         self.ui.set_shint(hint.into());
         let max = self.settings.row_count().saturating_sub(1) as i32;
@@ -1135,7 +1157,8 @@ impl Shell {
         std::thread::spawn(move || {
             let net = system::net::current().map_or(-1, |l| if l.wifi { 1 } else { 0 });
             let vol = system::audio::volume().map_or(-1, |v| v as i32);
-            let pad = system::pads::list().first().map_or(-1, |p| p.1.map_or(101, |b| b as i32));
+            // Manette « principale » (Réglages > Manettes) en premier, pour la pastille de la barre d'état.
+            let pad = settings::ordered_pads(system::pads::list()).first().map_or(-1, |p| p.battery.map_or(101, |b| b as i32));
             let _ = w.upgrade_in_event_loop(move |ui| {
                 ui.set_st_net(net);
                 ui.set_st_vol(vol);
@@ -1150,7 +1173,9 @@ impl Shell {
     }
 
     fn home(&self) {
-        // Retour au menu : la manette doit naviguer (un mode souris resté actif la rendait muette).
+        // Retour au menu : la manette doit naviguer (un mode souris resté actif la rendait muette,
+        // ou L3+R3 encore réservé au jeu qu'on vient de quitter empêchait de rebasculer).
+        input::set_chord(true);
         if input::mouse_active() {
             input::set_mouse_active(false);
             self.pad_sync();
