@@ -57,9 +57,15 @@ fn set_pad_order(ids: &[String]) {
 }
 
 pub fn ordered_pads(raw: Vec<system::pads::Pad>) -> Vec<system::pads::Pad> {
+    // La manette Sony branchée a sa propre copie virtuelle Xbox 360 (ViGEmBus, pour les jeux) : Windows la
+    // signale comme une seconde manette, à tort (nom générique, « 100 % » de batterie fictifs). On la cache.
+    let mut rest: Vec<system::pads::Pad> = if raw.iter().any(|p| p.vendor == system::pads::SONY_VENDOR) {
+        raw.into_iter().filter(|p| p.vendor != system::pads::XBOX_VENDOR).collect()
+    } else {
+        raw
+    };
     let order = pad_order();
     let mut out: Vec<system::pads::Pad> = vec![];
-    let mut rest = raw;
     for id in &order {
         if let Some(i) = rest.iter().position(|p| &p.id == id) {
             out.push(rest.remove(i));

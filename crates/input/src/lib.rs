@@ -337,28 +337,42 @@ fn stamp() {
 }
 
 thread_local! {
-    static SONY_CACHE: std::cell::RefCell<(Option<Instant>, Vec<RawGameController>)> = const { std::cell::RefCell::new((None, Vec::new())) };
+    static SONY_CACHE: std::cell::RefCell<(Option<Instant>, Vec<RawGameController>, u8)> = const { std::cell::RefCell::new((None, Vec::new(), 0)) };
 }
+
+/// Relecture forcée demandée par `resync_pads()` (un compteur plutôt qu'un simple drapeau : plusieurs
+/// threads lisent `sony_pads()` chacun avec leur propre cache, chacun doit l'appliquer une fois).
+static RESYNC_GEN: AtomicU8 = AtomicU8::new(0);
 
 /// Manettes Sony (liste mémorisée par thread : l'énumération WinRT à chaque lecture coûtait du CPU en permanence).
 /// Vide : nouvelle recherche au plus une fois par seconde ; non vide : revérifiée toutes les 5 s.
 pub(crate) fn sony_pads() -> Vec<RawGameController> {
     SONY_CACHE.with(|c| {
         let mut c = c.borrow_mut();
+        let gen = RESYNC_GEN.load(Ordering::Relaxed);
         let age = c.0.map(|t| t.elapsed());
-        let stale = match age {
-            None => true,
-            Some(a) => a > if c.1.is_empty() { Duration::from_secs(1) } else { Duration::from_secs(5) },
-        };
+        let stale = c.2 != gen
+            || match age {
+                None => true,
+                Some(a) => a > if c.1.is_empty() { Duration::from_secs(1) } else { Duration::from_secs(5) },
+            };
         if stale {
             c.1 = RawGameController::RawGameControllers().map(|l| l.into_iter().filter(|r| r.HardwareVendorId() == Ok(SONY)).collect()).unwrap_or_default();
             c.0 = Some(Instant::now());
+            c.2 = gen;
         }
         c.1.clone()
     })
 }
 
 /// Une lecture a échoué : la liste sera relue au prochain appel.
+/// Force une relecture complète des manettes (nouvel appel WinRT, pas la liste mémorisée) : à utiliser
+/// en sortant d'un jeu, au cas où celui-ci aurait changé le mode de rapport HID d'une manette Sony
+/// (Steam Input, DirectInput…) sans que Windows.Gaming.Input s'en aperçoive tout seul.
+pub fn resync_pads() {
+    RESYNC_GEN.fetch_add(1, Ordering::Relaxed);
+}
+
 pub(crate) fn sony_invalidate() {
     SONY_CACHE.with(|c| c.borrow_mut().0 = None);
 }

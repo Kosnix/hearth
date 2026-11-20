@@ -323,16 +323,24 @@ pub mod pads {
         pub name: String,
         pub battery: Option<u32>,
         pub id: String,
+        pub vendor: u16,
     }
 
+    /// Identifiant Sony : utile pour repérer la manette virtuelle Xbox 360 que Hearth crée lui-même
+    /// (ViGEmBus) quand une manette Sony est branchée (voir `shell::settings::ordered_pads`).
+    pub const SONY_VENDOR: u16 = 0x054C;
+    /// Identifiant Microsoft (Xbox) : celui de cette manette virtuelle.
+    pub const XBOX_VENDOR: u16 = 0x045E;
+
     /// Manettes connectées, dans l'ordre où Windows les signale (voir `shell::settings::ordered_pads`
-    /// pour l'ordre choisi par l'utilisateur).
+    /// pour l'ordre choisi par l'utilisateur, qui filtre aussi la manette virtuelle).
     pub fn list() -> Vec<Pad> {
         RawGameController::RawGameControllers()
             .map(|l| {
                 l.into_iter()
                     .filter_map(|c| {
                         let name = c.DisplayName().ok()?.to_string();
+                        let vendor = c.HardwareVendorId().unwrap_or(0);
                         let battery = c.TryGetBatteryReport().ok().and_then(|r| {
                             let cur = r.RemainingCapacityInMilliwattHours().ok()?.Value().ok()?;
                             let full = r.FullChargeCapacityInMilliwattHours().ok()?.Value().ok()?;
@@ -340,7 +348,7 @@ pub mod pads {
                         });
                         // Stable d'une session à l'autre pour la même manette (branchement/appairage) ; à défaut, le nom.
                         let id = c.NonRoamableId().map(|s| s.to_string()).unwrap_or_else(|_| name.clone());
-                        Some(Pad { name, battery, id })
+                        Some(Pad { name, battery, id, vendor })
                     })
                     .collect()
             })

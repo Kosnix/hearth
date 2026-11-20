@@ -1174,8 +1174,11 @@ impl Shell {
 
     fn home(&self) {
         // Retour au menu : la manette doit naviguer (un mode souris resté actif la rendait muette,
-        // ou L3+R3 encore réservé au jeu qu'on vient de quitter empêchait de rebasculer).
+        // ou L3+R3 encore réservé au jeu qu'on vient de quitter empêchait de rebasculer). Une manette Sony
+        // relue de force, au cas où le jeu aurait changé son mode de rapport HID (Steam Input…) sans que
+        // Windows.Gaming.Input ne s'en rende compte tout seul.
         input::set_chord(true);
+        input::resync_pads();
         if input::mouse_active() {
             input::set_mouse_active(false);
             self.pad_sync();
