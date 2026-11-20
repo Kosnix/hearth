@@ -84,6 +84,7 @@ pub enum Outcome {
     Desktop,
     Import,
     HearthUpdate,
+    SoundPicker(bool),
     CheckUpdates(bool),
     BtScan,
     BtPair(String, String),
@@ -245,6 +246,8 @@ impl Settings {
                 row("Volume des effets", format!("{} %", i18n::sfx_vol()), true),
                 row("Volume de la musique", format!("{} %", i18n::music_vol()), true),
                 row("Musique d'ambiance", onoff(Some(i18n::music())), false),
+                row("Pack de sons", crate::sounds::label(false), false),
+                row("Pack de musique", crate::sounds::label(true), false),
             ],
             1 => match &s.revert {
                 Some((_, secs)) => {
@@ -368,6 +371,8 @@ impl Settings {
             (0, 2, d) if d != 0 => i18n::set_sfx_vol((i18n::sfx_vol() as i32 + d * 10).clamp(0, 100) as u32),
             (0, 3, d) if d != 0 => i18n::set_music_vol((i18n::music_vol() as i32 + d * 10).clamp(0, 100) as u32),
             (0, 4, 0) => i18n::set_music(!i18n::music()),
+            (0, 5, 0) => out = Outcome::SoundPicker(false),
+            (0, 6, 0) => out = Outcome::SoundPicker(true),
             (13, 0, d) if d != 0 => {
                 theme::set_preset(theme::preset() as i32 + d);
                 out = Outcome::ThemeChanged;

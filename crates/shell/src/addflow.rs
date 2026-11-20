@@ -13,6 +13,7 @@ pub enum PickMode {
     Dir(PathBuf),
     Identify,
     Hidden,
+    Sounds(bool),
 }
 
 fn item(label: &str, sub: &str, glyph: &str) -> PickItem {
@@ -77,7 +78,13 @@ impl Shell {
             PickMode::Dir(_) => 1,
             PickMode::Identify => 2,
             PickMode::Hidden => 3,
+            PickMode::Sounds(_) => 4,
         };
+        if mode == 4 {
+            let music = matches!(&*self.pick_mode.borrow(), PickMode::Sounds(true));
+            self.sound_pick(i, music);
+            return;
+        }
         if mode == 3 {
             let Some(id) = self.pick_ids.borrow().get(i).cloned() else { return };
             self.set_hidden(&id, false);
@@ -115,8 +122,13 @@ impl Shell {
             PickMode::Identify if self.identify_target.borrow().is_some() => None,
             PickMode::Identify => Some(self.identify_exe.borrow().as_ref().and_then(|e| e.parent().map(Path::to_path_buf))),
             PickMode::Hidden => None,
+            PickMode::Sounds(_) => None,
         };
         *self.identify_target.borrow_mut() = None;
+        if matches!(&*self.pick_mode.borrow(), PickMode::Sounds(_)) {
+            self.ui.set_zone(self.home_zone());
+            return;
+        }
         match target {
             None => self.ui.set_zone(0),
             Some(Some(p)) => self.show_browse(Some(p)),

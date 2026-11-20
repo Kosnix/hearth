@@ -22,6 +22,7 @@ mod native;
 mod oobe;
 mod profiles;
 mod scmd;
+mod sounds;
 mod selfupdate;
 mod playtime;
 mod prefs;
@@ -136,6 +137,8 @@ struct Shell {
     updates: RefCell<Vec<String>>,
     hearth_update: RefCell<Option<(String, String)>>,
     hearth_prompted: Cell<bool>,
+    sound_catalog: RefCell<Vec<sounds::Pack>>,
+    sound_list: RefCell<Vec<sounds::Pack>>,
     prompted: RefCell<std::collections::HashSet<String>>,
     pick_ids: RefCell<Vec<String>>,
     identify_target: RefCell<Option<String>>,
@@ -266,6 +269,8 @@ fn main() -> Result<(), slint::PlatformError> {
         updates: RefCell::new(vec![]),
         hearth_update: RefCell::new(None),
         hearth_prompted: Cell::new(false),
+        sound_catalog: RefCell::new(vec![]),
+        sound_list: RefCell::new(vec![]),
         prompted: RefCell::new(Default::default()),
         pick_ids: RefCell::new(vec![]),
         identify_target: RefCell::new(None),
@@ -329,6 +334,7 @@ fn main() -> Result<(), slint::PlatformError> {
     i18n::init_audio_prefs();
     if !desktop_only {
         system::sfx::init();
+        sounds::start();
     }
     i18n::init_volumes();
     shell.refresh_lang();
@@ -879,6 +885,7 @@ impl Shell {
             settings::Outcome::Desktop => self.desktop_open(),
             settings::Outcome::Import => self.import_games(),
             settings::Outcome::HearthUpdate => self.check_hearth_update(true),
+            settings::Outcome::SoundPicker(music) => self.sound_picker(music),
             settings::Outcome::ThemeChanged => {
                 self.apply_theme();
                 self.open_cat_keep(13);
