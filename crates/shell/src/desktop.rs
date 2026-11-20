@@ -51,6 +51,8 @@ impl Shell {
             let _ = w.show();
         }
         set_desktop_visible(true);
+        // La fenêtre native peut n'exister qu'au tour suivant de la boucle : on la remet devant une fois créée.
+        slint::Timer::single_shot(std::time::Duration::from_millis(300), || set_desktop_visible(true));
         self.desktop_refresh_all();
     }
 

@@ -22,6 +22,7 @@ mod native;
 mod oobe;
 mod profiles;
 mod scmd;
+mod selfupdate;
 mod playtime;
 mod prefs;
 mod settings;
@@ -133,6 +134,8 @@ struct Shell {
     dl_acts: RefCell<Vec<scmd::RowAct>>,
     scmd_proc: RefCell<Option<stores::steamcmd::Pending>>,
     updates: RefCell<Vec<String>>,
+    hearth_update: RefCell<Option<(String, String)>>,
+    hearth_prompted: Cell<bool>,
     prompted: RefCell<std::collections::HashSet<String>>,
     pick_ids: RefCell<Vec<String>>,
     identify_target: RefCell<Option<String>>,
@@ -191,7 +194,18 @@ fn main() -> Result<(), slint::PlatformError> {
     // Legendary (jeux Epic) lit sa configuration ici, y compris quand il est lancé par le gestionnaire de fenêtres.
     std::env::set_var("LEGENDARY_CONFIG_PATH", stores::epiccmd::config());
     // ponytail: femtovg cesse de se redessiner avec ce design (constaté sur l'Optiplex) ; rendu logiciel.
-    std::env::set_var("SLINT_BACKEND", std::env::var("HEARTH_BACKEND").unwrap_or_else(|_| "winit-skia".into()));
+    // Glisser-déposer désactivé : winit initialise sinon OLE à la création de chaque fenêtre, ce qui échoue (RPC_E_CHANGED_MODE)
+    // pour les fenêtres créées après coup (version bureau) une fois du COM multithread initialisé sur ce thread.
+    let backend = std::env::var("HEARTH_BACKEND").unwrap_or_else(|_| "winit-skia".into());
+    let renderer = backend.strip_prefix("winit-").unwrap_or("skia").to_string();
+    slint::BackendSelector::new()
+        .backend_name("winit".into())
+        .renderer_name(renderer)
+        .with_winit_window_attributes_hook(|attrs| {
+            use slint::winit_030::winit::platform::windows::WindowAttributesExtWindows;
+            attrs.with_drag_and_drop(false)
+        })
+        .select()?;
     let overrides = prefs::load();
     let games = load_games(stores::installed(), &overrides);
     mark("games");
@@ -250,6 +264,8 @@ fn main() -> Result<(), slint::PlatformError> {
         dl_acts: RefCell::new(vec![]),
         scmd_proc: RefCell::new(None),
         updates: RefCell::new(vec![]),
+        hearth_update: RefCell::new(None),
+        hearth_prompted: Cell::new(false),
         prompted: RefCell::new(Default::default()),
         pick_ids: RefCell::new(vec![]),
         identify_target: RefCell::new(None),
@@ -454,7 +470,6 @@ fn main() -> Result<(), slint::PlatformError> {
     shell.guide.show()?;
     shell.splash.show()?;
     shell.pad.show()?;
-    shell.desktop_create(true);
     }
     let s = shell.clone();
     shell.pad.on_press(move |x, y| s.pad_press(x, y));
@@ -534,6 +549,7 @@ fn main() -> Result<(), slint::PlatformError> {
     });
     }
     Shell::schedule_updates();
+    Shell::schedule_hearth_updates();
     let s = shell.clone();
     let upd = slint::Timer::default();
     upd.start(slint::TimerMode::Repeated, Duration::from_secs(6 * 3600), move || s.check_updates(false));
@@ -862,6 +878,7 @@ impl Shell {
             settings::Outcome::Oobe => self.oobe_restart(),
             settings::Outcome::Desktop => self.desktop_open(),
             settings::Outcome::Import => self.import_games(),
+            settings::Outcome::HearthUpdate => self.check_hearth_update(true),
             settings::Outcome::ThemeChanged => {
                 self.apply_theme();
                 self.open_cat_keep(13);
@@ -1112,6 +1129,11 @@ impl Shell {
     }
 
     fn home(&self) {
+        // Retour au menu : la manette doit naviguer (un mode souris resté actif la rendait muette).
+        if input::mouse_active() {
+            input::set_mouse_active(false);
+            self.pad_sync();
+        }
         if let Some(h) = wm::find_window(MAIN_TITLE) {
             // Un jeu qui a changé la résolution a pu rétrécir notre fenêtre : on la recale.
             wm::fit_to_monitor(h);
@@ -1257,6 +1279,7 @@ impl Shell {
         }
         self.set_clock();
         self.maybe_prompt_update();
+        self.maybe_prompt_hearth_update();
         // Musique d'ambiance : seulement quand la console est devant (pas pendant un jeu).
         let want = i18n::music() && self.running.borrow().is_empty() && wm::find_window(MAIN_TITLE).is_some_and(|h| h == wm::foreground());
         if want != self.music_on.get() && system::sfx::music(want) {
@@ -1269,6 +1292,13 @@ impl Shell {
             self.open_cat_keep(self.ui.get_cat());
         }
         self.track_ext_game();
+        // En jeu, L3 + R3 appartient au jeu : pas de mode souris (sinon la manette ne navigue plus au retour au menu).
+        let in_game = !self.running.borrow().is_empty() || self.ext_game.borrow().is_some() || self.ext_pending.get().is_some();
+        input::set_chord(!in_game);
+        if in_game && input::mouse_active() && wm::find_window(MAIN_TITLE).is_none_or(|h| h != wm::foreground()) {
+            input::set_mouse_active(false);
+            self.pad_sync();
+        }
         let ended: Vec<(usize, u64)> = {
             let mut running = self.running.borrow_mut();
             let ended: Vec<(usize, u64)> = running.iter().filter(|r| !r.session.alive()).map(|r| (r.tile, r.started.elapsed().as_secs())).collect();

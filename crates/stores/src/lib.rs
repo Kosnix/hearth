@@ -230,3 +230,8 @@ pub fn norm_title(title: &str) -> String {
     norm(title)
 }
 
+
+/// JSON d'une API publique GitHub (en-têtes requis par l'API).
+pub fn fetch_json(url: &str) -> Option<serde_json::Value> {
+    http::get_json(url, &[("User-Agent", "Hearth"), ("Accept", "application/vnd.github+json")])
+}

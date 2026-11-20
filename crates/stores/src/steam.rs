@@ -248,7 +248,10 @@ pub fn disable_overlay() -> bool {
     }
     for f in files {
         let Ok(text) = std::fs::read_to_string(&f) else { continue };
-        if let Some(new) = patch_overlay(&text) {
+        // Superposition coupée ; synchronisation cloud coupée (ses fenêtres de conflit bloquent le lancement des jeux).
+        let step1 = patch_overlay(&text);
+        let step2 = patch_cloud(step1.as_deref().unwrap_or(&text));
+        if let Some(new) = step2.or(step1) {
             let _ = std::fs::copy(&f, f.with_extension("vdf.hearth-bak"));
             let _ = std::fs::write(&f, new);
         }
@@ -282,7 +285,7 @@ fn patch_overlay(text: &str) -> Option<String> {
 /// Désactive Steam Input pour les manettes Xbox et PlayStation : sinon Steam accapare le bouton guide
 /// (grande fenêtre Steam) en même temps que Hearth, et traduit la manette à la place des jeux.
 fn patch_input(text: &str) -> Option<String> {
-    const KEYS: [&str; 2] = ["SteamController_PSSupport", "SteamController_XBoxSupport"];
+    const KEYS: [&str; 4] = ["SteamController_PSSupport", "SteamController_XBoxSupport", "SteamController_GenericGBSupport", "SteamController_SwitchSupport"];
     let mut out: Vec<String> = text.lines().map(String::from).collect();
     let mut changed = false;
     for l in out.iter_mut() {
@@ -303,4 +306,20 @@ fn patch_input(text: &str) -> Option<String> {
         changed = true;
     }
     changed.then(|| out.join("\n") + "\n")
+}
+
+/// Désactive la synchronisation Steam Cloud (`"cloudenabled" "0"` dans le bloc `"Steam"` de localconfig.vdf).
+fn patch_cloud(text: &str) -> Option<String> {
+    let mut out: Vec<String> = text.lines().map(String::from).collect();
+    if let Some(l) = out.iter_mut().find(|l| l.to_lowercase().contains("\"cloudenabled\"")) {
+        if l.trim_end().ends_with("\"0\"") {
+            return None;
+        }
+        *l = "\t\t\t\t\"cloudenabled\"\t\t\"0\"".to_string();
+        return Some(out.join("\n") + "\n");
+    }
+    let i = out.iter().position(|l| l.trim() == "\"Steam\"")?;
+    let brace = i + out[i..].iter().position(|l| l.trim() == "{")?;
+    out.insert(brace + 1, "\t\t\t\t\"cloudenabled\"\t\t\"0\"".to_string());
+    Some(out.join("\n") + "\n")
 }

@@ -21,6 +21,14 @@ fn message(text: &str, flags: windows::Win32::UI::WindowsAndMessaging::MESSAGEBO
 }
 
 fn main() {
+    // `/S` : mise à jour silencieuse (déjà confirmée dans Hearth) : ni question ni message, et la console est relancée.
+    if std::env::args().skip(1).any(|a| a.eq_ignore_ascii_case("/S") || a.eq_ignore_ascii_case("--silent")) {
+        if run().is_ok() {
+            let app = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("Hearth").join("app").join("hearth.exe");
+            let _ = Command::new(app).spawn();
+        }
+        return;
+    }
     let fr = french();
     let ask = if fr {
         "Installer Hearth ?\n\nHearth remplace l'explorateur Windows par une interface de console de jeu pour ce compte utilisateur (effet à la prochaine ouverture de session).\n\nPour revenir en arrière : « Hearth (bureau) » ou la commande « hearth.exe uninstall »."

@@ -15,6 +15,12 @@ use crate::Nav;
 
 static MOUSE: AtomicBool = AtomicBool::new(false);
 static OSK: AtomicBool = AtomicBool::new(false);
+static CHORD: AtomicBool = AtomicBool::new(true);
+
+/// L3 + R3 n'active le mode souris que si aucun jeu ne tourne (les jeux utilisent ces deux clics : sprint, mêlée…).
+pub fn set_chord(on: bool) {
+    CHORD.store(on, Ordering::Relaxed);
+}
 
 pub fn active() -> bool {
     MOUSE.load(Ordering::Relaxed)
@@ -93,7 +99,7 @@ pub fn spawn(on_event: Arc<dyn Fn(Nav) + Send + Sync>) {
             };
             let on = |i: usize| r.b.get(i) == Some(&true);
             let both = on(10) && on(11);
-            if both && !chord {
+            if both && !chord && (CHORD.load(Ordering::Relaxed) || active()) {
                 let now = !active();
                 set_active(now);
                 if !now {

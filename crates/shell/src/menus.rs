@@ -22,6 +22,7 @@ pub enum Act {
     UpdateYes(usize),
     DeleteProfile(usize),
     CancelDl(usize),
+    SelfUpdate,
     ConnectStore(usize),
     Cancel,
 }
@@ -135,6 +136,10 @@ impl Shell {
             Act::ConnectStore(i) => {
                 self.ui.set_zone(back);
                 self.connect_store(i);
+            }
+            Act::SelfUpdate => {
+                self.ui.set_zone(back);
+                self.hearth_update_install();
             }
             Act::UpdateYes(g) => {
                 self.ui.set_zone(back);
