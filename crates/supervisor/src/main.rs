@@ -49,6 +49,15 @@ fn supervise() {
             cmd.env("HEARTH_BACKEND", "winit-software");
         }
         let code = cmd.status().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+        // Le shell masque le curseur hors de Hearth : on le rétablit à chaque sortie (plantage, retour au bureau).
+        unsafe {
+            let _ = windows::Win32::UI::WindowsAndMessaging::SystemParametersInfoW(
+                windows::Win32::UI::WindowsAndMessaging::SPI_SETCURSORS,
+                0,
+                None,
+                windows::Win32::UI::WindowsAndMessaging::SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+            );
+        }
         if code == 11 {
             log("changement de profil");
             continue;

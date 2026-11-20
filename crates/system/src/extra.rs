@@ -63,6 +63,29 @@ pub mod bluetooth {
         v
     }
 
+    fn is_controller(name: &str) -> bool {
+        let n = name.to_lowercase();
+        ["wireless controller", "dualsense", "dualshock", "xbox", "gamepad", "controller"].iter().any(|k| n.contains(k))
+    }
+
+    /// Manettes (DualSense, DualShock, Xbox…) à proximité et non appairées : Bluetooth classique et basse consommation (Xbox).
+    pub fn nearby_controllers() -> Vec<Dev> {
+        use windows::Devices::Bluetooth::BluetoothLEDevice;
+        let mut out: Vec<Dev> = devices(false).into_iter().filter(|d| is_controller(&d.name)).collect();
+        if let Ok(sel) = BluetoothLEDevice::GetDeviceSelectorFromPairingState(false) {
+            if let Some(list) = DeviceInformation::FindAllAsyncAqsFilter(&sel).ok().and_then(|a| a.join().ok()) {
+                for d in list {
+                    let (Ok(name), Ok(id)) = (d.Name(), d.Id()) else { continue };
+                    let (name, id) = (name.to_string(), id.to_string());
+                    if is_controller(&name) && !out.iter().any(|o| o.id == id) {
+                        out.push(Dev { id, name, paired: false, connected: false });
+                    }
+                }
+            }
+        }
+        out
+    }
+
     pub fn pair(id: &str) -> Result<(), String> {
         let info = DeviceInformation::CreateFromIdAsync(&id.into()).and_then(|a| a.join()).map_err(|e| e.to_string())?;
         let r = info.Pairing().and_then(|p| p.PairAsync()).and_then(|a| a.join()).map_err(|e| e.to_string())?;

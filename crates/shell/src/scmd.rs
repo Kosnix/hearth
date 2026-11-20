@@ -451,7 +451,10 @@ impl Shell {
                 let _ = std::fs::write(f, id);
             }
         }
-        let overlay_done = i18n::pref("steam_overlay_off").is_some() && i18n::pref("steam_input_off").is_some();
+        // `PREPARED` : Steam a déjà été préparé pendant cette session, même si la configuration n'a pas pu être modifiée
+        // (autre PC sans `localconfig.vdf`) : sans cela le jeu se relançait en boucle, avec Steam relancé au premier plan.
+        static PREPARED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let overlay_done = (i18n::pref("steam_overlay_off").is_some() && i18n::pref("steam_input_off").is_some()) || PREPARED.load(Ordering::Relaxed);
         if stores::steam_client_user() != 0 && overlay_done {
             self.steam_keep(30);
             return true;
@@ -474,6 +477,9 @@ impl Shell {
             let _ = slint::invoke_from_event_loop(move || {
                 with_shell(|s| {
                     s.steam_wait.set(false);
+                    if ok {
+                        PREPARED.store(true, Ordering::Relaxed);
+                    }
                     if patched {
                         i18n::set_pref("steam_overlay_off", "1");
                         i18n::set_pref("steam_input_off", "1");

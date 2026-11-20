@@ -376,12 +376,16 @@ fn main() -> Result<(), slint::PlatformError> {
         2 => drop(Command::new("shutdown").args(["/s", "/t", "0"]).spawn()),
         _ => {}
     });
-    shell.ui.on_desktop(|| std::process::exit(EXIT_DESKTOP));
+    shell.ui.on_desktop(|| {
+        wm::cursor::restore();
+        std::process::exit(EXIT_DESKTOP)
+    });
     // Alt+F4 / fermeture de la console : bureau Windows plutôt qu'un écran noir pendant la relance.
     shell.ui.window().on_close_requested(|| {
         if wm::ctrl_down() {
             return slint::CloseRequestResponse::KeepWindowShown;
         }
+        wm::cursor::restore();
         std::process::exit(EXIT_DESKTOP)
     });
     let s = shell.clone();
@@ -436,6 +440,13 @@ fn main() -> Result<(), slint::PlatformError> {
     let phase = Cell::new(0.0f32);
     let anim = slint::Timer::default();
     anim.start(slint::TimerMode::Repeated, Duration::from_millis(100), move || timed("animate", || s.animate(&phase)));
+
+    // Souris masquée en dehors de Hearth (jeux, autres fenêtres) ; visible dès qu'elle bouge.
+    let cursor_timer = slint::Timer::default();
+    if !desktop_only {
+        let policy = wm::cursor::Policy::new();
+        cursor_timer.start(slint::TimerMode::Repeated, Duration::from_millis(200), move || policy.update(wm::foreground_is_mine()));
+    }
 
     // Le menu guide est créé une fois puis affiché/masqué en Win32, sans jamais prendre le focus
     // (un jeu plein écran qui perd le focus se réduit et clignote).

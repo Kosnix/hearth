@@ -2,6 +2,7 @@
 //! Aucune injection : uniquement des API Win32 publiques appliquées aux fenêtres d'autres processus.
 
 pub mod compat;
+pub mod cursor;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -223,6 +224,13 @@ fn display_mode_changed() -> bool {
 
 pub fn foreground() -> HWND {
     unsafe { GetForegroundWindow() }
+}
+
+/// La fenêtre au premier plan appartient-elle à ce processus ?
+pub fn foreground_is_mine() -> bool {
+    let mut pid = 0;
+    unsafe { GetWindowThreadProcessId(foreground(), Some(&mut pid)) };
+    pid == std::process::id()
 }
 
 /// Fenêtre de notre propre processus portant ce titre.

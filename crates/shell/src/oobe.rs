@@ -105,6 +105,53 @@ impl Shell {
         self.oobe_enter(saved.clamp(0, STEPS.len() as i32 - 1));
     }
 
+    /// Étape manette : toute manette (DualSense, Xbox…) détectée à proximité en mode appairage est connectée automatiquement.
+    fn oobe_autopair(&self, on: bool) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static SCAN: AtomicBool = AtomicBool::new(false);
+        if !on {
+            SCAN.store(false, Ordering::Relaxed);
+            return;
+        }
+        if SCAN.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        std::thread::spawn(|| {
+            if system::radio_ext::bluetooth_on() == Some(false) {
+                system::radio_ext::set_bluetooth(true);
+            }
+            while SCAN.load(Ordering::Relaxed) {
+                for d in system::bluetooth::nearby_controllers() {
+                    if !SCAN.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let _ = slint::invoke_from_event_loop({
+                        let n = d.name.clone();
+                        move || with_shell(|s| s.push_notif("Bluetooth", &format!("{} {n}…", tr("Appairage de"))))
+                    });
+                    let r = system::bluetooth::pair(&d.id);
+                    let name = d.name;
+                    let _ = slint::invoke_from_event_loop(move || {
+                        with_shell(|s| {
+                            match r {
+                                Ok(()) => s.push_notif("Bluetooth", &format!("{name} : {}", tr("appairé"))),
+                                Err(e) => s.push_notif("Bluetooth", &format!("{name} : {} ({e})", tr("échec de l'appairage"))),
+                            }
+                            s.refresh_status();
+                            s.oobe_sync();
+                        })
+                    });
+                }
+                for _ in 0..8 {
+                    if !SCAN.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+            }
+        });
+    }
+
     fn oobe_enter(&self, step: i32) {
         self.oobe_step.set(step);
         let _ = std::fs::write(step_file(), step.to_string());
@@ -114,6 +161,7 @@ impl Shell {
         self.ui.set_oobe_desc(tr(s.desc).into());
         self.ui.set_oobe_sel(0);
         self.ui.set_oobe_pad(matches!(s.kind, Kind::Cat(4)));
+        self.oobe_autopair(matches!(s.kind, Kind::Cat(4)));
         self.ui.set_zone(13);
         match s.kind {
             Kind::Cat(c) => {
@@ -339,6 +387,7 @@ impl Shell {
         let _ = std::fs::write(done_file(), "1");
         let _ = std::fs::remove_file(step_file());
         self.oobe_step.set(-1);
+        self.oobe_autopair(false);
         self.ui.set_oobe_on(false);
         self.ui.set_oobe_step(-1);
         self.ui.set_cat(0);
