@@ -58,6 +58,13 @@ pub fn list_dir(dir: &Path) -> Vec<Entry> {
 }
 
 /// Titre probable d'un jeu : nom de l'exécutable, ou du dossier s'il est trop générique.
+/// Recherche pour « Identifier le jeu » : SteamGridDB (clé enregistrée), sinon les catalogues des boutiques.
+pub fn identify(title: &str) -> Vec<stores::Offer> {
+    let key = crate::i18n::pref("steamgriddb_key").or_else(|| std::env::var("HEARTH_SGDB_KEY").ok()).filter(|k| !k.trim().is_empty());
+    let found = key.map(|k| stores::search_sgdb(title, k.trim())).unwrap_or_default();
+    if found.is_empty() { stores::search(title) } else { found }
+}
+
 pub fn guess_title(exe: &Path) -> String {
     let stem = exe.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let generic = ["launcher", "game", "start", "run", "play", "main", "app", "bin", "client", "shipping", "win64", "x64"];

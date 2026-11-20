@@ -29,6 +29,11 @@ fn root() -> Option<PathBuf> {
         .filter(|p| p.join("steam.exe").exists() || p.join("Steam.exe").exists())
 }
 
+/// Dossier d'installation du client Steam.
+pub fn root_dir() -> Option<PathBuf> {
+    root()
+}
+
 fn libraries(root: &PathBuf) -> Vec<PathBuf> {
     let mut v = vec![root.clone()];
     if let Ok(t) = std::fs::read_to_string(root.join("steamapps").join("libraryfolders.vdf")) {

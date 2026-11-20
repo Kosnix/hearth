@@ -850,6 +850,7 @@ impl Shell {
             settings::Outcome::LangChanged => self.refresh_lang(),
             settings::Outcome::Oobe => self.oobe_restart(),
             settings::Outcome::Desktop => self.desktop_open(),
+            settings::Outcome::Import => self.import_games(),
             settings::Outcome::ThemeChanged => {
                 self.apply_theme();
                 self.open_cat_keep(13);

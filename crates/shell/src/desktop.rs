@@ -17,10 +17,30 @@ pub fn request_file() -> std::path::PathBuf {
 
 /// Une console Hearth (autre processus) est-elle déjà ouverte ? (`wm::find_window` ne regarde que notre processus.)
 pub fn console_running(title: &str) -> bool {
+    native_window(title).is_some()
+}
+
+/// Fenêtre native de ce titre, visible ou non, de n'importe quel processus.
+fn native_window(title: &str) -> Option<windows::Win32::Foundation::HWND> {
     use windows::core::HSTRING;
     use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
-    unsafe { FindWindowW(None, &HSTRING::from(title)) }.is_ok_and(|h| !h.is_invalid())
+    unsafe { FindWindowW(None, &HSTRING::from(title)) }.ok().filter(|h| !h.is_invalid())
 }
+
+/// Masque ou affiche la fenêtre bureau sans la détruire (`hide()` de Slint la détruirait : OLE échouerait à la recréation).
+fn set_desktop_visible(on: bool) {
+    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_RESTORE};
+    if let Some(h) = native_window(DESK_TITLE) {
+        unsafe {
+            let _ = ShowWindow(h, if on { SW_RESTORE } else { SW_HIDE });
+        }
+        if on {
+            wm::focus(h);
+        }
+    }
+}
+
+const DESK_TITLE: &str = "Hearth Bureau";
 
 impl Shell {
     pub fn desktop_open(&self) {
@@ -29,11 +49,8 @@ impl Shell {
         }
         if let Some(w) = self.desktop.borrow().as_ref() {
             let _ = w.show();
-            w.window().set_minimized(false);
-            if let Some(h) = wm::find_window("Hearth Bureau") {
-                wm::focus(h);
-            }
         }
+        set_desktop_visible(true);
         self.desktop_refresh_all();
     }
 
@@ -86,17 +103,10 @@ impl Shell {
             })
         });
         w.on_add_local(|| with_shell(|s| s.desktop_add_local()));
-        w.on_rescan(|| {
-            with_shell(|s| {
-                s.poll_installed();
-                s.desktop_message(&tr("Recherche en cours…"));
-            })
-        });
+        w.on_rescan(|| with_shell(|s| s.import_games()));
         w.on_open_console(|| {
-            with_shell(|s| {
-                if let Some(w) = s.desktop.borrow().as_ref() {
-                    w.window().set_minimized(true);
-                }
+            with_shell(|_| {
+                set_desktop_visible(false);
                 if let Some(h) = wm::find_window("Hearth") {
                     wm::focus(h);
                 }
@@ -144,12 +154,9 @@ impl Shell {
         }
         if hide {
             // Jamais `hide()` : la fenêtre native serait détruite puis recréée (même panique OLE). On la réduit.
-            w.window().set_minimized(true);
-            let weak = w.as_weak();
-            w.window().on_close_requested(move || {
-                if let Some(w) = weak.upgrade() {
-                    w.window().set_minimized(true);
-                }
+            set_desktop_visible(false);
+            w.window().on_close_requested(|| {
+                set_desktop_visible(false);
                 slint::CloseRequestResponse::KeepWindowShown
             });
         }
@@ -299,6 +306,38 @@ impl Shell {
         self.desktop_refresh_stores();
     }
 
+    /// Importe les jeux déjà présents : relit les boutiques (Steam, Epic, GOG) et ajoute les jeux « non-Steam » de Steam.
+    pub fn import_games(&self) {
+        self.poll_installed();
+        let mut added: Vec<(String, String)> = vec![];
+        for f in stores::steam_shortcuts() {
+            let id = format!("custom-{:08x}", crate::name_hash(&f.exe.to_string_lossy()));
+            if self.games.borrow().iter().any(|g| g.id == id) {
+                continue;
+            }
+            self.games.borrow_mut().push(Game { name: f.title.clone(), id: id.clone(), exe: f.exe.to_string_lossy().into_owned(), args: f.args, ..Default::default() });
+            added.push((id, f.title));
+        }
+        if !added.is_empty() {
+            self.save_games();
+            self.rebuild();
+        }
+        let n = added.len();
+        let msg = if n == 0 { tr("Aucun nouveau jeu") } else { format!("{n} {}", tr("jeux ajoutés")) };
+        self.push_notif(&tr("Import terminé"), &msg);
+        self.desktop_message(&msg);
+        // Visuels : identification par SteamGridDB, un jeu après l'autre.
+        std::thread::spawn(move || {
+            for (id, title) in added {
+                if let Some(o) = crate::addgame::identify(&title).into_iter().next() {
+                    if stores::save_art(&id, &o) {
+                        let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.reload_art(&id)));
+                    }
+                }
+            }
+        });
+    }
+
     /// « Ajouter un jeu local… » : choix de l'exécutable, titre deviné, visuels cherchés dans les boutiques.
     fn desktop_add_local(&self) {
         let Some(exe) = crate::native::open_file(&tr("Exécutable du jeu"), &format!("{} (*.exe)\0*.exe\0", tr("Applications"))) else { return };
@@ -306,7 +345,7 @@ impl Shell {
         let exe2 = exe.clone();
         let t2 = title.clone();
         std::thread::spawn(move || {
-            let offer = stores::search(&t2).into_iter().next();
+            let offer = crate::addgame::identify(&t2).into_iter().next();
             let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.add_local_game(exe2, offer)));
         });
         self.desktop_message(&format!("{} « {title} »…", tr("Recherche dans les boutiques :")));

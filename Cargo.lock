@@ -1640,6 +1640,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hearth-setup"
+version = "0.1.0"
+dependencies = [
+ "embed-resource",
+ "windows",
+]
+
+[[package]]
 name = "hearth-shell"
 version = "0.1.0"
 dependencies = [

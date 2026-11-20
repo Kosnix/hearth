@@ -142,7 +142,7 @@ impl Shell {
             vec![item(&tr("Recherche en cours…"), "", "\u{E721}")],
         );
         std::thread::spawn(move || {
-            let mut results = stores::search(&title);
+            let mut results = addgame::identify(&title);
             results.truncate(8);
             let paths = fetch_all(&results);
             let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.identify_ready(gen, title, results, paths)));

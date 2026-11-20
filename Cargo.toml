@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["crates/input", "crates/shell", "crates/stores", "crates/supervisor", "crates/system", "crates/wm"]
+members = ["crates/input", "crates/setup", "crates/shell", "crates/stores", "crates/supervisor", "crates/system", "crates/wm"]
+# Le programme d'installation embarque les binaires déjà compilés : il se construit à part (tools/make-installer.ps1).
+default-members = ["crates/input", "crates/shell", "crates/stores", "crates/supervisor", "crates/system", "crates/wm"]
 
 [workspace.dependencies]
 windows = "0.62"

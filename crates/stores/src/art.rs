@@ -78,6 +78,26 @@ impl Sgdb {
     }
 }
 
+/// Recherche de jeux par titre sur SteamGridDB (« Identifier le jeu ») : nom exact, jaquette et héros. Vide sans clé ou sans réseau.
+pub fn search_sgdb(query: &str, key: &str) -> Vec<crate::Offer> {
+    let auth = format!("Bearer {key}");
+    let h = [("Authorization", auth.as_str())];
+    let Some(s) = http::get_json(&format!("https://www.steamgriddb.com/api/v2/search/autocomplete/{}", encode(query)), &h) else { return vec![] };
+    let mut out = vec![];
+    for g in s["data"].as_array().into_iter().flatten().take(8) {
+        let (Some(id), Some(name)) = (g["id"].as_i64(), g["name"].as_str()) else { continue };
+        let sg = Sgdb { id, auth: auth.clone() };
+        out.push(crate::Offer {
+            title: name.to_string(),
+            store: "SteamGridDB".into(),
+            images: sg.url("cover").into_iter().collect(),
+            heroes: sg.url("hero").into_iter().collect(),
+            ..Default::default()
+        });
+    }
+    out
+}
+
 /// Jaquette de SteamGridDB pour un titre (jeux sans aucun visuel).
 fn steamgriddb(id: &str, title: &str, key: &str) -> Option<String> {
     sgdb_find(id, title, key).ok()??.url("cover")

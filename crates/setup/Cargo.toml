@@ -1,0 +1,11 @@
+[package]
+name = "hearth-setup"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies.windows]
+workspace = true
+features = ["Win32_Foundation", "Win32_Globalization", "Win32_UI_WindowsAndMessaging"]
+
+[build-dependencies]
+embed-resource = "3"

@@ -2,6 +2,8 @@
 //! Visuels mis en cache dans `%LOCALAPPDATA%\Hearth\assets\<id>\{cover,hero,logo}.<ext>`.
 
 mod art;
+mod import;
+pub use import::{steam_shortcuts, Found};
 mod epic;
 pub mod epiccmd;
 mod gog;
@@ -13,7 +15,7 @@ pub mod steamcmd;
 pub mod account;
 pub mod qr;
 
-pub use art::{asset, asset_dir, clear_art, ensure_art, ensure_art_for, fetch_first, purge_offers, save_art};
+pub use art::{asset, asset_dir, clear_art, ensure_art, ensure_art_for, fetch_first, purge_offers, save_art, search_sgdb};
 
 /// Façon de lancer un jeu.
 #[derive(Clone, Debug)]

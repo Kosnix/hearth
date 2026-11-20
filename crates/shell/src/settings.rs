@@ -82,6 +82,7 @@ pub enum Outcome {
     ThemeChanged,
     Oobe,
     Desktop,
+    Import,
     CheckUpdates(bool),
     BtScan,
     BtPair(String, String),
@@ -338,6 +339,7 @@ impl Settings {
                 v.push(row("Hearth", env!("CARGO_PKG_VERSION").into(), false));
                 v.push(row("Assistant de démarrage", tr("Revoir"), false));
                 v.push(row("Ouvrir la version bureau", String::new(), false));
+                v.push(row("Importer mes jeux", String::new(), false));
                 v
             }
             _ => vec![],
@@ -378,6 +380,7 @@ impl Settings {
             }
             (11, r, 0) if r as usize == s.data.about.len() + 1 => out = Outcome::Oobe,
             (11, r, 0) if r as usize == s.data.about.len() + 2 => out = Outcome::Desktop,
+            (11, r, 0) if r as usize == s.data.about.len() + 3 => out = Outcome::Import,
             (13, 3, 0) => {
                 theme::reset();
                 out = Outcome::ThemeChanged;
