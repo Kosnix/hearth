@@ -767,7 +767,7 @@ export component App inherits Window {
         width: 2560px;
         height: 712px;
         opacity: 0.55;
-        source: games[sel].hero.width >= 1400 ? games[sel].hero : @image-url("");
+        source: games[sel].hero.width >= 2560 ? games[sel].hero : @image-url("");
     }
     // Voile sombre à gauche : le logo et le bouton Jouer restent lisibles sur n'importe quel visuel.
     if tab == 0 && games.length > 0: Rectangle {

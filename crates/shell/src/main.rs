@@ -174,6 +174,9 @@ struct Shell {
     splash_timer: slint::Timer,
     splash_start: Cell<Option<std::time::Instant>>,
     splash_uri: Cell<bool>,
+    splash_tile: Cell<Option<usize>>,
+    /// Démarrage : les jaquettes de l'écran d'accueil sont décodées tout de suite (bloquant) pour éviter qu'elles apparaissent une par une.
+    boot: Cell<bool>,
 }
 
 fn main() -> Result<(), slint::PlatformError> {
@@ -305,6 +308,8 @@ fn main() -> Result<(), slint::PlatformError> {
         splash_timer: slint::Timer::default(),
         splash_start: Cell::new(None),
         splash_uri: Cell::new(false),
+        splash_tile: Cell::new(None),
+        boot: Cell::new(true),
     });
     shell.ui.set_games(shell.tiles.clone().into());
     shell.ui.set_library(shell.library.clone().into());
@@ -324,6 +329,7 @@ fn main() -> Result<(), slint::PlatformError> {
         *shell.games.borrow_mut() = g;
     }
     shell.rebuild();
+    shell.boot.set(false);
     shell.guide.set_notes(shell.notes.clone().into());
     *shell.store_status.borrow_mut() = stores::all().iter().map(|s| (s.name().to_string(), s.detected(), shell.games.borrow().iter().filter(|g| g.store == s.name()).count())).collect();
     mark("shell_built");
@@ -471,19 +477,27 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     // Le menu guide est créé une fois puis affiché/masqué en Win32, sans jamais prendre le focus
-    // (un jeu plein écran qui perd le focus se réduit et clignote).
+    // (un jeu plein écran qui perd le focus se réduit et clignote). Une fenêtre fraîchement créée par
+    // winit n'est trouvable par titre (FindWindow) qu'une fois la boucle d'événements démarrée (testé :
+    // avant `ui.run()`, l'attendre bloque plusieurs secondes pour rien) ; on tente quand même une fois,
+    // gratuitement, au cas où, puis le minuteur ci-dessous rattrape dès que la boucle tourne.
     if !desktop_only {
     shell.guide.show()?;
+    if let Some(h) = wm::find_window(GUIDE_TITLE) { wm::make_overlay(h); wm::hide(h); }
     shell.splash.show()?;
+    if let Some(h) = wm::find_window(SPLASH_TITLE) { wm::make_overlay(h); wm::hide(h); }
     shell.pad.show()?;
+    if let Some(h) = wm::find_window(PAD_TITLE) { wm::make_overlay(h); wm::hide(h); }
     }
     let s = shell.clone();
     shell.pad.on_press(move |x, y| s.pad_press(x, y));
-    // Les fenêtres natives n'existent pas forcément dès le premier tour : on réessaie.
+    // Les fenêtres natives n'existent pas forcément dès le premier tour : on réessaie, au rythme le plus
+    // serré possible (sinon ces fenêtres plein écran restent visibles/activables un instant et volent le
+    // focus l'une après l'autre : l'ouverture de Hearth « saute » d'un écran à l'autre).
     let setup = Rc::new(slint::Timer::default());
     let t = setup.clone();
     if !desktop_only {
-    setup.start(slint::TimerMode::Repeated, Duration::from_millis(50), move || {
+    setup.start(slint::TimerMode::Repeated, Duration::from_millis(4), move || {
         if let (Some(h), Some(sp), Some(pd)) = (wm::find_window(GUIDE_TITLE), wm::find_window(SPLASH_TITLE), wm::find_window(PAD_TITLE)) {
             wm::make_overlay(pd);
             wm::hide(pd);
@@ -1799,8 +1813,9 @@ impl Shell {
         let Some(t) = self.tile_for(i) else { return };
         self.splash.set_launch_name(t.name);
         self.splash.set_launch_cover(t.cover);
-        // Un petit héros agrandi serait flou : on ne le garde que s'il est assez large.
-        self.splash.set_launch_art(if t.hero.size().width >= 1400 { t.hero } else { Default::default() });
+        // Un héros plus petit que l'écran serait agrandi (flou, pixélisé) : on le garde seulement à partir de sa résolution native.
+        let screen_w = wm::primary_monitor().2 as u32;
+        self.splash.set_launch_art(if t.hero.size().width >= screen_w { t.hero } else { Default::default() });
         self.splash.set_launch_hue(t.hue);
         self.splash.set_launch_initial(t.initial);
         self.splash.set_launch_t(0.0);
@@ -1812,6 +1827,7 @@ impl Shell {
         }
         self.splash_start.set(Some(std::time::Instant::now()));
         self.splash_uri.set(uri);
+        self.splash_tile.set(Some(i));
         self.splash_timer.start(slint::TimerMode::Repeated, Duration::from_millis(40), || with_shell(|s| s.splash_tick()));
     }
 
@@ -1831,10 +1847,16 @@ impl Shell {
         let el = t0.elapsed().as_secs_f32();
         self.splash.set_launch_t((el / 0.9).min(1.0));
         self.splash.set_launch_spin((el * 540.0) % 360.0);
+        let tile = self.splash_tile.get();
+        // « Montré » : le jeu a sa propre fenêtre au premier plan (lancement direct), ou sa fenêtre externe a été repérée
+        // (lancement par Steam/Epic : voir track_ext_game). Tant que ce n'est pas le cas, le chargement peut continuer
+        // sans limite fixe (certains jeux mettent largement plus de 15 s) — un plafond très large sert juste de filet.
         let fg = wm::foreground();
-        let shown = self.running.borrow().iter().any(|r| r.session.owns(fg));
-        // Le jeu affiche tout de suite une fenêtre noire : on garde l'écran de lancement par-dessus quelques secondes.
-        let done = (shown && el > 5.0) || el > 15.0 || (self.splash_uri.get() && el > 8.0);
+        let shown_exe = self.running.borrow().iter().any(|r| Some(r.tile) == tile && r.session.owns(fg));
+        let shown_ext = self.ext_game.borrow().as_ref().is_some_and(|e| Some(e.tile) == tile);
+        // Lancement direct dont le processus s'est arrêté avant même d'apparaître (plantage, antitriche refusé…) : inutile d'attendre.
+        let gave_up_exe = !self.splash_uri.get() && tile.is_some_and(|t| !self.running.borrow().iter().any(|r| r.tile == t));
+        let done = ((shown_exe || shown_ext) && el > 5.0) || gave_up_exe || el > 90.0;
         if done || wm::find_window(SPLASH_TITLE).is_none_or(|h| !wm::is_visible(h)) {
             self.hide_splash();
         }
@@ -1858,6 +1880,13 @@ impl Shell {
         }
         self.art_request(g);
         Default::default()
+    }
+
+    /// Jaquette décodée tout de suite (bloquant) : au démarrage, évite que les tuiles de l'écran d'accueil
+    /// apparaissent une par une. Pas mise en cache : la vignette complète (avec héros/logo) arrive ensuite via `art_request`.
+    fn cover_sync(&self, g: &Game) -> slint::Image {
+        let path = if g.cover.is_empty() { stores::asset(&g.id, "cover") } else { Some(PathBuf::from(&g.cover)) };
+        path.and_then(|p| imgload::decode(&p, 600, 900)).map(|b| imgload::image(&b)).unwrap_or_default()
     }
 
     fn art_request(&self, g: &Game) {
@@ -1898,6 +1927,10 @@ impl Shell {
         // Bibliothèque (jeux à installer) : les jaquettes sont chargées à la demande (sync_library_art), jamais toutes d'un coup.
         let (cover, hero, logo) = if g.install {
             (self.lib_cover.borrow().get(&g.id).cloned().unwrap_or_default(), Default::default(), Default::default())
+        } else if self.boot.get() {
+            let cover = self.cover_sync(g);
+            self.art_request(g);
+            (cover, Default::default(), Default::default())
         } else {
             self.art_of(g)
         };

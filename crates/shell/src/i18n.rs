@@ -163,7 +163,7 @@ pub fn init_audio_prefs() {
 }
 
 static SFX_VOL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(80);
-static MUSIC_VOL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(40);
+static MUSIC_VOL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(10);
 
 pub fn sfx_vol() -> u32 {
     SFX_VOL.load(Ordering::Relaxed)

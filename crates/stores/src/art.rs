@@ -237,7 +237,9 @@ pub fn save_art(id: &str, offer: &crate::Offer) -> bool {
             continue;
         }
         for url in urls {
-            if let Some((data, ext)) = download(url, if kind == "hero" { (1920, 1080) } else { (720, 1080) }) {
+            // Héros gardé proche de sa résolution native (jusqu'à 4K) : rééchantillonné à la taille de l'écran puis agrandi,
+            // il devenait visiblement flou en plein écran sur l'écran de lancement.
+            if let Some((data, ext)) = download(url, if kind == "hero" { (3840, 2160) } else { (720, 1080) }) {
                 let dir = assets_dir().join(id);
                 if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(dir.join(format!("{kind}.{ext}")), data).is_ok() {
                     added = true;
