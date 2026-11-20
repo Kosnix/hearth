@@ -110,10 +110,14 @@ pub fn spawn(on_nav: impl Fn(Nav) + Send + Sync + 'static) {
                 }
             }
             let now = Instant::now();
+            // Un stick/croix qui reste bloqué dans une direction (lecture HID parasite, dérive) ne doit pas
+            // faire défiler le menu indéfiniment : passé 6 s de maintien continu, la répétition s'arrête
+            // jusqu'au relâchement (une vraie pression, elle, se relâche bien avant).
+            let stuck = now.duration_since(hold_start) > Duration::from_secs(6);
             if pressed & DIRS != 0 {
                 next_repeat = now + REPEAT_DELAY;
                 hold_start = now;
-            } else if cur & DIRS != 0 && now >= next_repeat {
+            } else if cur & DIRS != 0 && now >= next_repeat && !stuck {
                 for (bit, nav) in &MAP[..4] {
                     if cur & bit != 0 {
                         on_nav(*nav);
