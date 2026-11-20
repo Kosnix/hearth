@@ -9,3 +9,14 @@ $version = (Select-String -Path crates\shell\Cargo.toml -Pattern '^version\s*=\s
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw "gh introuvable : winget install GitHub.cli" }
 if (-not $Notes) { $Notes = "Hearth $version" }
 gh release create "v$version" dist\Hearth-Setup.exe --repo Kosnix/hearth --title "Hearth $version" --notes $Notes
+
+# Archive de chaque release sur le NAS (en plus de la copie « dernière version » faite par make-installer.ps1),
+# pour installer/réinstaller une version précise sans dépendre de GitHub.
+$share = '\\192.168.1.254\fusion_storage\Drive\Hearth\releases'
+if (Test-Path (Split-Path $share)) {
+    New-Item -ItemType Directory -Force $share | Out-Null
+    Copy-Item dist\Hearth-Setup.exe "$share\Hearth-Setup-v$version.exe" -Force
+    Write-Host "Archivé sur le NAS : $share\Hearth-Setup-v$version.exe"
+} else {
+    Write-Warning "Partage inaccessible : $share"
+}
