@@ -37,7 +37,7 @@ impl Shell {
             let found = stores::fetch_json(API).and_then(|j| {
                 let tag = j["tag_name"].as_str()?.to_string();
                 let url = j["assets"].as_array()?.iter().find(|a| a["name"] == ASSET)?["browser_download_url"].as_str()?.to_string();
-                (url.starts_with(ASSET_PREFIX) && newer(&tag, env!("CARGO_PKG_VERSION"))).then_some((tag.trim_start_matches('v').to_string(), url))
+                (url.starts_with(ASSET_PREFIX) && newer(&tag, env!("HEARTH_VERSION"))).then_some((tag.trim_start_matches('v').to_string(), url))
             });
             let _ = slint::invoke_from_event_loop(move || {
                 with_shell(|s| {

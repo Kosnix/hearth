@@ -1,10 +1,17 @@
-# Publie une version sur GitHub : génère Hearth-Setup.exe puis crée la release `v<version>` avec l'installateur en pièce jointe.
-# La version est celle de `crates/shell/Cargo.toml` (à augmenter avant) ; les consoles installées la détectent et proposent la mise à jour.
+# Publie une version sur GitHub : incrémente `VERSION` (4 chiffres, ex. 0.1.0.3 -> 0.1.0.4), génère Hearth-Setup.exe
+# puis crée la release `v<version>` avec l'installateur en pièce jointe. Les consoles installées comparent ce
+# numéro (`HEARTH_VERSION`, embarqué depuis `VERSION` par build.rs) et proposent la mise à jour.
 # Nécessite la CLI GitHub (`winget install GitHub.cli`, puis `gh auth login`).
 param([string]$Notes = '')
 $ErrorActionPreference = 'Stop'
 Set-Location "$PSScriptRoot\.."
-$version = (Select-String -Path crates\shell\Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+$parts = (Get-Content VERSION -Raw).Trim().Split('.')
+$parts[3] = [string]([int]$parts[3] + 1)
+$version = $parts -join '.'
+Set-Content VERSION $version -NoNewline
+Add-Content VERSION "`n"
+git add VERSION
+git commit -m "Version $version"
 & "$PSScriptRoot\make-installer.ps1"
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw "gh introuvable : winget install GitHub.cli" }
 if (-not $Notes) { $Notes = "Hearth $version" }

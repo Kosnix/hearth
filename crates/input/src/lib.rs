@@ -34,6 +34,9 @@ pub enum Nav {
     /// Hors manette de navigation : le mode souris a changé (L3 + R3) / le clavier visuel est demandé (Triangle en mode souris).
     Mouse,
     Osk,
+    /// L1/LB, R1/RB : changement rapide de section (Jeux/Bibliothèque/Boutique) sans passer par la barre du haut.
+    TabPrev,
+    TabNext,
 }
 
 // Masques au format XInput (wButtons).
@@ -45,9 +48,12 @@ const START: u16 = 0x0010;
 const GUIDE: u16 = 0x0400;
 const A: u16 = 0x1000;
 const B: u16 = 0x2000;
+// Mêmes valeurs que les bits LB/RB d'XInput (wButtons) : pas de conversion nécessaire pour la manette Xbox.
+const L1: u16 = 0x0100;
+const R1: u16 = 0x0200;
 const DIRS: u16 = UP | DOWN | LEFT | RIGHT;
 
-const MAP: [(u16, Nav); 8] = [
+const MAP: [(u16, Nav); 10] = [
     (UP, Nav::Up),
     (DOWN, Nav::Down),
     (LEFT, Nav::Left),
@@ -56,6 +62,8 @@ const MAP: [(u16, Nav); 8] = [
     (B, Nav::Back),
     (GUIDE, Nav::Guide),
     (START, Nav::Menu),
+    (L1, Nav::TabPrev),
+    (R1, Nav::TabNext),
 ];
 
 const POLL: Duration = Duration::from_millis(10);
@@ -193,6 +201,8 @@ fn read_wgi() -> u16 {
             (GamepadButtons::A, A),
             (GamepadButtons::B, B),
             (GamepadButtons::Menu, START),
+            (GamepadButtons::LeftShoulder, L1),
+            (GamepadButtons::RightShoulder, R1),
         ] {
             if b.0 & flag.0 != 0 {
                 bits |= bit;
@@ -219,7 +229,7 @@ fn read_sony() -> u16 {
             sony_invalidate();
             continue;
         }
-        for (i, bit) in [(1, A), (2, B), (9, START), (12, GUIDE)] {
+        for (i, bit) in [(1, A), (2, B), (9, START), (12, GUIDE), (4, L1), (5, R1)] {
             if b.get(i) == Some(&true) {
                 bits |= bit;
             }
@@ -268,7 +278,7 @@ impl XInput {
             self.connected[i] = unsafe { (self.get_state)(i as u32, &mut st) } == 0;
             if self.connected[i] {
                 let g = st.Gamepad;
-                bits |= g.wButtons.0 & (DIRS | START | GUIDE | A | B);
+                bits |= g.wButtons.0 & (DIRS | START | GUIDE | A | B | L1 | R1);
                 bits |= stick(g.sThumbLX as f64 / 32767.0, g.sThumbLY as f64 / 32767.0);
             }
         }

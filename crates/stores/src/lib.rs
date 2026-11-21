@@ -179,8 +179,21 @@ pub fn steam_art(appid: &str) -> Art {
     steam::art(appid)
 }
 
-fn collect(f: impl Fn(&dyn Store) -> Vec<Offer> + Sync) -> Vec<Offer> {
-    let stores = all();
+/// Un compte Steam/Epic relié, ou le client GOG détecté (GOG n'a pas de compte dans Hearth : sa bibliothèque est locale).
+pub fn connected(name: &str) -> bool {
+    if name == "GOG" {
+        all().iter().any(|s| s.name() == "GOG" && s.detected())
+    } else {
+        account::session(name).is_some()
+    }
+}
+
+/// Au moins une boutique est reliée (sinon la Boutique n'a rien à montrer : ce n'est pas une panne réseau).
+pub fn any_connected() -> bool {
+    all().iter().any(|s| connected(s.name()))
+}
+
+fn collect_from(stores: &[Box<dyn Store>], f: impl Fn(&dyn Store) -> Vec<Offer> + Sync) -> Vec<Offer> {
     let lists = std::thread::scope(|sc| {
         let hs: Vec<_> = stores.iter().map(|s| sc.spawn(|| f(s.as_ref()))).collect();
         hs.into_iter().map(|h| h.join().unwrap_or_default()).collect::<Vec<_>>()
@@ -188,13 +201,26 @@ fn collect(f: impl Fn(&dyn Store) -> Vec<Offer> + Sync) -> Vec<Offer> {
     merge(lists)
 }
 
-/// Catalogue unifié « à la une » de toutes les boutiques.
-pub fn catalog() -> Vec<Offer> {
-    collect(|s| s.featured())
+fn collect(f: impl Fn(&dyn Store) -> Vec<Offer> + Sync) -> Vec<Offer> {
+    collect_from(&all(), f)
 }
 
-/// Recherche unifiée dans toutes les boutiques.
+/// Catalogue unifié « à la une » : seulement les boutiques reliées (écran Boutique — sans ça, GOG, qui a un
+/// catalogue public sans compte, apparaissait même non connecté, alors qu'on ne peut rien y acheter/installer).
+pub fn catalog() -> Vec<Offer> {
+    let stores: Vec<Box<dyn Store>> = all().into_iter().filter(|s| connected(s.name())).collect();
+    collect_from(&stores, |s| s.featured())
+}
+
+/// Recherche dans les boutiques reliées (écran Boutique).
 pub fn search(query: &str) -> Vec<Offer> {
+    let stores: Vec<Box<dyn Store>> = all().into_iter().filter(|s| connected(s.name())).collect();
+    collect_from(&stores, |s| s.search(query))
+}
+
+/// Recherche dans toutes les boutiques, reliées ou non (identification d'un jeu local, visuels manquants :
+/// les catalogues publics n'ont pas besoin d'un compte, et on n'achète rien ici).
+pub fn search_any(query: &str) -> Vec<Offer> {
     collect(|s| s.search(query))
 }
 

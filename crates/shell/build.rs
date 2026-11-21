@@ -20,6 +20,11 @@ fn main() {
     println!("cargo:rerun-if-changed=ui/app.slint");
     // Icône de l'exécutable (logo Hearth).
     embed_resource::compile("hearth.rc", embed_resource::NONE).manifest_optional().unwrap();
+    // Version affichée/comparée par l'auto-mise à jour (4 chiffres, `../../VERSION` : le semver de Cargo n'en
+    // accepte que 3). `tools/release.ps1` l'incrémente avant chaque publication.
+    let version = fs::read_to_string("../../VERSION").unwrap_or_else(|_| "0.0.0.0".into());
+    println!("cargo:rustc-env=HEARTH_VERSION={}", version.trim());
+    println!("cargo:rerun-if-changed=../../VERSION");
 }
 
 /// Concatène `lang/strings-*.tsv` (ordre alphabétique).

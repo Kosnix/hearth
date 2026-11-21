@@ -64,6 +64,12 @@ pub fn ordered_pads(raw: Vec<system::pads::Pad>) -> Vec<system::pads::Pad> {
     } else {
         raw
     };
+    // Windows ne connaît pas toujours le nom d'une manette Sony (« Contrôleur de jeu HID » générique).
+    for p in rest.iter_mut().filter(|p| p.vendor == system::pads::SONY_VENDOR) {
+        if !p.name.to_lowercase().contains("dualsense") && !p.name.to_lowercase().contains("dualshock") {
+            p.name = tr("Manette PlayStation");
+        }
+    }
     let order = pad_order();
     let mut out: Vec<system::pads::Pad> = vec![];
     for id in &order {
@@ -376,7 +382,7 @@ impl Settings {
             11 if s.loading => vec![row("Lecture…", String::new(), false)],
             11 => {
                 let mut v: Vec<SettingRow> = s.data.about.iter().map(|(k, val)| row(k, val.clone(), false)).collect();
-                v.push(row("Hearth", env!("CARGO_PKG_VERSION").into(), false));
+                v.push(row("Hearth", env!("HEARTH_VERSION").into(), false));
                 v.push(row("Assistant de démarrage", tr("Revoir"), false));
                 v.push(row("Ouvrir la version bureau", String::new(), false));
                 v.push(row("Importer mes jeux", String::new(), false));

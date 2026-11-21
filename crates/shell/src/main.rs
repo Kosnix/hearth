@@ -115,6 +115,9 @@ struct Shell {
     ext_game: RefCell<Option<ExtGame>>,
     ext_pending: Cell<Option<(usize, std::time::Instant)>>,
     last_tab: Cell<i32>,
+    /// Dernier ordre reçu au clavier physique (`NavKeys`) : pour savoir si c'est le clavier ou la manette
+    /// qui a servi en dernier (affichage des indications à l'écran, voir `Pad.kind` == 2).
+    kb_last: Cell<Option<std::time::Instant>>,
     profile_rows: Rc<VecModel<ProfileRow>>,
     kb_profile: Cell<bool>,
     new_profile: RefCell<String>,
@@ -159,6 +162,8 @@ struct Shell {
     catalog_started: Cell<bool>,
     catalog_gen: Cell<u32>,
     kb_search: Cell<bool>,
+    kb_lib_search: Cell<bool>,
+    lib_query: RefCell<String>,
     kb_identify: Cell<bool>,
     kb_login: Cell<bool>,
     kb_sgdb: Cell<bool>,
@@ -250,6 +255,7 @@ fn main() -> Result<(), slint::PlatformError> {
         ext_game: RefCell::new(None),
         ext_pending: Cell::new(None),
         last_tab: Cell::new(0),
+        kb_last: Cell::new(None),
         profile_rows: Rc::new(VecModel::default()),
         kb_profile: Cell::new(false),
         new_profile: RefCell::new(String::new()),
@@ -293,6 +299,8 @@ fn main() -> Result<(), slint::PlatformError> {
         catalog_started: Cell::new(false),
         catalog_gen: Cell::new(0),
         kb_search: Cell::new(false),
+        kb_lib_search: Cell::new(false),
+        lib_query: RefCell::new(String::new()),
         kb_identify: Cell::new(false),
         kb_login: Cell::new(false),
         kb_sgdb: Cell::new(false),
@@ -381,7 +389,10 @@ fn main() -> Result<(), slint::PlatformError> {
     let s = shell.clone();
     shell.ui.on_onboard_pick(move |i| s.onboard_pick(i as usize));
     let s = shell.clone();
-    shell.ui.on_nav_key(move |a| s.nav_with_sound(a));
+    shell.ui.on_nav_key(move |a| {
+        s.kb_last.set(Some(std::time::Instant::now()));
+        s.nav_with_sound(a);
+    });
     let s = shell.clone();
     shell.ui.on_add_menu(move || s.add_menu());
     let s = shell.clone();
@@ -420,6 +431,8 @@ fn main() -> Result<(), slint::PlatformError> {
     });
     let s = shell.clone();
     shell.ui.on_search_open(move || s.search_open());
+    let s = shell.clone();
+    shell.ui.on_lib_search_open(move || s.lib_search_open());
     let s = shell.clone();
     shell.ui.on_show_offer(move |i| s.show_offer(i as usize));
     let s = shell.clone();
@@ -863,7 +876,7 @@ impl Shell {
     fn hearth_update_row(&self) -> SettingRow {
         let value = match self.hearth_update.borrow().as_ref() {
             Some((ver, _)) => format!("{} {ver}", tr("Mise à jour disponible :")),
-            None => format!("{} · {}", env!("CARGO_PKG_VERSION"), tr("à jour")),
+            None => format!("{} · {}", env!("HEARTH_VERSION"), tr("à jour")),
         };
         SettingRow { label: tr("Hearth").into(), value: value.into(), adjustable: false }
     }
@@ -1056,6 +1069,8 @@ impl Shell {
                     11
                 } else if self.kb_search.replace(false) {
                     0
+                } else if self.kb_lib_search.replace(false) {
+                    0
                 } else if self.kb_identify.replace(false) {
                     6
                 } else if self.kb_login.replace(false) {
@@ -1107,6 +1122,11 @@ impl Shell {
                     self.ui.set_zone(0);
                     self.ui.set_search_query(text.clone().into());
                     self.load_catalog(if text.trim().is_empty() { None } else { Some(text.trim().to_string()) });
+                } else if self.kb_lib_search.replace(false) {
+                    self.ui.set_zone(0);
+                    *self.lib_query.borrow_mut() = text.trim().to_string();
+                    self.ui.set_lib_query(text.into());
+                    self.rebuild();
                 } else {
                     self.ui.set_zone(self.home_zone());
                     self.connect(ssid, Some(text));
@@ -1542,7 +1562,12 @@ impl Shell {
             let pad = match std::env::var("HEARTH_PAD").as_deref() {
                 Ok("ps") => 1,
                 Ok("xbox") => 0,
-                _ => input::last_pad() as i32,
+                // Clavier (NavKeys) plus récent que le dernier ordre manette : les indications à l'écran
+                // affichent les touches plutôt qu'un bouton de manette (kind 2, voir `PadGlyph`).
+                _ => match (self.kb_last.get(), input::last_input()) {
+                    (Some(k), pad_t) if pad_t.is_none_or(|p| k > p) => 2,
+                    _ => input::last_pad() as i32,
+                },
             };
             if self.ui.global::<Pad>().get_kind() != pad {
                 self.ui.global::<Pad>().set_kind(pad);
@@ -1688,13 +1713,30 @@ impl Shell {
         let own = self.owned_titles();
         let rows: Vec<Offer> = rows.into_iter().map(|mut r| { r.owned = own.contains(&stores::norm_title(&r.title)); r }).collect();
         *self.offer_data.borrow_mut() = offers.to_vec();
-        self.ui.set_offers_state(if rows.is_empty() { "empty" } else { "" }.into());
+        let state = if !rows.is_empty() {
+            ""
+        } else if !stores::any_connected() {
+            "disconnected"
+        } else {
+            "empty"
+        };
+        self.ui.set_offers_state(state.into());
         self.offers.set_vec(rows);
     }
 
     fn search_open(&self) {
         self.kb_search.set(true);
         self.settings.kb_open("");
+        self.kb_refresh();
+        self.ui.set_kbx(0);
+        self.ui.set_kby(0);
+        self.ui.set_kb_title(tr("Rechercher un jeu").into());
+        self.ui.set_zone(4);
+    }
+
+    fn lib_search_open(&self) {
+        self.kb_lib_search.set(true);
+        self.settings.kb_open_text(&self.lib_query.borrow());
         self.kb_refresh();
         self.ui.set_kbx(0);
         self.ui.set_kby(0);
@@ -1839,11 +1881,14 @@ impl Shell {
     /// Écran de lancement : fenêtre superposée au jeu, qui reste le temps du chargement.
     fn start_splash(&self, i: usize, uri: bool) {
         let Some(t) = self.tile_for(i) else { return };
-        self.splash.set_launch_name(t.name);
+        self.splash.set_launch_name(t.name.clone());
         self.splash.set_launch_cover(t.cover);
-        // Un héros plus petit que l'écran serait agrandi (flou, pixélisé) : on le garde seulement à partir de sa résolution native.
+        // Ordre : le logo du jeu si on l'a ; sinon un héros assez grand pour ne pas être flou une fois agrandi ;
+        // sinon rien (la roue de chargement, seule, au centre, avec le nom).
         let screen_w = wm::primary_monitor().2 as u32;
+        self.splash.set_launch_logo(t.logo);
         self.splash.set_launch_art(if t.hero.size().width >= screen_w { t.hero } else { Default::default() });
+        self.splash.set_launch_status(format!("{} {}", tr("Démarrage de"), t.name).into());
         self.splash.set_launch_hue(t.hue);
         self.splash.set_launch_initial(t.initial);
         self.splash.set_launch_t(0.0);
@@ -1914,7 +1959,9 @@ impl Shell {
     /// apparaissent une par une. Pas mise en cache : la vignette complète (avec héros/logo) arrive ensuite via `art_request`.
     fn cover_sync(&self, g: &Game) -> slint::Image {
         let path = if g.cover.is_empty() { stores::asset(&g.id, "cover") } else { Some(PathBuf::from(&g.cover)) };
-        path.and_then(|p| imgload::decode(&p, 600, 900)).map(|b| imgload::image(&b)).unwrap_or_default()
+        // 320×480 : la plus grande tuile affichée ne dépasse pas ~234×370 px — une jaquette bien plus grande que
+        // sa taille d'affichage force le moteur de rendu à la réduire à chaque image, ce qui crénelait (aliasing).
+        path.and_then(|p| imgload::decode(&p, 320, 480)).map(|b| imgload::image(&b)).unwrap_or_default()
     }
 
     fn art_request(&self, g: &Game) {
@@ -1926,8 +1973,9 @@ impl Shell {
         let (hero, logo) = (stores::asset(&g.id, "hero"), stores::asset(&g.id, "logo"));
         std::thread::spawn(move || {
             let (c, h, l) = imgload::limited(|| {
-                let c = cover.and_then(|p| imgload::decode(&p, 600, 900));
-                let h = hero.and_then(|p| imgload::decode(&p, 1920, 1080));
+                let c = cover.and_then(|p| imgload::decode(&p, 320, 480));
+                // 2560×1440 : la largeur de l'écran de l'accueil (où le héros est affiché le plus grand).
+                let h = hero.and_then(|p| imgload::decode(&p, 2560, 1440));
                 let l = logo.and_then(|p| imgload::decode(&p, 800, 320));
                 (c, h, l)
             });
@@ -1995,6 +2043,7 @@ impl Shell {
             running.push(e.tile);
         }
         let all_tab = false;
+        let query = self.lib_query.borrow().to_lowercase();
         let (mut a, mut b): (Vec<(u64, Tile)>, Vec<Tile>) = (vec![], vec![]);
         for (i, g) in self.games.borrow().iter().enumerate() {
             if g.hidden {
@@ -2002,7 +2051,7 @@ impl Shell {
             }
             let t = self.make_tile(i, g, running.contains(&i), &pt);
             // Onglet Tout : tous les jeux (installés ou non) ; sinon seulement ceux à installer.
-            if g.install || all_tab {
+            if (g.install || all_tab) && (query.is_empty() || t.name.to_lowercase().contains(&query)) {
                 b.push(t.clone());
             }
             if !g.install {
@@ -2011,9 +2060,8 @@ impl Shell {
         }
         a.sort_by_key(|(last, _)| std::cmp::Reverse(*last));
         let a: Vec<Tile> = a.into_iter().map(|(_, t)| t).collect();
-        if all_tab {
-            b.sort_by_key(|t| t.name.to_lowercase());
-        }
+        // Toujours alphabétique : sans ça, l'ordre dépend de la boutique qui a signalé le jeu en premier.
+        b.sort_by(|x, y| x.name.to_lowercase().cmp(&y.name.to_lowercase()));
         let sel = cur.and_then(|g| a.iter().position(|t| t.gid == g)).unwrap_or((self.ui.get_sel().max(0) as usize).min(a.len().saturating_sub(1)));
         let lsel = cur_lib.and_then(|g| b.iter().position(|t| t.gid == g)).unwrap_or((self.ui.get_lsel().max(0) as usize).min(b.len().saturating_sub(1)));
         self.tiles.set_vec(a);

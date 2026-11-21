@@ -1,6 +1,7 @@
 //! Programme d'installation de Hearth : un seul exécutable qui embarque le superviseur et la console,
 //! demande confirmation, puis exécute `hearth install` (copie dans %LOCALAPPDATA%\Hearth\app, shell Windows, raccourcis).
-//! Texte toujours en anglais (logiciel diffusé au-delà des machines en français).
+//! Texte en français ou anglais selon la langue de Windows (ce petit programme n'a pas l'infrastructure de
+//! traduction de la console : seulement ces deux langues, l'anglais restant le repli pour les autres).
 #![windows_subsystem = "windows"]
 
 use std::path::PathBuf;
@@ -11,6 +12,12 @@ use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, IDYES, MB_ICONINFORMA
 
 const SUPERVISOR: &[u8] = include_bytes!("../../../target/release/hearth.exe");
 const SHELL: &[u8] = include_bytes!("../../../target/release/hearth-shell.exe");
+
+fn french() -> bool {
+    let mut buf = [0u16; 85];
+    let n = unsafe { windows::Win32::Globalization::GetUserDefaultLocaleName(&mut buf) } as usize;
+    String::from_utf16_lossy(&buf[..n.saturating_sub(1)]).to_lowercase().starts_with("fr")
+}
 
 fn message(text: &str, flags: windows::Win32::UI::WindowsAndMessaging::MESSAGEBOX_STYLE) -> bool {
     unsafe { MessageBoxW(None, &HSTRING::from(text), &HSTRING::from("Hearth"), flags) == IDYES }
@@ -28,7 +35,12 @@ fn main() {
         }
         return;
     }
-    let ask = "Install Hearth?\n\nHearth replaces the Windows desktop with a game-console interface for this user account (effective at next sign-in; you can also launch it right away without signing out).\n\nTo undo: use \"Hearth (desktop)\" or run \"hearth.exe uninstall\".";
+    let fr = french();
+    let ask = if fr {
+        "Installer Hearth ?\n\nHearth remplace le bureau Windows par une interface de console de jeu pour ce compte (effectif à la prochaine connexion ; vous pouvez aussi la lancer tout de suite sans vous déconnecter).\n\nPour annuler : utilisez « Hearth (bureau) » ou lancez « hearth.exe uninstall »."
+    } else {
+        "Install Hearth?\n\nHearth replaces the Windows desktop with a game-console interface for this user account (effective at next sign-in; you can also launch it right away without signing out).\n\nTo undo: use \"Hearth (desktop)\" or run \"hearth.exe uninstall\"."
+    };
     if !message(ask, MB_YESNO | MB_ICONQUESTION) {
         return;
     }
@@ -36,12 +48,14 @@ fn main() {
         Ok(()) => {
             // Lancée tout de suite, la console tourne par-dessus le bureau Windows sans fermer la session ;
             // elle deviendra le shell au prochain démarrage de session grâce à la clé Winlogon déjà posée.
-            if message("Hearth is installed and will start automatically at next sign-in.\n\nLaunch it now?", MB_YESNO | MB_ICONINFORMATION) {
+            let launch = if fr { "Hearth est installé et démarrera automatiquement à la prochaine connexion.\n\nLe lancer maintenant ?" } else { "Hearth is installed and will start automatically at next sign-in.\n\nLaunch it now?" };
+            if message(launch, MB_YESNO | MB_ICONINFORMATION) {
                 let _ = Command::new(installed_exe()).spawn();
             }
         }
         Err(e) => {
-            message(&format!("Installation failed: {e}"), MB_OK | MB_ICONERROR);
+            let fail = if fr { format!("Installation échouée : {e}") } else { format!("Installation failed: {e}") };
+            message(&fail, MB_OK | MB_ICONERROR);
         }
     }
 }

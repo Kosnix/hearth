@@ -62,7 +62,7 @@ pub fn list_dir(dir: &Path) -> Vec<Entry> {
 pub fn identify(title: &str) -> Vec<stores::Offer> {
     let key = crate::i18n::pref("steamgriddb_key").or_else(|| std::env::var("HEARTH_SGDB_KEY").ok()).filter(|k| !k.trim().is_empty());
     let found = key.map(|k| stores::search_sgdb(title, k.trim())).unwrap_or_default();
-    if found.is_empty() { stores::search(title) } else { found }
+    if found.is_empty() { stores::search_any(title) } else { found }
 }
 
 pub fn guess_title(exe: &Path) -> String {

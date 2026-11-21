@@ -75,8 +75,9 @@ pub fn init() {
             TOASTS.store(v["toasts"].as_bool().unwrap_or(true), Ordering::Relaxed);
         })
         .and_then(|v| v["lang"].as_str().map(String::from));
-    // Première exécution : l'assistant démarre toujours en anglais ; ensuite la langue choisie, sinon celle de Windows.
-    let code = saved.unwrap_or_else(|| if crate::oobe::is_done() { system_lang() } else { "en".into() });
+    // Langue choisie si enregistrée (changée dans Réglages, ou gardée après l'assistant) ; sinon celle de Windows,
+    // dès le premier écran de l'assistant.
+    let code = saved.unwrap_or_else(system_lang);
     set(LANGS.iter().position(|(c, _)| *c == code).unwrap_or(0), false);
 }
 

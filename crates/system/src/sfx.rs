@@ -10,9 +10,9 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::DecoderOptions;
+use symphonia::core::codecs::{Decoder, DecoderOptions};
 use symphonia::core::errors::Error as SymError;
-use symphonia::core::formats::FormatOptions;
+use symphonia::core::formats::{FormatOptions, FormatReader};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
@@ -64,8 +64,9 @@ enum Cmd {
     Volumes(f32, f32),
     /// Sons décodés d'un pack (dans l'ordre de `ALL`).
     Pack(Vec<Option<Arc<Vec<f32>>>>),
-    /// Musique décodée (stéréo 44,1 kHz, 16 bits) ; `None` : aucune.
-    Tune(Option<Arc<Vec<i16>>>),
+    /// Flux de musique déjà ouvert (décodage par blocs, voir `MusicStream`) ; `None` : aucune. Jamais entièrement
+    /// en mémoire (un morceau de 10 min en PCM pèserait une centaine de Mo).
+    Tune(Option<MusicStream>),
 }
 
 static TX: OnceLock<Sender<Cmd>> = OnceLock::new();
@@ -169,11 +170,106 @@ fn load_sfx(dir: &Path) -> Vec<Option<Arc<Vec<f32>>>> {
         .collect()
 }
 
-fn load_music(file: &Path) -> Option<Arc<Vec<i16>>> {
-    let b = decode(file)?;
-    let peak = b.iter().fold(0.0f32, |m, x| m.max(x.abs())).max(0.001);
-    let g = 0.9 / peak;
-    Some(Arc::new(b.iter().map(|x| (x * g * 32_000.0) as i16).collect()))
+/// Musique en lecture continue : un paquet est décodé et rééchantillonné à la fois (jamais le fichier entier en
+/// mémoire). Rebouclée en se rouvrant depuis le début à la fin du flux.
+struct MusicStream {
+    path: PathBuf,
+    format: Box<dyn FormatReader>,
+    decoder: Box<dyn Decoder>,
+    track_id: u32,
+    rate: f64,
+    /// Gain de normalisation (mesuré une fois à l'ouverture sur le pic du fichier).
+    gain: f32,
+    /// Échantillons stéréo 44,1 kHz prêts à jouer, issus du dernier paquet décodé.
+    pending: Vec<f32>,
+    ppos: usize,
+}
+
+impl MusicStream {
+    fn open(path: &Path, gain: f32) -> Option<Self> {
+        let file = File::open(path).ok()?;
+        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+        let mut hint = Hint::new();
+        if let Some(e) = path.extension().and_then(|e| e.to_str()) {
+            hint.with_extension(e);
+        }
+        let probed = symphonia::default::get_probe().format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default()).ok()?;
+        let format = probed.format;
+        let track = format.default_track()?;
+        let track_id = track.id;
+        let rate = track.codec_params.sample_rate? as f64;
+        let decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).ok()?;
+        Some(Self { path: path.to_path_buf(), format, decoder, track_id, rate, gain, pending: vec![], ppos: 0 })
+    }
+
+    /// Un échantillon stéréo 44,1 kHz ; boucle sur le fichier à la fin du flux.
+    fn next(&mut self) -> (f32, f32) {
+        loop {
+            if self.ppos + 1 < self.pending.len() {
+                let (l, r) = (self.pending[self.ppos], self.pending[self.ppos + 1]);
+                self.ppos += 2;
+                return (l, r);
+            }
+            if !self.fill() {
+                match Self::open(&self.path, self.gain) {
+                    Some(s) => *self = s,
+                    None => return (0.0, 0.0),
+                }
+            }
+        }
+    }
+
+    /// Décode et rééchantillonne le prochain paquet dans `pending`. Faux si le flux est terminé.
+    fn fill(&mut self) -> bool {
+        self.pending.clear();
+        self.ppos = 0;
+        loop {
+            let pkt = match self.format.next_packet() {
+                Ok(p) => p,
+                Err(_) => return false,
+            };
+            if pkt.track_id() != self.track_id {
+                continue;
+            }
+            match self.decoder.decode(&pkt) {
+                Ok(buf) => {
+                    let spec = *buf.spec();
+                    let channels = spec.channels.count().max(1);
+                    let mut sb = SampleBuffer::<f32>::new(buf.capacity() as u64, spec);
+                    sb.copy_interleaved_ref(buf);
+                    let raw = sb.samples();
+                    let frames = raw.len() / channels;
+                    if frames == 0 {
+                        continue;
+                    }
+                    let at = |i: usize| -> (f32, f32) {
+                        let f = &raw[i * channels..(i + 1) * channels];
+                        if channels == 1 { (f[0], f[0]) } else { (f[0], f[1]) }
+                    };
+                    let out_frames = (((frames as f64) * SR as f64 / self.rate) as usize).max(1);
+                    self.pending.reserve(out_frames * 2);
+                    for i in 0..out_frames {
+                        let p = i as f64 * self.rate / SR as f64;
+                        let (a, frac) = (p as usize, (p - p.floor()) as f32);
+                        let x = at(a.min(frames - 1));
+                        let y = at((a + 1).min(frames - 1));
+                        self.pending.push(x.0 + (y.0 - x.0) * frac);
+                        self.pending.push(x.1 + (y.1 - x.1) * frac);
+                    }
+                    return true;
+                }
+                Err(SymError::DecodeError(_)) => continue,
+                Err(_) => return false,
+            }
+        }
+    }
+}
+
+/// Ouvre un flux de musique : le pic (pour la normalisation) est mesuré par un décodage complet jetable,
+/// puis le fichier est rouvert pour la lecture en continu par blocs.
+fn open_stream(path: &Path) -> Option<MusicStream> {
+    let peak = decode(path)?.iter().fold(0.0f32, |m, x| m.max(x.abs())).max(0.001);
+    MusicStream::open(path, 0.9 / peak)
 }
 
 /// Charge un pack de sons (dossier) et une musique (fichier) : décodage en tâche de fond, remplacement à chaud.
@@ -182,7 +278,7 @@ pub fn set_packs(sfx_dir: Option<PathBuf>, music: Option<PathBuf>) {
     std::thread::spawn(move || {
         let pack = sfx_dir.map(|d| load_sfx(&d)).unwrap_or_else(|| ALL.iter().map(|_| None).collect());
         let _ = tx.send(Cmd::Pack(pack));
-        let tune = music.and_then(|m| load_music(&m));
+        let tune = music.and_then(|m| open_stream(&m));
         let _ = tx.send(Cmd::Tune(tune));
     });
 }
@@ -235,8 +331,8 @@ fn run(rx: Receiver<Cmd>) {
     READY.store(true, Ordering::SeqCst);
     let (mut sfx_vol, mut music_vol) = (0.8f32, 0.4f32);
     let mut voices: Vec<Voice> = vec![];
-    let mut music: Option<Arc<Vec<i16>>> = None;
-    let (mut mpos, mut mgain, mut want) = (0usize, 0.0f32, false);
+    let mut music: Option<MusicStream> = None;
+    let (mut mgain, mut want) = (0.0f32, false);
     let mut mix = vec![0.0f32; FRAMES * 2];
     loop {
         let mut worked = false;
@@ -261,10 +357,7 @@ fn run(rx: Receiver<Cmd>) {
                         sfx = p;
                         voices.clear();
                     }
-                    Cmd::Tune(t) => {
-                        music = t;
-                        mpos = 0;
-                    }
+                    Cmd::Tune(t) => music = t,
                 }
             }
             mix.iter_mut().for_each(|x| *x = 0.0);
@@ -276,7 +369,7 @@ fn run(rx: Receiver<Cmd>) {
                 v.pos += n;
             }
             voices.retain(|v| v.pos < v.buf.len());
-            if let Some(m) = &music {
+            if let Some(m) = &mut music {
                 let target = if want { music_vol } else { 0.0 };
                 for f in 0..FRAMES {
                     if mgain < target {
@@ -285,9 +378,9 @@ fn run(rx: Receiver<Cmd>) {
                         mgain = (mgain - 1.0 / (0.6 * SR as f32)).max(target);
                     }
                     if mgain > 0.0 {
-                        mix[f * 2] += m[mpos] as f32 / 32_768.0 * mgain;
-                        mix[f * 2 + 1] += m[mpos + 1] as f32 / 32_768.0 * mgain;
-                        mpos = (mpos + 2) % m.len();
+                        let (l, r) = m.next();
+                        mix[f * 2] += l * m.gain * mgain;
+                        mix[f * 2 + 1] += r * m.gain * mgain;
                     }
                 }
             }
@@ -350,9 +443,13 @@ mod tests {
         let Ok(dirs) = std::fs::read_dir(&base) else { return };
         for d in dirs.flatten() {
             if let Some(m) = music_file(&d.path()) {
-                let t = load_music(&m).expect("musique décodée");
-                assert!(t.len() > SR * 2 * 10, "musique trop courte : {}", t.len());
-                println!("musique {} : {} s", m.display(), t.len() / 2 / SR);
+                let b = decode(&m).expect("musique décodée");
+                assert!(b.len() > SR * 2 * 10, "musique trop courte : {}", b.len());
+                println!("musique {} : {} s", m.display(), b.len() / 2 / SR);
+                let mut s = open_stream(&m).expect("flux ouvert");
+                for _ in 0..SR {
+                    s.next();
+                }
             } else {
                 let p = load_sfx(&d.path());
                 let n = p.iter().flatten().count();
