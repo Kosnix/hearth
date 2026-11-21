@@ -1,4 +1,5 @@
 /target
+crates/overlay-hook/target
 *.pdb
 .DS_Store
 

@@ -335,7 +335,7 @@ pub mod pads {
     /// Manettes connectées, dans l'ordre où Windows les signale (voir `shell::settings::ordered_pads`
     /// pour l'ordre choisi par l'utilisateur, qui filtre aussi la manette virtuelle).
     pub fn list() -> Vec<Pad> {
-        RawGameController::RawGameControllers()
+        let mut pads: Vec<Pad> = RawGameController::RawGameControllers()
             .map(|l| {
                 l.into_iter()
                     .filter_map(|c| {
@@ -352,7 +352,17 @@ pub mod pads {
                     })
                     .collect()
             })
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // Batterie DualSense lue en HID brut (fiable y compris en Bluetooth, contrairement à
+        // Windows.Gaming.Input) : seulement quand une seule manette Sony est branchée, pour ne pas
+        // risquer de l'attribuer à la mauvaise manette (la lecture HID ne dit pas laquelle elle a lue).
+        let sony: Vec<usize> = pads.iter().enumerate().filter(|(_, p)| p.vendor == SONY_VENDOR).map(|(i, _)| i).collect();
+        if let [i] = sony[..] {
+            if let Some((pct, _charging)) = crate::dualsense::battery() {
+                pads[i].battery = Some(pct);
+            }
+        }
+        pads
     }
 }
 
@@ -549,6 +559,7 @@ pub mod drivers {
 }
 
 pub mod admin;
+pub mod dualsense;
 pub mod sfx;
 mod extra;
 pub use extra::{about, bluetooth, install, net, power};

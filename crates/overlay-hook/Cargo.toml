@@ -1,0 +1,42 @@
+# Projet Cargo à part (pas membre du workspace racine) : il ne doit pas hériter de `panic = "abort"` du
+# profil racine (le superviseur s'y fie pour se relancer) — ici le code tourne *dans le jeu injecté*, un
+# panic doit dérouler la pile sur son thread, jamais appeler abort() et tuer le jeu de l'utilisateur.
+[workspace]
+
+[package]
+name = "overlay-hook"
+version = "0.1.0"
+edition = "2021"
+
+# DLL injectée dans un jeu (D3D11) : accroche d'IDXGISwapChain::Present pour dessiner par-dessus son
+# image, même en plein écran exclusif (où une fenêtre Hearth classique ne peut pas s'afficher au-dessus).
+# Prototype : preuve de la technique (encoche visible), pas encore le vrai menu guide.
+[lib]
+name = "overlay_hook"
+crate-type = ["cdylib"]
+
+[dependencies]
+retour = "0.3"
+
+[dependencies.windows]
+version = "0.62"
+features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",
+  "Win32_System_Console",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_SystemServices",
+  "Win32_System_Threading",
+  "Win32_UI_WindowsAndMessaging",
+]
+
+[[bin]]
+name = "inject"
+path = "src/bin/inject.rs"

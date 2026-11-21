@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 windows-core = "0.62"
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "wav", "pcm", "ogg", "vorbis", "flac", "aac", "isomp4"] }
+hidapi = { version = "2", default-features = false, features = ["windows-native"] }
 
 [dependencies.windows]
 workspace = true

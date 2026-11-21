@@ -1235,6 +1235,10 @@ impl Shell {
         set!(self.splash);
         set!(self.pad);
         self.desktop_theme_changed();
+        // Bandeau lumineux de la DualSense assorti à l'accent du thème (HID brut, au mieux : lecture
+        // bloquante de courte durée, donc hors du thread UI).
+        let [r, g, b] = p.accent;
+        std::thread::spawn(move || system::dualsense::set_lightbar(r, g, b));
     }
 
     fn open_guide(&self, tile: usize) {
