@@ -17,6 +17,9 @@ export struct Tile {
     running: bool,
     install: bool,
     sub: string,
+    /// En téléchargement (SteamCMD) : 0..100, -1 sinon. Montré dans Jeux (pas Bibliothèque) avec un
+    /// anneau de progression façon iOS, le temps du téléchargement.
+    dl-pct: int,
 }
 
 export struct ProfileRow {
@@ -51,6 +54,9 @@ export struct Notif {
     text: string,
     time: string,
     unread: bool,
+    /// Ne se supprime pas (seule ou avec « tout effacer ») : son geste de suppression installe la
+    /// mise à jour à la place, tant qu'elle n'est pas faite.
+    pinned: bool,
 }
 
 export struct PickItem {
@@ -374,6 +380,35 @@ component GameTile inherits Rectangle {
             font-family: Theme.icons;
             font-size: 18px;
             color: Theme.ok;
+        }
+    }
+    // Téléchargement en cours (façon iOS : jaquette assombrie, anneau de progression au centre).
+    if tile.dl-pct >= 0: Rectangle {
+        background: #00000090;
+    }
+    if tile.dl-pct >= 0: Rectangle {
+        // Anneau seul dans cet élément : le trou et le texte sont des frères non tournés.
+        x: parent.width / 2 - 34px;
+        y: parent.height / 2 - 34px;
+        width: 68px;
+        height: 68px;
+        border-radius: 34px;
+        transform-rotation: -90deg;
+        transform-origin: { x: 34px, y: 34px };
+        background: @conic-gradient(Theme.accent 0deg, Theme.accent tile.dl-pct * 3.6deg, #ffffff38 tile.dl-pct * 3.6deg, #ffffff38 360deg);
+    }
+    if tile.dl-pct >= 0: Rectangle {
+        x: parent.width / 2 - 28px;
+        y: parent.height / 2 - 28px;
+        width: 56px;
+        height: 56px;
+        border-radius: 28px;
+        background: tile.hue.darker(0.6);
+        Text {
+            text: tile.dl-pct + "%";
+            font-size: 17px;
+            font-weight: 700;
+            color: Theme.text;
         }
     }
     Rectangle {
@@ -2331,7 +2366,7 @@ export component App inherits Window {
                 x: 48px;
                 y: parent.height - 100px;
                 spacing: 36px;
-                Hint { btn: 0; label: @tr("Effacer"); }
+                Hint { btn: 0; label: (nsel >= 0 && nsel < notifs.length && notifs[nsel].pinned) ? @tr("Installer") : @tr("Effacer"); }
                 Hint { btn: 3; label: @tr("Tout effacer"); }
                 Hint { btn: 1; label: @tr("Retour"); }
             }

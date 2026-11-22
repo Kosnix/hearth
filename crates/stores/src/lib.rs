@@ -229,6 +229,12 @@ pub fn download(url: &str) -> Option<Vec<u8>> {
     http::get(url, &[])
 }
 
+/// Téléchargement avec progression (octets reçus, total si connu) — pour un gros fichier (installateur)
+/// qu'on veut montrer à l'écran pendant qu'il avance.
+pub fn download_with_progress(url: &str, on_progress: impl FnMut(u64, Option<u64>)) -> Option<Vec<u8>> {
+    http::get_with_progress(url, &[], on_progress)
+}
+
 pub use steam::{client_start as steam_client_start, client_user as steam_client_user};
 pub use steam::disable_overlay as steam_disable_overlay;
 

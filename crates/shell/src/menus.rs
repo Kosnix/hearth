@@ -57,7 +57,7 @@ impl Shell {
         if self.is_scmd_game(&g.exe) && !running {
             v.push((tr("Vérifier / mettre à jour"), Act::UpdateYes(gid)));
         }
-        v.push((tr("Cacher"), Act::Hide(gid)));
+        v.push((tr(if g.hidden { "Afficher" } else { "Cacher" }), Act::Hide(gid)));
         if !g.install && !running {
             v.push((tr(if g.store.is_empty() { "Retirer de Hearth" } else { "Désinstaller" }), Act::Uninstall(gid)));
         }
@@ -111,10 +111,10 @@ impl Shell {
                 self.ui.set_zone(6);
             }
             Act::Hide(g) => {
-                let Some((id, name)) = self.games.borrow().get(g).map(|g| (g.id.clone(), g.name.clone())) else { return };
-                self.set_hidden(&id, true);
+                let Some((id, name, now_hidden)) = self.games.borrow().get(g).map(|g| (g.id.clone(), g.name.clone(), !g.hidden)) else { return };
+                self.set_hidden(&id, now_hidden);
                 self.ui.set_zone(back);
-                self.push_notif(&tr("Jeu caché"), &name);
+                self.push_notif(&tr(if now_hidden { "Jeu caché" } else { "Jeu affiché" }), &name);
             }
             Act::Uninstall(g) => {
                 let Some(name) = self.games.borrow().get(g).map(|g| g.name.clone()) else { return };
@@ -212,9 +212,17 @@ impl Shell {
             return;
         }
         if self.is_scmd_game(&g.exe) {
-            let ok = g.id.strip_prefix("steam-").is_some_and(stores::steamcmd::uninstall);
+            let appid = g.id.strip_prefix("steam-").map(String::from);
+            let ok = appid.as_deref().is_some_and(stores::steamcmd::uninstall);
+            if let Some(a) = &appid {
+                // Sinon la mise à jour reste proposée (notification, écran Téléchargements) jusqu'à
+                // la prochaine recherche programmée (jusqu'à 6 h) pour un jeu qui n'est déjà plus installé.
+                self.updates.borrow_mut().retain(|u| u != a);
+                self.prompted.borrow_mut().remove(a);
+            }
             self.push_notif(&g.name, &tr(if ok { "Jeu désinstallé" } else { "Désinstallation impossible" }));
             self.poll_installed();
+            self.dl_refresh();
             return;
         }
         let started = match g.store.as_str() {

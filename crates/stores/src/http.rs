@@ -14,6 +14,14 @@ pub fn get(url: &str, headers: &[(&str, &str)]) -> Option<Vec<u8>> {
     request("GET", url, headers, None)
 }
 
+/// GET bloquant avec progression (octets reçus, total si connu via `Content-Length`) : pour un gros
+/// téléchargement (installateur) qu'on veut montrer à l'écran pendant qu'il avance.
+pub fn get_with_progress(url: &str, headers: &[(&str, &str)], on_progress: impl FnMut(u64, Option<u64>)) -> Option<Vec<u8>> {
+    let mut on_progress = on_progress;
+    let (status, data) = request_raw_progress("GET", url, headers, None, Some(&mut on_progress))?;
+    (status == 200).then_some(data)
+}
+
 pub fn post_json(url: &str, headers: &[(&str, &str)], body: &str) -> Option<serde_json::Value> {
     let mut h = headers.to_vec();
     h.push(("Content-Type", "application/json"));
@@ -27,6 +35,16 @@ fn request(method: &str, url: &str, headers: &[(&str, &str)], body: Option<&[u8]
 
 /// Requête avec code HTTP (les flux de connexion répondent 400 tant que l'utilisateur n'a pas validé).
 fn request_raw(method: &str, url: &str, headers: &[(&str, &str)], body: Option<&[u8]>) -> Option<(u32, Vec<u8>)> {
+    request_raw_progress(method, url, headers, body, None)
+}
+
+fn request_raw_progress(
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: Option<&[u8]>,
+    mut progress: Option<&mut dyn FnMut(u64, Option<u64>)>,
+) -> Option<(u32, Vec<u8>)> {
     let rest = url.strip_prefix("https://")?;
     let (host, path) = rest.split_once('/').map_or((rest, "/".to_string()), |(h, p)| (h, format!("/{p}")));
     unsafe {
@@ -53,6 +71,18 @@ fn request_raw(method: &str, url: &str, headers: &[(&str, &str)], body: Option<&
                 let mut status = 0u32;
                 let mut len = size_of::<u32>() as u32;
                 WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, PCWSTR::null(), Some(&mut status as *mut u32 as *mut c_void), &mut len, std::ptr::null_mut()).ok()?;
+                let mut total = 0u32;
+                let mut tlen = size_of::<u32>() as u32;
+                let total = WinHttpQueryHeaders(
+                    req,
+                    WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER,
+                    PCWSTR::null(),
+                    Some(&mut total as *mut u32 as *mut c_void),
+                    &mut tlen,
+                    std::ptr::null_mut(),
+                )
+                .is_ok()
+                .then_some(total as u64);
                 let mut data = Vec::new();
                 loop {
                     let mut avail = 0u32;
@@ -64,6 +94,9 @@ fn request_raw(method: &str, url: &str, headers: &[(&str, &str)], body: Option<&
                     let mut read = 0u32;
                     WinHttpReadData(req, buf.as_mut_ptr().cast(), avail, &mut read).ok()?;
                     data.extend_from_slice(&buf[..read as usize]);
+                    if let Some(cb) = progress.as_deref_mut() {
+                        cb(data.len() as u64, total);
+                    }
                 }
                 Some((status, data))
             })();

@@ -13,6 +13,7 @@ use windows::Win32::Graphics::Gdi::{
     EnumDisplaySettingsW, GetMonitorInfoW, MonitorFromWindow, DEVMODEW, ENUM_CURRENT_SETTINGS, ENUM_REGISTRY_SETTINGS,
     MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
+use windows::Win32::System::Diagnostics::ToolHelp::*;
 use windows::Win32::System::JobObjects::*;
 use windows::Win32::System::Threading::*;
 use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
@@ -30,6 +31,7 @@ const MIN_H: i32 = 480;
 pub struct Session {
     job: HANDLE,
     dir: PathBuf,
+    root_pid: u32,
 }
 
 impl Session {
@@ -53,7 +55,7 @@ impl Session {
             ResumeThread(pi.hThread);
             let _ = CloseHandle(pi.hThread);
             let _ = CloseHandle(pi.hProcess);
-            Ok(Session { job, dir })
+            Ok(Session { job, dir, root_pid: pi.dwProcessId })
         }
     }
 
@@ -71,19 +73,43 @@ impl Session {
         ok.is_ok() && info.ActiveProcesses > 0
     }
 
-    /// Fenêtre d'un processus du job, ou d'un exécutable du dossier du jeu (relancé par un launcher).
+    /// Fenêtre d'un processus du job, d'un descendant qui s'en est détaché (launcher relançant le vrai
+    /// jeu avec élévation ou `breakaway`), ou à défaut d'un exécutable du dossier du jeu.
     pub fn owns(&self, hwnd: HWND) -> bool {
         let mut pid = 0;
         unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-        let Ok(p) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else { return false };
-        let mut in_job = Default::default();
-        let _ = unsafe { IsProcessInJob(p, Some(self.job), &mut in_job) };
-        let owned = in_job.as_bool()
-            || (!self.dir.as_os_str().is_empty() && image_path(p).is_some_and(|x| x.starts_with(&self.dir)));
-        unsafe {
-            let _ = CloseHandle(p);
+        if pid == 0 {
+            return false;
         }
-        owned
+        let (in_job, dir_match) = match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) } {
+            Ok(p) => {
+                let mut in_job = Default::default();
+                let _ = unsafe { IsProcessInJob(p, Some(self.job), &mut in_job) };
+                let dir_match = !self.dir.as_os_str().is_empty() && image_path(p).is_some_and(|x| x.starts_with(&self.dir));
+                unsafe {
+                    let _ = CloseHandle(p);
+                }
+                (in_job.as_bool(), dir_match)
+            }
+            Err(_) => (false, false),
+        };
+        in_job || dir_match || self.descends_from_root(pid)
+    }
+
+    /// Un processus détaché du job par son launcher reste reconnu s'il descend, par filiation Windows
+    /// (indépendante du job, qui survit même si le launcher lui-même a déjà quitté), du processus
+    /// initialement lancé.
+    fn descends_from_root(&self, pid: u32) -> bool {
+        let parents = parent_map();
+        let mut cur = pid;
+        for _ in 0..16 {
+            match parents.get(&cur) {
+                Some(&parent) if parent == self.root_pid => return true,
+                Some(&parent) if parent != 0 && parent != cur => cur = parent,
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// Fenêtres principales du jeu, la plus haute dans l'ordre Z en premier.
@@ -124,6 +150,25 @@ fn quote(s: &str) -> String {
         return s.to_string();
     }
     format!("\"{}\"", s.replace('"', "\\\""))
+}
+
+/// Table pid -> pid parent, par instantané global des processus (Toolhelp).
+fn parent_map() -> std::collections::HashMap<u32, u32> {
+    let mut map = std::collections::HashMap::new();
+    unsafe {
+        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return map };
+        let mut e = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+        if Process32FirstW(snap, &mut e).is_ok() {
+            loop {
+                map.insert(e.th32ProcessID, e.th32ParentProcessID);
+                if Process32NextW(snap, &mut e).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snap);
+    }
+    map
 }
 
 fn image_path(p: HANDLE) -> Option<PathBuf> {
@@ -352,7 +397,11 @@ pub fn exe_name(h: HWND) -> String {
     String::from_utf16_lossy(&buf[..n as usize]).rsplit('\\').next().unwrap_or("").to_lowercase()
 }
 
-/// Réduit sans prendre le focus les fenêtres visibles des processus donnés (ex. client Steam). Renvoie le nombre réduit.
+/// Réduit sans prendre le focus les grandes fenêtres visibles des processus donnés (ex. fenêtre
+/// principale du client Steam). Renvoie le nombre réduit. Une petite fenêtre (boîte de dialogue :
+/// connexion, confirmation…) n'est jamais touchée — sinon un dialogue qui réclame une action de
+/// l'utilisateur (ex. « connectez-vous dans la fenêtre Steam ») serait réduit aussitôt rouvert,
+/// le piégeant en boucle sans jamais pouvoir l'atteindre.
 pub fn minimize_windows_of(exes: &[&str]) -> usize {
     let mut count = 0;
     for h in top_windows() {
@@ -360,6 +409,13 @@ pub fn minimize_windows_of(exes: &[&str]) -> usize {
             if !IsWindowVisible(h).as_bool() || IsIconic(h).as_bool() {
                 continue;
             }
+        }
+        let mut r = RECT::default();
+        unsafe {
+            let _ = GetWindowRect(h, &mut r);
+        }
+        if r.right - r.left < MIN_W || r.bottom - r.top < MIN_H {
+            continue;
         }
         if exes.contains(&exe_name(h).as_str()) {
             unsafe {

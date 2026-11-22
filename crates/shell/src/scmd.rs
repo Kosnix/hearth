@@ -9,7 +9,7 @@ use stores::steamcmd::{self, Login, Pending};
 use crate::i18n::{self, tr};
 use crate::{with_shell, DlRow, Shell};
 
-fn appid_of(game_id: &str) -> Option<&str> {
+pub(crate) fn appid_of(game_id: &str) -> Option<&str> {
     game_id.strip_prefix("owned-steam-").or_else(|| game_id.strip_prefix("steam-"))
 }
 
@@ -212,6 +212,24 @@ impl Shell {
             d.eta = eta;
         }
         self.dl_refresh();
+        self.refresh_dl_tile(appid);
+    }
+
+    /// Met à jour l'anneau de progression de la tuile Jeux de ce jeu (appid Steam/Epic), sans tout
+    /// reconstruire (`rebuild`, coûteux — relit `playtime.json` — et appelé à chaque ligne de
+    /// progression). La première fois (le jeu est encore dans Bibliothèque), un `rebuild` est inévitable.
+    pub(crate) fn refresh_dl_tile(&self, appid: &str) {
+        let Some(gid) = self.games.borrow().iter().position(|g| appid_of(&g.id) == Some(appid)) else { return };
+        for r in 0..self.tiles.row_count() {
+            if let Some(mut t) = self.tiles.row_data(r) {
+                if t.gid == gid as i32 {
+                    t.dl_pct = self.dl_pct_of(&self.games.borrow()[gid]);
+                    self.tiles.set_row_data(r, t);
+                    return;
+                }
+            }
+        }
+        self.rebuild();
     }
 
     /// Met un jeu Epic dans la file (Legendary, session de Hearth : aucune saisie).
@@ -260,6 +278,7 @@ impl Shell {
             d.pct = (done / total.max(1.0) * 100.0).min(100.0) as f32;
         }
         self.dl_refresh();
+        self.refresh_dl_tile(appid);
     }
 
 
@@ -289,6 +308,9 @@ impl Shell {
         if r.is_ok() {
             self.updates.borrow_mut().retain(|a| a != appid);
             self.poll_installed();
+        } else {
+            // Échec : le jeu reste à installer, sa tuile doit repasser de Jeux (anneau de progression) à Bibliothèque.
+            self.rebuild();
         }
         self.dl_next();
         self.dl_refresh();
@@ -336,6 +358,20 @@ impl Shell {
         self.dl_refresh();
     }
 
+    /// Un appid de mise à jour qui ne correspond plus à un jeu SteamCMD installé (désinstallé, y compris
+    /// via le client Steam directement, hors de Hearth) ne doit pas rester proposé — notification,
+    /// écran Téléchargements — jusqu'à la prochaine recherche programmée (jusqu'à 6 h).
+    pub fn prune_updates(&self) {
+        let known: std::collections::HashSet<String> =
+            self.games.borrow().iter().filter(|g| self.is_scmd_game(&g.exe)).filter_map(|g| appid_of(&g.id).map(String::from)).collect();
+        let had = self.updates.borrow().len();
+        self.updates.borrow_mut().retain(|a| known.contains(a));
+        self.prompted.borrow_mut().retain(|a| known.contains(a));
+        if self.updates.borrow().len() != had {
+            self.dl_refresh();
+        }
+    }
+
     /// Appelé chaque seconde : propose une mise à jour quand la console est libre (pas en jeu, pas dans un menu).
     pub fn maybe_prompt_update(&self) {
         if self.updates.borrow().is_empty() || !matches!(self.ui.get_zone(), 0 | 1) || !self.running.borrow().is_empty() {
@@ -370,6 +406,9 @@ impl Shell {
         rows.push((row(tr("Rechercher les mises à jour"), String::new(), -1, 3), RowAct::Search));
         if outdated.len() > 1 {
             rows.push((row(format!("{} ({})", tr("Tout mettre à jour"), outdated.len()), String::new(), -1, 3), RowAct::UpdateAll));
+        }
+        if let Some(pct) = self.hearth_dl_pct() {
+            rows.push((row("Hearth".into(), format!("{pct:.0} %"), pct as i32, 0), RowAct::Item("hearth-update".into())));
         }
         for d in dl.iter().filter(|d| matches!(d.state, DlState::Active | DlState::Queued)) {
             let (status, pct) = if d.state == DlState::Active { (active_status(d), d.pct as i32) } else { (tr("En attente"), -1) };
@@ -501,7 +540,9 @@ impl Shell {
 
 
 impl Shell {
-    /// Pendant `secs` secondes, réduit la fenêtre du client Steam dès qu'il est connecté (il prend sinon le focus du jeu).
+    /// Attend jusqu'à `secs` secondes que la fenêtre du client Steam apparaisse (il prend sinon le
+    /// focus du jeu) et la réduit — une seule fois, comme Playnite : la réduire en boucle a déjà piégé
+    /// un dialogue qui réclamait une action de l'utilisateur (connexion…) en le refermant aussitôt rouvert.
     pub fn steam_keep(&self, secs: u64) {
         self.steam_until.set(Some(std::time::Instant::now() + Duration::from_secs(secs)));
         if !self.steam_timer.running() {
@@ -510,16 +551,13 @@ impl Shell {
     }
 
     fn steam_keep_tick(&self) {
-        match self.steam_until.get() {
-            Some(t) if std::time::Instant::now() < t => {
-                if stores::steam_client_user() != 0 {
-                    wm::minimize_windows_of(&["steam.exe", "steamwebhelper.exe"]);
-                }
-            }
-            _ => {
-                self.steam_until.set(None);
-                self.steam_timer.stop();
-            }
+        let done = match self.steam_until.get() {
+            Some(t) if std::time::Instant::now() < t => stores::steam_client_user() != 0 && wm::minimize_windows_of(&["steam.exe", "steamwebhelper.exe"]) > 0,
+            _ => true,
+        };
+        if done {
+            self.steam_until.set(None);
+            self.steam_timer.stop();
         }
     }
 }
@@ -558,5 +596,6 @@ impl Shell {
         self.push_notif(&tr("Téléchargements"), &tr("Téléchargement annulé"));
         self.ui.set_dlbtn(false);
         self.dl_refresh();
+        self.rebuild();
     }
 }

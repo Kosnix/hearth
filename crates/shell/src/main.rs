@@ -114,6 +114,9 @@ struct Shell {
     anim_n: Cell<u32>,
     ext_game: RefCell<Option<ExtGame>>,
     ext_pending: Cell<Option<(usize, std::time::Instant)>>,
+    /// Fenêtre étrangère (ni Hearth, ni un jeu suivi) actuellement au premier plan et depuis quand :
+    /// voir `reclaim_focus`.
+    foreign_fg: Cell<Option<(isize, std::time::Instant)>>,
     last_tab: Cell<i32>,
     /// Dernier ordre reçu au clavier physique (`NavKeys`) : pour savoir si c'est le clavier ou la manette
     /// qui a servi en dernier (affichage des indications à l'écran, voir `Pad.kind` == 2).
@@ -142,6 +145,10 @@ struct Shell {
     updates: RefCell<Vec<String>>,
     hearth_update: RefCell<Option<(String, String)>>,
     hearth_prompted: Cell<bool>,
+    /// Octets reçus / total, pendant le téléchargement de la mise à jour de Hearth (affiché dans
+    /// Téléchargements comme les jeux) ; `None` hors téléchargement.
+    hearth_dl: RefCell<Option<std::sync::Arc<(std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64)>>>,
+    hearth_dl_timer: slint::Timer,
     sound_catalog: RefCell<Vec<sounds::Pack>>,
     sound_list: RefCell<Vec<sounds::Pack>>,
     prompted: RefCell<std::collections::HashSet<String>>,
@@ -256,6 +263,7 @@ fn main() -> Result<(), slint::PlatformError> {
         anim_n: Cell::new(0),
         ext_game: RefCell::new(None),
         ext_pending: Cell::new(None),
+        foreign_fg: Cell::new(None),
         last_tab: Cell::new(0),
         kb_last: Cell::new(None),
         bt_unpair_id: RefCell::new(None),
@@ -281,6 +289,8 @@ fn main() -> Result<(), slint::PlatformError> {
         updates: RefCell::new(vec![]),
         hearth_update: RefCell::new(None),
         hearth_prompted: Cell::new(false),
+        hearth_dl: RefCell::new(None),
+        hearth_dl_timer: slint::Timer::default(),
         sound_catalog: RefCell::new(vec![]),
         sound_list: RefCell::new(vec![]),
         prompted: RefCell::new(Default::default()),
@@ -1367,6 +1377,7 @@ impl Shell {
     /// Chaque seconde : jeux terminés, et ré-application du sans-bordure (certains jeux le retirent).
     fn tick(&self) {
         self.oobe_guard();
+        self.reclaim_focus();
         if desktop::request_file().exists() {
             let _ = std::fs::remove_file(desktop::request_file());
             self.desktop_open();
@@ -1427,6 +1438,39 @@ impl Shell {
         }
     }
 
+    /// Filet de sécurité : si une fenêtre qui ne nous appartient pas reste au premier plan plus de
+    /// quelques secondes sans qu'aucun jeu ni lancement ne soit en cours, Hearth reprend le focus
+    /// seul (ex. notification Windows, fenêtre orpheline…) plutôt que de rester muet indéfiniment
+    /// (la manette, lue même en arrière-plan, n'agit que si `foreground_is_mine()`, voir `nav`).
+    /// Un jeu suivi (job ou lancé par une boutique) ou un lancement en cours (`ext_pending`, qui
+    /// couvre aussi le cas où le client de la boutique réclame une action de l'utilisateur) ne sont
+    /// jamais concurrencés.
+    fn reclaim_focus(&self) {
+        if wm::foreground_is_mine() {
+            self.foreign_fg.set(None);
+            return;
+        }
+        let fg = wm::foreground();
+        let tracked = self.running.borrow().iter().any(|r| r.session.owns(fg))
+            || self.ext_game.borrow().as_ref().is_some_and(|e| e.hwnd == fg)
+            || self.ext_pending.get().is_some();
+        if tracked {
+            self.foreign_fg.set(None);
+            return;
+        }
+        let now = std::time::Instant::now();
+        match self.foreign_fg.get() {
+            Some((h, since)) if h == fg.0 as isize && now.duration_since(since) > Duration::from_secs(3) => {
+                if let Some(m) = wm::find_window(MAIN_TITLE) {
+                    wm::focus(m);
+                }
+                self.foreign_fg.set(None);
+            }
+            Some((h, since)) if h == fg.0 as isize => self.foreign_fg.set(Some((h, since))),
+            _ => self.foreign_fg.set(Some((fg.0 as isize, now))),
+        }
+    }
+
     fn hide_guide(&self) {
         input::set_capture(false);
         if let Some(h) = wm::find_window(GUIDE_TITLE) {
@@ -1437,8 +1481,13 @@ impl Shell {
 
     /// Ajoute une notification au centre, au menu en jeu, et l'affiche en toast quelques secondes.
     fn push_notif(&self, title: &str, text: &str) {
+        self.push_notif_ex(title, text, false);
+    }
+
+    /// `pinned` : ne se supprime pas (seule ou via « tout effacer ») — voir `notif_action`.
+    pub(crate) fn push_notif_ex(&self, title: &str, text: &str, pinned: bool) {
         let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
-        self.notifs.insert(0, Notif { title: title.into(), text: text.into(), time: format!("{:02}:{:02}", t.wHour, t.wMinute).into(), unread: true });
+        self.notifs.insert(0, Notif { title: title.into(), text: text.into(), time: format!("{:02}:{:02}", t.wHour, t.wMinute).into(), unread: true, pinned });
         if self.notifs.row_count() > 30 {
             self.notifs.remove(30);
         }
@@ -1482,10 +1531,18 @@ impl Shell {
         self.ui.set_toast_on(false);
     }
 
+    /// Geste « effacer » sur une notification. Pour celle de mise à jour Hearth (épinglée, tant que la
+    /// mise à jour n'est pas installée) : installe au lieu de supprimer — « tout effacer » l'épargne.
     fn notif_action(&self, i: i32) {
         if i < 0 {
-            self.notifs.set_vec(vec![]);
+            let keep: Vec<Notif> = self.notifs.iter().filter(|n| n.pinned).collect();
+            self.notifs.set_vec(keep);
         } else if (i as usize) < self.notifs.row_count() {
+            if self.notifs.row_data(i as usize).is_some_and(|n| n.pinned) {
+                self.hearth_update_install();
+                self.update_unread();
+                return;
+            }
             self.notifs.remove(i as usize);
         }
         self.update_unread();
@@ -2062,7 +2119,23 @@ impl Shell {
             store: if g.store.is_empty() { tr("Local") } else { g.store.clone() }.into(),
             played: playtime::played_in(pt, &playtime_key(g)).into(),
             lastp: playtime::last_in(pt, &playtime_key(g)).into(),
+            dl_pct: self.dl_pct_of(g),
         }
+    }
+
+    /// Progression (0..100) du téléchargement SteamCMD en cours de ce jeu, -1 sinon.
+    fn dl_pct_of(&self, g: &Game) -> i32 {
+        let Some(appid) = scmd::appid_of(&g.id) else { return -1 };
+        self.dl
+            .borrow()
+            .iter()
+            .find(|d| d.appid == appid)
+            .and_then(|d| match d.state {
+                scmd::DlState::Active => Some(d.pct as i32),
+                scmd::DlState::Queued => Some(0),
+                _ => None,
+            })
+            .unwrap_or(-1)
     }
 
     fn tile_for(&self, gid: usize) -> Option<Tile> {
@@ -2084,15 +2157,16 @@ impl Shell {
         let query = self.lib_query.borrow().to_lowercase();
         let (mut a, mut b): (Vec<(u64, Tile)>, Vec<Tile>) = (vec![], vec![]);
         for (i, g) in self.games.borrow().iter().enumerate() {
-            if g.hidden {
-                continue;
-            }
             let t = self.make_tile(i, g, running.contains(&i), &pt);
+            let downloading = t.dl_pct >= 0;
             // Onglet Tout : tous les jeux (installés ou non) ; sinon seulement ceux à installer.
-            if (g.install || all_tab) && (query.is_empty() || t.name.to_lowercase().contains(&query)) {
+            // Un jeu caché n'est retiré que de Jeux : il reste dans Bibliothèque, seul endroit
+            // d'où le réafficher (sinon aucun des deux onglets ne le montre plus). Un jeu en cours de
+            // téléchargement (SteamCMD) passe dans Jeux avec son anneau de progression, pas Bibliothèque.
+            if (g.install || g.hidden || all_tab) && !downloading && (query.is_empty() || t.name.to_lowercase().contains(&query)) {
                 b.push(t.clone());
             }
-            if !g.install {
+            if (!g.install || downloading) && !g.hidden {
                 a.push((playtime::last(&playtime_key(g), &pt), t));
             }
         }
@@ -2127,6 +2201,7 @@ impl Shell {
             }
         }
         *self.games.borrow_mut() = new;
+        self.prune_updates();
         self.rebuild();
         self.refresh_store_status();
     }
