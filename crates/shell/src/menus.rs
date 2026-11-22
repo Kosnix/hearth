@@ -24,6 +24,7 @@ pub enum Act {
     CancelDl(usize),
     SelfUpdate,
     ConnectStore(usize),
+    ConfirmBtUnpair,
     Cancel,
 }
 
@@ -145,6 +146,12 @@ impl Shell {
                 self.ui.set_zone(back);
                 if let Some(id) = self.games.borrow().get(g).map(|g| g.id.clone()) {
                     self.steam_install(&id);
+                }
+            }
+            Act::ConfirmBtUnpair => {
+                self.ui.set_zone(back);
+                if let Some((id, name)) = self.bt_unpair_id.borrow_mut().take() {
+                    self.bt_unpair_do(id, name);
                 }
             }
         }

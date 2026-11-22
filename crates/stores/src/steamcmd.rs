@@ -216,6 +216,16 @@ pub fn session_ok(user: &str) -> bool {
     run(&["+@NoPromptForPassword", "1", "+login", user, "+quit"]).is_ok_and(|o| o.contains("Logged in OK") || o.contains("Waiting for user info"))
 }
 
+/// Dernière ligne « …progress: 42.57 (123456 / 290000)… » du journal SteamCMD, si présente : c'est la
+/// seule source qui avance en continu (le manifeste `.acf`, lui, ne se met à jour qu'à des étapes,
+/// parfois seulement au tout début et à la toute fin — d'où une barre qui semblait sauter de 0 à 100 %).
+fn last_progress(log: &str) -> Option<(f64, f64)> {
+    let rest = &log[log.rfind("progress: ")? + "progress: ".len()..];
+    let inner = &rest[rest.find('(')? + 1..rest.find(')')?];
+    let (done, total) = inner.split_once('/')?;
+    Some((done.trim().parse().ok()?, total.trim().parse().ok()?))
+}
+
 /// Installe ou met à jour un jeu (bloquant, long). `pid` reçoit le processus (pour annuler), `progress` le pourcentage.
 pub fn install(user: &str, appid: &str, pid: &AtomicU32, progress: impl Fn(f64, f64)) -> Result<(), String> {
     ensure()?;
@@ -224,23 +234,26 @@ pub fn install(user: &str, appid: &str, pid: &AtomicU32, progress: impl Fn(f64, 
     pid.store(child.id(), Ordering::SeqCst);
     let mut last = -1.0f64;
     loop {
-        std::thread::sleep(std::time::Duration::from_millis(1000));
-        // Progression lue dans le manifeste (octets téléchargés / à télécharger).
-        if let Some(m) = manifest(appid) {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let s = console_since(offset);
+        // Progression en direct depuis le journal ; repli sur le manifeste si le journal n'en dit rien
+        // encore (début de partie, ou jeu déjà entièrement validé sans retéléchargement).
+        let found = last_progress(&s).or_else(|| {
+            let m = manifest(appid)?;
             let n = |k: &str| field(&m, k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
             let (total, done) = (n("BytesToDownload"), n("BytesDownloaded"));
-            if total > 0.0 {
-                if done != last {
-                    last = done;
-                    progress(done, total);
-                }
+            (total > 0.0).then_some((done, total))
+        });
+        if let Some((done, total)) = found {
+            if done != last {
+                last = done;
+                progress(done, total);
             }
         }
         if matches!(child.try_wait(), Ok(Some(_))) {
             break;
         }
         // Connexion refusée en cours de route : inutile d'attendre.
-        let s = console_since(offset);
         if s.contains("error (invalid password") || s.contains("error (no cached") {
             let _ = child.kill();
             break;

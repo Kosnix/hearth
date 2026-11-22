@@ -29,7 +29,8 @@ fn command_output(cmd: &str) -> String {
 
 pub mod bluetooth {
     use windows::Devices::Bluetooth::{BluetoothConnectionStatus, BluetoothDevice};
-    use windows::Devices::Enumeration::{DeviceInformation, DevicePairingResultStatus, DeviceUnpairingResultStatus};
+    use windows::Devices::Enumeration::{DeviceInformation, DevicePairingKinds, DevicePairingResultStatus, DevicePairingRequestedEventArgs, DeviceUnpairingResultStatus};
+    use windows::Foundation::TypedEventHandler;
 
     pub struct Dev {
         pub id: String,
@@ -86,9 +87,22 @@ pub mod bluetooth {
         out
     }
 
+    /// Appairage « personnalisé » plutôt que `PairAsync()` nu : une manette (ou tout appareil « appuyer
+    /// pour confirmer ») attend un accord explicite de l'appli via l'événement `PairingRequested`, que
+    /// l'appairage simple ne fournit pas — sans ça, Windows attend une confirmation qui ne vient jamais
+    /// et l'appairage échoue ou expire (c'est ce que fait l'appli Paramètres de Windows en coulisses).
     pub fn pair(id: &str) -> Result<(), String> {
         let info = DeviceInformation::CreateFromIdAsync(&id.into()).and_then(|a| a.join()).map_err(|e| e.to_string())?;
-        let r = info.Pairing().and_then(|p| p.PairAsync()).and_then(|a| a.join()).map_err(|e| e.to_string())?;
+        let custom = info.Pairing().and_then(|p| p.Custom()).map_err(|e| e.to_string())?;
+        custom
+            .PairingRequested(&TypedEventHandler::new(|_, args: windows_core::Ref<'_, DevicePairingRequestedEventArgs>| {
+                if let Some(args) = args.as_ref() {
+                    let _ = args.Accept();
+                }
+                Ok(())
+            }))
+            .map_err(|e| e.to_string())?;
+        let r = custom.PairAsync(DevicePairingKinds::ConfirmOnly).and_then(|a| a.join()).map_err(|e| e.to_string())?;
         match r.Status() {
             Ok(DevicePairingResultStatus::Paired | DevicePairingResultStatus::AlreadyPaired) => Ok(()),
             Ok(s) => Err(format!("{s:?}")),

@@ -118,6 +118,8 @@ struct Shell {
     /// Dernier ordre reçu au clavier physique (`NavKeys`) : pour savoir si c'est le clavier ou la manette
     /// qui a servi en dernier (affichage des indications à l'écran, voir `Pad.kind` == 2).
     kb_last: Cell<Option<std::time::Instant>>,
+    /// Appareil Bluetooth (identifiant, nom) à oublier, en attente de confirmation (`Act::ConfirmBtUnpair`).
+    bt_unpair_id: RefCell<Option<(String, String)>>,
     profile_rows: Rc<VecModel<ProfileRow>>,
     kb_profile: Cell<bool>,
     new_profile: RefCell<String>,
@@ -256,6 +258,7 @@ fn main() -> Result<(), slint::PlatformError> {
         ext_pending: Cell::new(None),
         last_tab: Cell::new(0),
         kb_last: Cell::new(None),
+        bt_unpair_id: RefCell::new(None),
         profile_rows: Rc::new(VecModel::default()),
         kb_profile: Cell::new(false),
         new_profile: RefCell::new(String::new()),
@@ -822,9 +825,13 @@ impl Shell {
             return;
         }
         if nav != Nav::Guide {
-            // La manette est lue même en arrière-plan : n'agir que si la console est visible
-            // au premier plan, sinon on navigue à l'aveugle (jusqu'à « Veille »…).
-            if wm::find_window(MAIN_TITLE).is_some_and(|h| h == wm::foreground()) {
+            // La manette est lue même en arrière-plan : n'agir que si une fenêtre à nous est au premier
+            // plan, sinon on navigue à l'aveugle (jusqu'à « Veille »…). Vérifier que c'est *exactement*
+            // la fenêtre principale (par titre) a déjà fait rater le retour de focus manette après un
+            // jeu : juste après `home()`, une autre fenêtre à nous peut brièvement être rapportée comme
+            // premier plan par Windows alors que le clavier, lui, répond déjà (focus clavier et fenêtre
+            // au premier plan ne sont pas rigoureusement la même chose).
+            if wm::foreground_is_mine() {
                 self.nav_with_sound(nav as i32);
             }
             return;
@@ -999,19 +1006,8 @@ impl Shell {
                 });
             }
             settings::Outcome::BtUnpair(id, name) => {
-                std::thread::spawn(move || {
-                    let r = system::bluetooth::unpair(&id);
-                    let fresh = settings::fetch(3);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        with_shell(|s| {
-                            match r {
-                                Ok(()) => s.push_notif("Bluetooth", &format!("{name} : {}", tr("oublié"))),
-                                Err(e) => s.push_notif("Bluetooth", &format!("{name} : {e}")),
-                            }
-                            s.fetched(3, fresh);
-                        })
-                    });
-                });
+                *self.bt_unpair_id.borrow_mut() = Some((id, name.clone()));
+                self.menu_show(format!("{} {name} ?", tr("Oublier")), vec![(tr("Confirmer"), menus::Act::ConfirmBtUnpair), (tr("Annuler"), menus::Act::Cancel)]);
             }
             settings::Outcome::CheckUpdates(drivers) => {
                 std::thread::spawn(move || {
@@ -1190,6 +1186,23 @@ impl Shell {
     fn set_clock(&self) {
         let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
         self.ui.set_clock(format!("{:02}:{:02}", t.wHour, t.wMinute).into());
+    }
+
+    /// Oublie un appareil Bluetooth (après confirmation, voir `Act::ConfirmBtUnpair`).
+    fn bt_unpair_do(&self, id: String, name: String) {
+        std::thread::spawn(move || {
+            let r = system::bluetooth::unpair(&id);
+            let fresh = settings::fetch(3);
+            let _ = slint::invoke_from_event_loop(move || {
+                with_shell(|s| {
+                    match r {
+                        Ok(()) => s.push_notif("Bluetooth", &format!("{name} : {}", tr("oublié"))),
+                        Err(e) => s.push_notif("Bluetooth", &format!("{name} : {e}")),
+                    }
+                    s.fetched(3, fresh);
+                })
+            });
+        });
     }
 
     fn home(&self) {
@@ -1657,13 +1670,21 @@ impl Shell {
             let featured = query.is_none();
             let listed = offers.clone();
             let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.offers_listed(gen, featured, listed)));
+            // Visuel manquant à la boutique d'origine (jeu trop récent/confidentiel) : repli sur
+            // SteamGridDB, comme déjà fait pour la bibliothèque possédée (si une clé est enregistrée).
+            let sgdb_key = i18n::pref("steamgriddb_key").filter(|k| !k.trim().is_empty());
             // Les images arrivent ensuite, en parallèle, et remplissent les cartes au fur et à mesure.
-            let jobs: Vec<(usize, Vec<String>)> = offers.iter().enumerate().map(|(i, o)| (i, o.images.clone())).collect();
+            let jobs: Vec<(usize, String, Vec<String>)> = offers.iter().enumerate().map(|(i, o)| (i, o.title.clone(), o.images.clone())).collect();
             std::thread::scope(|sc| {
                 for chunk in jobs.chunks(jobs.len().div_ceil(6).max(1)) {
+                    let sgdb_key = sgdb_key.clone();
                     sc.spawn(move || {
-                        for (i, imgs) in chunk {
-                            if let Some(p) = stores::fetch_first(imgs).and_then(|p| imgload::decode(&p, 300, 450)) {
+                        for (i, title, imgs) in chunk {
+                            let found = stores::fetch_first(imgs).or_else(|| {
+                                let key = sgdb_key.as_deref()?;
+                                stores::search_sgdb(title, key).first().and_then(|o| stores::fetch_first(&o.images))
+                            });
+                            if let Some(p) = found.and_then(|p| imgload::decode(&p, 300, 450)) {
                                 let i = *i;
                                 let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.offer_art(gen, featured, i, p)));
                             }
