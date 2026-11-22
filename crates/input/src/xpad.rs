@@ -88,7 +88,7 @@ fn read() -> Option<XGamepad> {
     let mut b = vec![false; nb as usize];
     let mut s = vec![Hat::Center; ns as usize];
     let mut a = vec![0.5; na as usize];
-    raw.GetCurrentReading(&mut b, &mut s, &mut a).map_err(|_| crate::sony_invalidate()).ok()?;
+    raw.GetCurrentReading(&mut b, &mut s, &mut a).map_err(|_| crate::sony_invalidate(&raw)).ok()?;
     let on = |i: usize| b.get(i) == Some(&true);
     let mut raw_bits = 0u16;
     for (i, bit) in [(1, 0x1000), (2, 0x2000), (0, 0x4000), (3, 0x8000), (4, 0x0100), (5, 0x0200), (8, 0x0020), (9, 0x0010), (10, 0x0040), (11, 0x0080)] {

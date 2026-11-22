@@ -71,7 +71,7 @@ fn read() -> Option<Raw> {
     let mut b = vec![false; nb as usize];
     let mut s = vec![Hat::Center; ns as usize];
     let mut a = vec![0.5; na as usize];
-    raw.GetCurrentReading(&mut b, &mut s, &mut a).map_err(|_| crate::sony_invalidate()).ok()?;
+    raw.GetCurrentReading(&mut b, &mut s, &mut a).map_err(|_| crate::sony_invalidate(&raw)).ok()?;
     Some(Raw { b, a })
 }
 
