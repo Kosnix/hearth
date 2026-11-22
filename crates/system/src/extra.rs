@@ -69,22 +69,48 @@ pub mod bluetooth {
         ["wireless controller", "dualsense", "dualshock", "xbox", "gamepad", "controller"].iter().any(|k| n.contains(k))
     }
 
-    /// Manettes (DualSense, DualShock, Xbox…) à proximité et non appairées : Bluetooth classique et basse consommation (Xbox).
-    pub fn nearby_controllers() -> Vec<Dev> {
+    /// Recherche d'appareils Bluetooth à proximité, en direct (`DeviceWatcher`) : chaque appareil est
+    /// remonté dès sa découverte via `on_found`, pas seulement une fois les `secs` secondes écoulées
+    /// (contrairement à `devices(false)`, qui prend une photo d'un coup — d'où une liste qui ne se
+    /// remplissait qu'à la toute fin de la recherche). Couvre le Bluetooth classique et basse
+    /// consommation (nécessaire pour les manettes Xbox, qui s'annoncent en BLE).
+    pub fn scan(secs: u64, on_found: impl Fn(Dev) + Send + Sync + 'static) {
         use windows::Devices::Bluetooth::BluetoothLEDevice;
-        let mut out: Vec<Dev> = devices(false).into_iter().filter(|d| is_controller(&d.name)).collect();
-        if let Ok(sel) = BluetoothLEDevice::GetDeviceSelectorFromPairingState(false) {
-            if let Some(list) = DeviceInformation::FindAllAsyncAqsFilter(&sel).ok().and_then(|a| a.join().ok()) {
-                for d in list {
-                    let (Ok(name), Ok(id)) = (d.Name(), d.Id()) else { continue };
-                    let (name, id) = (name.to_string(), id.to_string());
-                    if is_controller(&name) && !out.iter().any(|o| o.id == id) {
-                        out.push(Dev { id, name, paired: false, connected: false });
+        use windows::Devices::Enumeration::DeviceWatcher;
+        let on_found = std::sync::Arc::new(on_found);
+        let mut watchers: Vec<DeviceWatcher> = vec![];
+        let selectors = [BluetoothDevice::GetDeviceSelectorFromPairingState(false).ok(), BluetoothLEDevice::GetDeviceSelectorFromPairingState(false).ok()];
+        for sel in selectors.into_iter().flatten() {
+            let Ok(w) = DeviceInformation::CreateWatcherAqsFilter(&sel) else { continue };
+            let cb = on_found.clone();
+            let handler = TypedEventHandler::new(move |_, info: windows_core::Ref<'_, DeviceInformation>| {
+                if let Some(info) = info.as_ref() {
+                    if let (Ok(name), Ok(id)) = (info.Name(), info.Id()) {
+                        let name = name.to_string();
+                        if !name.is_empty() {
+                            cb(Dev { id: id.to_string(), name, paired: false, connected: false });
+                        }
                     }
                 }
+                Ok(())
+            });
+            if w.Added(&handler).is_ok() && w.Start().is_ok() {
+                watchers.push(w);
             }
         }
-        out
+        std::thread::sleep(std::time::Duration::from_secs(secs));
+        for w in &watchers {
+            let _ = w.Stop();
+        }
+    }
+
+    /// Manettes (DualSense, DualShock, Xbox…) à proximité et non appairées, en direct (voir `scan`).
+    pub fn scan_controllers(secs: u64, on_found: impl Fn(Dev) + Send + Sync + 'static) {
+        scan(secs, move |d| {
+            if is_controller(&d.name) {
+                on_found(d);
+            }
+        });
     }
 
     /// Appairage « personnalisé » plutôt que `PairAsync()` nu : une manette (ou tout appareil « appuyer

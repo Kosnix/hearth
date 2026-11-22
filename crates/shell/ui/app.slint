@@ -2803,8 +2803,10 @@ export component Splash inherits Window {
     in property <string> launch-status; // « Démarrage de X », déjà traduit côté Rust
     in property <float> launch-t: 0; // 0..1 : progression de l'animation d'entrée
     in property <float> launch-spin: 0; // degrés
-    // Rien d'assez propre à montrer (pas de logo, pas d'image assez grande) : juste la roue, au centre, avec le nom.
+    // Rien d'assez propre à montrer (pas de logo, pas d'image assez grande) : la jaquette si on l'a (quasiment
+    // toujours), sinon juste la roue, au centre, avec le nom.
     property <bool> plain: launch-logo.width == 0 && launch-art.width == 0;
+    property <bool> plain-cover: plain && launch-cover.width > 0;
     title: "Hearth Splash";
     no-frame: true;
     always-on-top: true;
@@ -2832,9 +2834,27 @@ export component Splash inherits Window {
         image-fit: cover;
         opacity: launch-t;
     }
+    // Jaquette bien visible (comme sur l'accueil), au-dessus du nom : évite l'écran quasi vide quand le
+    // jeu n'a ni logo ni assez grand visuel d'arrière-plan.
+    if plain-cover: Rectangle {
+        x: (parent.width - 340px) / 2;
+        y: plain-cover-y;
+        width: 340px;
+        height: 510px;
+        border-radius: 18px;
+        clip: true;
+        opacity: launch-t;
+        Image {
+            width: 100%;
+            height: 100%;
+            source: launch-cover;
+            image-fit: cover;
+        }
+    }
+    property <length> plain-cover-y: root.height / 2 - 330px;
     if plain: Text {
         x: 0px;
-        y: parent.height / 2 + 110px;
+        y: plain-cover ? plain-cover-y + 548px : parent.height / 2 + 110px;
         width: parent.width;
         horizontal-alignment: center;
         text: launch-status;
@@ -2846,15 +2866,16 @@ export component Splash inherits Window {
     // Léger voile pour que la roue reste visible sur n'importe quel fond.
     Rectangle {
         x: plain ? (parent.width - 700px) / 2 : parent.width - 700px;
-        y: plain ? parent.height / 2 - 260px : parent.height - 500px;
+        y: plain ? (plain-cover ? plain-cover-y + 580px : parent.height / 2 - 260px) : parent.height - 500px;
         width: 700px;
         height: 500px;
         background: @radial-gradient(circle, #000000a0 0%, #00000000 70%);
     }
-    // Roue de chargement : douze points qui s'estompent en tournant. Au centre sans visuel, en coin sinon.
+    // Roue de chargement : douze points qui s'estompent en tournant. Au centre sans visuel (sous la
+    // jaquette et le nom s'il y en a une), en coin sinon.
     for i in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]: Rectangle {
         x: (plain ? parent.width / 2 : parent.width - 170px) + 46px * cos(i * 30deg) - 9px;
-        y: (plain ? parent.height / 2 - 10px : parent.height - 170px) + 46px * sin(i * 30deg) - 9px;
+        y: (plain ? (plain-cover ? plain-cover-y + 630px : parent.height / 2 - 10px) : parent.height - 170px) + 46px * sin(i * 30deg) - 9px;
         width: 18px;
         height: 18px;
         border-radius: 9px;

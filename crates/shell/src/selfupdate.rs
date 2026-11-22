@@ -80,7 +80,8 @@ impl Shell {
         );
     }
 
-    /// Après confirmation : télécharge l'installateur, le lance en mode silencieux (il relance Hearth).
+    /// Après confirmation : télécharge l'installateur, le lance en mode silencieux (il redémarre le PC
+    /// une fois l'installation faite ; Hearth, shell de la session, se relance tout seul après).
     pub fn hearth_update_install(&self) {
         let Some((_, url)) = self.hearth_update.borrow().clone() else { return };
         self.push_notif("Hearth", &tr("Téléchargement de la mise à jour…"));

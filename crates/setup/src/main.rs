@@ -28,10 +28,11 @@ fn installed_exe() -> PathBuf {
 }
 
 fn main() {
-    // `/S` : mise à jour silencieuse (déjà confirmée dans Hearth) : ni question ni message, et la console est relancée.
+    // `/S` : mise à jour silencieuse (déjà confirmée dans Hearth) : ni question ni message, puis redémarrage
+    // (repart sur une session propre ; Hearth, shell de la session, se relance tout seul à l'ouverture).
     if std::env::args().skip(1).any(|a| a.eq_ignore_ascii_case("/S") || a.eq_ignore_ascii_case("--silent")) {
         if run().is_ok() {
-            let _ = Command::new(installed_exe()).spawn();
+            let _ = Command::new("shutdown").args(["/r", "/t", "5"]).spawn();
         }
         return;
     }

@@ -126,6 +126,8 @@ pub enum Outcome {
     BtScan,
     BtPair(String, String),
     BtUnpair(String, String),
+    /// « Ajouter une manette via Bluetooth » (catégorie Manettes) : bascule sur la catégorie Bluetooth.
+    OpenBluetooth,
     InstallClient(String),
     Admin,
     #[allow(dead_code)]
@@ -272,6 +274,19 @@ impl Settings {
         s.bt_found = found;
     }
 
+    /// Un appareil trouvé pendant la recherche, ajouté dès sa découverte (pas à la fin de la recherche).
+    pub fn bt_found_push(&self, d: Dev) {
+        let mut s = self.state.borrow_mut();
+        if !s.bt_found.iter().any(|o| o.id == d.id) {
+            s.bt_found.push(d);
+        }
+    }
+
+    /// Fin de la recherche (délai écoulé) : arrête l'indication « Recherche en cours… ».
+    pub fn bt_scan_done(&self) {
+        self.state.borrow_mut().scanning = false;
+    }
+
     /// Reconstruit les lignes ; renvoie le texte d'aide.
     pub fn refresh(&self, cat: i32) -> String {
         let s = self.state.borrow();
@@ -337,12 +352,17 @@ impl Settings {
                 v
             }
             4 if s.loading => vec![row("Lecture…", String::new(), false)],
-            4 if s.data.pads.is_empty() => vec![row("Aucune manette détectée", String::new(), false)],
             4 => {
                 if s.data.pads.len() > 1 {
                     hint = tr("‹ › pour changer l'ordre : la première est la manette transmise aux jeux.");
                 }
-                s.data.pads.iter().map(|p| row(&p.name, p.battery.map_or(tr("Connectée"), |b| format!("{} · {b} %", tr("Connectée"))), s.data.pads.len() > 1)).collect()
+                let mut v: Vec<SettingRow> = if s.data.pads.is_empty() {
+                    vec![row("Aucune manette détectée", String::new(), false)]
+                } else {
+                    s.data.pads.iter().map(|p| row(&p.name, p.battery.map_or(tr("Connectée"), |b| format!("{} · {b} %", tr("Connectée"))), s.data.pads.len() > 1)).collect()
+                };
+                v.push(row("Ajouter une manette via Bluetooth", String::new(), false));
+                v
             }
             13 => {
                 hint = tr("Le thème s'applique tout de suite, à tout Hearth.");
@@ -419,6 +439,7 @@ impl Settings {
                 let ids: Vec<String> = s.data.pads.iter().map(|p| p.id.clone()).collect();
                 set_pad_order(&ids);
             }
+            (4, r, 0) if r as usize == s.data.pads.len().max(1) => out = Outcome::OpenBluetooth,
             (0, 5, 0) => out = Outcome::SoundPicker(false),
             (0, 6, 0) => out = Outcome::SoundPicker(true),
             (13, 0, d) if d != 0 => {

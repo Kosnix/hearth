@@ -937,6 +937,11 @@ impl Shell {
             settings::Outcome::LangChanged => self.refresh_lang(),
             settings::Outcome::Oobe => self.oobe_restart(),
             settings::Outcome::Desktop => self.desktop_open(),
+            settings::Outcome::OpenBluetooth => {
+                self.ui.set_cat(3);
+                self.ui.set_srow(0);
+                self.open_cat(3);
+            }
             settings::Outcome::Import => self.import_games(),
             settings::Outcome::SoundPicker(music) => self.sound_picker(music),
             settings::Outcome::ThemeChanged => {
@@ -978,10 +983,18 @@ impl Shell {
                 self.settings.set_message(tr("Recherche d'appareils Bluetooth…"));
                 self.open_cat_keep(3);
                 std::thread::spawn(|| {
-                    let found = system::bluetooth::devices(false);
+                    // Chaque appareil est ajouté à la liste dès sa découverte (pas à la fin des 15 s).
+                    system::bluetooth::scan(15, |d| {
+                        let _ = slint::invoke_from_event_loop(move || {
+                            with_shell(|s| {
+                                s.settings.bt_found_push(d);
+                                s.open_cat_keep(3);
+                            })
+                        });
+                    });
                     let _ = slint::invoke_from_event_loop(move || {
                         with_shell(|s| {
-                            s.settings.set_bt_found(found);
+                            s.settings.bt_scan_done();
                             s.settings.set_message(String::new());
                             s.open_cat_keep(3);
                         })

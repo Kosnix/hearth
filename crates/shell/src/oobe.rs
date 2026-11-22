@@ -120,11 +120,20 @@ impl Shell {
             if system::radio_ext::bluetooth_on() == Some(false) {
                 system::radio_ext::set_bluetooth(true);
             }
+            static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
             while SCAN.load(Ordering::Relaxed) {
-                for d in system::bluetooth::nearby_controllers() {
+                // Chaque manette est appairée dès sa découverte (DeviceWatcher), pas à la fin d'un
+                // cycle de recherche complet.
+                system::bluetooth::scan_controllers(4, |d| {
                     if !SCAN.load(Ordering::Relaxed) {
-                        break;
+                        return;
                     }
+                    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+                    if seen.contains(&d.id) {
+                        return;
+                    }
+                    seen.push(d.id.clone());
+                    drop(seen);
                     let _ = slint::invoke_from_event_loop({
                         let n = d.name.clone();
                         move || with_shell(|s| s.push_notif("Bluetooth", &format!("{} {n}…", tr("Appairage de"))))
@@ -141,13 +150,7 @@ impl Shell {
                             s.oobe_sync();
                         })
                     });
-                }
-                for _ in 0..8 {
-                    if !SCAN.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(500));
-                }
+                });
             }
         });
     }

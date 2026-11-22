@@ -3,10 +3,15 @@
 #![windows_subsystem = "windows"]
 
 use std::io::Write;
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 use std::{env, fs, thread};
+
+/// CREATE_NO_WINDOW : sans ça, une fenêtre PowerShell apparaît brièvement à l'écran et prend le focus
+/// (la manette ne répond plus tant qu'elle est devant, puisque Hearth n'est alors plus au premier plan).
+const NO_WINDOW: u32 = 0x0800_0000;
 
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
@@ -129,6 +134,7 @@ fn install() -> Result<String, String> {
         .arg(&exe)
         .arg("-Icon")
         .arg(data_dir().join("hearth.ico"))
+        .creation_flags(NO_WINDOW)
         .status();
     Ok(format!("Installé dans {}. Actif à la prochaine ouverture de session.", dst.display()))
 }
@@ -148,6 +154,7 @@ fn install_gamepad_driver() {
             "-Command",
             "Start-Process winget -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList 'install','-e','--id','ViGEm.ViGEmBus','--silent','--accept-package-agreements','--accept-source-agreements'",
         ])
+        .creation_flags(NO_WINDOW)
         .status();
 }
 
@@ -171,7 +178,7 @@ fn setup_admin() -> Result<String, String> {
          Register-ScheduledTask -TaskName {ELEVATED_TASK} -Action $a -Principal $p -Settings $s -Force | Out-Null",
         dst.display()
     );
-    let st = Command::new("powershell").args(["-NoProfile", "-Command", &ps]).status().map_err(|e| e.to_string())?;
+    let st = Command::new("powershell").args(["-NoProfile", "-Command", &ps]).creation_flags(NO_WINDOW).status().map_err(|e| e.to_string())?;
     if st.success() {
         Ok("Autorisation administrateur enregistrée.".into())
     } else {
@@ -224,7 +231,7 @@ fn uninstall() -> Result<String, String> {
     let r = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, &HSTRING::from(WINLOGON), w!("Shell")) };
     r.ok().map_err(|e| e.to_string())?;
     let ps = "Remove-Item ([Environment]::GetFolderPath('Desktop')+'\\Mode console.lnk') -EA SilentlyContinue";
-    let _ = Command::new("powershell").args(["-NoProfile", "-Command", ps]).status();
+    let _ = Command::new("powershell").args(["-NoProfile", "-Command", ps]).creation_flags(NO_WINDOW).status();
     Ok(format!(
         "Explorateur rétabli à la prochaine ouverture de session. Fichiers restants : {}",
         data_dir().display()
