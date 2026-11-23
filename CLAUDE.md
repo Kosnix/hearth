@@ -19,7 +19,8 @@ Hearth est installé comme shell de ce compte (`hearth.exe install`) : pas d'exp
 
 ## Pièges déjà rencontrés
 - `windows` 0.62 : l'attente bloquante d'un async WinRT est `.join()` (pas `.get()`) ; ne pas l'appeler sur le thread UI (STA).
-- Slint : `set_fullscreen()` avant `run()` est ignoré → `SLINT_FULLSCREEN=1` au démarrage.
+- Slint : `set_fullscreen()` avant `run()` est ignoré. Le vrai plein écran winit (`SLINT_FULLSCREEN`/`Fullscreen::Borderless`) redemande sa taille à l'OS de façon peu fiable (voir piège DPI ci-dessous) → fenêtre sans bordure dimensionnée nous-mêmes, recalée sur l'écran via `wm::fit_to_monitor` juste après création (même méthode que pour les jeux).
+- DPI/mise à l'échelle Windows (ex. 150 %) : le manifeste doit déclarer un vrai `dpiAwareness PerMonitorV2` (pas `dpiAware=false`), sinon les API Windows mentent de façon incohérente entre elles (certaines renvoient la résolution physique, d'autres une résolution virtualisée par le facteur d'échelle) → interface démesurée/superposée. `SLINT_SCALE_FACTOR=1` fige ensuite le rendu Slint à 1 pixel logique = 1 physique. **Piège critique** : `build.rs` doit avoir `cargo:rerun-if-changed=hearth.rc` et `hearth.manifest` explicitement — le premier `rerun-if-changed` émis dans le fichier désactive sinon la recompilation automatique sur changement pour tout le reste, et une modification du manifeste reste alors silencieusement non recompilée (vécu : plusieurs heures perdues avant de s'en apercevoir).
 - La DualSense n'est pas un `Gamepad` WGI : elle est lue via `RawGameController` (Croix=1, Rond=2, Options=9, PS=12, chapeau 0).
 - `SetForegroundWindow` depuis l'arrière-plan : maintenir Alt via `SendInput` (`wm::focus`).
 - Les apps intégrées (Bloc-notes, Paint…) sont des apps empaquetées : leurs fenêtres n'appartiennent pas au job ; pour tester l'encapsulation, utiliser un vrai exe Win32 (ex. `C:\Program Files\Git\usr\bin\mintty.exe`).
