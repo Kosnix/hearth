@@ -2,9 +2,12 @@
 //! fiable y compris en Bluetooth (où `RawGameController::TryGetBatteryReport` ment souvent) et couleur
 //! du bandeau lumineux. Offsets du protocole tirés du pilote noyau Linux `hid-playstation.c`
 //! (GPL-2.0-or-later, documentation du format uniquement, aucun code repris) :
-//! - Entrée USB (report 0x01, 64 o) : octet de statut batterie à l'offset 53 (bits 0-3 capacité,
-//!   bits 4-7 état de charge). Bluetooth (report 0x31, 78 o) : même structure décalée de 2 octets
-//!   (en-tête `seq_tag`/`tag` ajouté) : offset 55.
+//! - Entrée USB (report 0x01, 64 o) et Bluetooth (report 0x31, 78 o) : octet de statut batterie au
+//!   même offset 53 dans les deux cas (bits 0-3 capacité, bits 4-7 état de charge) — contrairement à
+//!   ce qu'on supposait au départ (en-tête Bluetooth décalant de 2 octets), vérifié en comparant au
+//!   pourcentage réel (manette branchée, 100 % affiché par l'appli PlayStation Accessories) : l'octet
+//!   lu jusqu'ici (55) était stable mais faux (toujours « 0x10 », jamais corrélé à la vraie charge),
+//!   l'octet 53 colle exactement (nibble haut 0x2 = pleine/chargée).
 //! - Sortie USB (report 0x02, 63 o) / Bluetooth (report 0x31, 78 o, CRC32 final amorcé par l'octet
 //!   0xA2) : bandeau lumineux activé par le bit 2 de `valid_flag1`, couleur aux octets 45/46/47 (USB)
 //!   ou 47/48/49 (Bluetooth).
@@ -27,8 +30,7 @@ pub fn battery() -> Option<(u32, bool)> {
     let mut buf = [0u8; 78];
     let n = dev.read_timeout(&mut buf, 200).ok()?;
     let status = match (n, buf[0]) {
-        (64, 0x01) => buf[53],
-        (78, 0x31) => buf[55],
+        (64, 0x01) | (78, 0x31) => buf[53],
         _ => return None,
     };
     let capacity = (status & 0x0F) as u32;
@@ -37,7 +39,10 @@ pub fn battery() -> Option<(u32, bool)> {
         return None;
     }
     let pct = if charging == 0x2 { 100 } else { (capacity * 10 + 5).min(100) };
-    Some((pct, charging == 0x1))
+    // 0x1 (charge active) et 0x2 (pleine, câble toujours branché) sont tous deux « en charge » à
+    // l'écran : à 100 % la manette ne tire plus de courant mais reste sur le câble, l'utilisateur
+    // s'attend à le voir plutôt qu'à retomber sur l'alerte batterie basse par défaut.
+    Some((pct, matches!(charging, 0x1 | 0x2)))
 }
 
 /// Couleur du bandeau lumineux (0-255 par canal). Au mieux : sans effet si la manette ne répond pas.
