@@ -186,6 +186,10 @@ struct Shell {
     splash_start: Cell<Option<std::time::Instant>>,
     splash_uri: Cell<bool>,
     splash_tile: Cell<Option<usize>>,
+    /// Tant que le guide est ouvert : le reclame régulièrement au premier plan (un jeu peut reprendre
+    /// la main sur l'ordre d'affichage après l'avoir ouvert — redimensionnement, changement de mode
+    /// plein écran, alt-tab — sans qu'aucun événement ne nous prévienne).
+    guide_watch: slint::Timer,
     /// Démarrage : les jaquettes de l'écran d'accueil sont décodées tout de suite (bloquant) pour éviter qu'elles apparaissent une par une.
     boot: Cell<bool>,
 }
@@ -338,6 +342,7 @@ fn main() -> Result<(), slint::PlatformError> {
         splash_start: Cell::new(None),
         splash_uri: Cell::new(false),
         splash_tile: Cell::new(None),
+        guide_watch: slint::Timer::default(),
         boot: Cell::new(true),
     });
     shell.ui.set_games(shell.tiles.clone().into());
@@ -1310,10 +1315,12 @@ impl Shell {
             // bloquée à `true` sans aucun guide visible pour la relâcher (Retour), la manette virtuelle
             // (ViGEm) arrêtant de transmettre au jeu pour de bon.
             input::set_capture(true);
-            let (x, y, _, height) = wm::primary_monitor();
-            let width = (GUIDE_WIDTH * self.ui.window().scale_factor()) as i32;
-            wm::show_overlay(h, x, y, width, height);
+            self.reassert_guide_overlay(h);
             self.guide.window().request_redraw();
+            // Reclame le premier plan tant que le guide reste ouvert : un jeu peut reprendre l'ordre
+            // d'affichage après coup (redimensionnement, bascule plein écran, alt-tab) sans nous
+            // prévenir ; rien ne remettait alors l'overlay devant avant la prochaine ouverture.
+            self.guide_watch.start(slint::TimerMode::Repeated, Duration::from_millis(200), || with_shell(|s| s.guide_watch_tick()));
         }
         // DDC/CI et WinRT sont lents : lecture en arrière-plan.
         let g = self.guide.as_weak();
@@ -1490,9 +1497,31 @@ impl Shell {
 
     fn hide_guide(&self) {
         input::set_capture(false);
+        self.guide_watch.stop();
         if let Some(h) = wm::find_window(GUIDE_TITLE) {
             wm::hide(h);
         }
+    }
+
+    fn reassert_guide_overlay(&self, h: wm::HWND) {
+        let (x, y, _, height) = wm::primary_monitor();
+        let width = (GUIDE_WIDTH * self.ui.window().scale_factor()) as i32;
+        wm::show_overlay(h, x, y, width, height);
+    }
+
+    /// Appelé toutes les 200 ms tant que le guide est ouvert : le remet au premier plan si un jeu a
+    /// repris la main sur l'ordre d'affichage entre-temps. S'arrête de lui-même si la fenêtre a
+    /// disparu ou si le guide n'est plus censé être visible (fermé par un autre chemin que `hide_guide`).
+    fn guide_watch_tick(&self) {
+        let Some(h) = wm::find_window(GUIDE_TITLE) else {
+            self.guide_watch.stop();
+            return;
+        };
+        if !wm::is_visible(h) {
+            self.guide_watch.stop();
+            return;
+        }
+        self.reassert_guide_overlay(h);
     }
 
 
