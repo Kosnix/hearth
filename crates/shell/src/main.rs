@@ -1222,11 +1222,14 @@ impl Shell {
             let net = system::net::current().map_or(-1, |l| if l.wifi { 1 } else { 0 });
             let vol = system::audio::volume().map_or(-1, |v| v as i32);
             // Manette « principale » (Réglages > Manettes) en premier, pour la pastille de la barre d'état.
-            let pad = settings::ordered_pads(system::pads::list()).first().map_or(-1, |p| p.battery.map_or(101, |b| b as i32));
+            let first = settings::ordered_pads(system::pads::list()).into_iter().next();
+            let pad = first.as_ref().map_or(-1, |p| p.battery.map_or(101, |b| b as i32));
+            let charging = first.is_some_and(|p| p.charging);
             let _ = w.upgrade_in_event_loop(move |ui| {
                 ui.set_st_net(net);
                 ui.set_st_vol(vol);
                 ui.set_st_pad(pad);
+                ui.set_st_pad_charging(charging);
             });
         });
     }

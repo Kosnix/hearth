@@ -574,6 +574,7 @@ export component App inherits Window {
     in property <int> st-net: -1; // -1 hors ligne, 0 Ethernet, 1 Wi-Fi
     in property <int> st-vol: -1;
     in property <int> st-pad: -1; // -1 aucune, 0..100 batterie, 101 inconnue
+    in property <bool> st-pad-charging: false; // DualSense uniquement (lecture HID brute)
     in-out property <bool> dlbtn: false; // focus sur le bouton Annuler du téléchargement sélectionné
     callback dl-cancel(int);
     in property <bool> oobe-on;
@@ -1291,19 +1292,29 @@ export component App inherits Window {
             }
         }
         if st-pad >= 0: Rectangle {
-            width: 44px + ptxt.preferred-width;
+            width: 44px + ptxt.preferred-width + (st-pad-charging ? 26px : 0px);
             Text {
                 x: 0px;
                 text: "\u{E7FC}";
                 font-family: Theme.icons;
                 font-size: 34px;
-                color: st-pad <= 15 ? Theme.danger : Theme.text;
+                // En charge : jamais la couleur « danger », même si le pourcentage reste bas le temps
+                // que la charge démarre (sinon une manette en train de charger a l'air en panne).
+                color: st-pad-charging ? Theme.ok : (st-pad <= 15 ? Theme.danger : Theme.text);
+            }
+            if st-pad-charging: Text {
+                x: 30px;
+                y: 2px;
+                text: "\u{E83E}";
+                font-family: Theme.icons;
+                font-size: 18px;
+                color: Theme.ok;
             }
             ptxt := Text {
-                x: 46px;
+                x: st-pad-charging ? 72px : 46px;
                 text: st-pad <= 100 ? st-pad + "%" : "";
                 font-size: 24px;
-                color: st-pad <= 15 ? Theme.danger : Theme.dim;
+                color: st-pad-charging ? Theme.dim : (st-pad <= 15 ? Theme.danger : Theme.dim);
             }
         }
     }

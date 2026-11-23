@@ -322,6 +322,8 @@ pub mod pads {
     pub struct Pad {
         pub name: String,
         pub battery: Option<u32>,
+        /// En charge (DualSense, lecture HID brute uniquement — Windows.Gaming.Input ne l'expose pas).
+        pub charging: bool,
         pub id: String,
         pub vendor: u16,
     }
@@ -348,7 +350,7 @@ pub mod pads {
                         });
                         // Stable d'une session à l'autre pour la même manette (branchement/appairage) ; à défaut, le nom.
                         let id = c.NonRoamableId().map(|s| s.to_string()).unwrap_or_else(|_| name.clone());
-                        Some(Pad { name, battery, id, vendor })
+                        Some(Pad { name, battery, charging: false, id, vendor })
                     })
                     .collect()
             })
@@ -358,8 +360,9 @@ pub mod pads {
         // risquer de l'attribuer à la mauvaise manette (la lecture HID ne dit pas laquelle elle a lue).
         let sony: Vec<usize> = pads.iter().enumerate().filter(|(_, p)| p.vendor == SONY_VENDOR).map(|(i, _)| i).collect();
         if let [i] = sony[..] {
-            if let Some((pct, _charging)) = crate::dualsense::battery() {
+            if let Some((pct, charging)) = crate::dualsense::battery() {
                 pads[i].battery = Some(pct);
+                pads[i].charging = charging;
             }
         }
         pads
