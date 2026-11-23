@@ -226,10 +226,16 @@ fn steam_running() -> bool {
 /// Renvoie faux si aucun compte n'a encore de configuration locale.
 pub fn disable_overlay() -> bool {
     let Some(r) = root() else { return false };
+    // Compte actif uniquement (capturé avant l'arrêt de Steam, qui remet le registre à 0) : sinon la
+    // coupure de la synchro cloud toucherait aussi les comptes d'autres personnes ayant déjà utilisé
+    // Steam sur cette session Windows, sans lien avec le jeu qu'on lance. 0 (Steam non lancé/déconnecté
+    // au moment de l'appel) : on retombe sur tous les comptes locaux, comme avant.
+    let active = client_user();
     let files: Vec<PathBuf> = std::fs::read_dir(r.join("userdata"))
         .into_iter()
         .flatten()
         .flatten()
+        .filter(|e| active == 0 || e.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) == Some(active))
         .map(|e| e.path().join("config").join("localconfig.vdf"))
         .filter(|p| p.exists())
         .collect();

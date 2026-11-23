@@ -489,7 +489,32 @@ mod netsh {
         s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
     }
 
+    /// Supprime les profils XML (mot de passe en clair) qu'un plantage entre l'écriture et la suppression
+    /// aurait pu laisser d'une précédente exécution.
+    fn clean_stale_wlan_profiles() {
+        let dir = std::env::temp_dir();
+        let Ok(rd) = std::fs::read_dir(&dir) else { return };
+        for e in rd.flatten() {
+            let n = e.file_name();
+            let n = n.to_string_lossy();
+            if n.starts_with("hearth-wlan-") && n.ends_with(".xml") {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+
+    /// Supprime le fichier à la destruction même si `run()` panique entre-temps (le mot de passe y est
+    /// en clair) : seule une coupure brutale du processus (crash, coupure de courant) peut encore le
+    /// laisser traîner, auquel cas `clean_stale_wlan_profiles` le rattrape à l'appel suivant.
+    struct TempProfile(std::path::PathBuf);
+    impl Drop for TempProfile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
     pub fn connect(ssid: &str, password: Option<&str>) -> bool {
+        clean_stale_wlan_profiles();
         if let Some(pw) = password {
             let xml = format!(
                 "<?xml version=\"1.0\"?><WLANProfile xmlns=\"http://www.microsoft.com/networking/WLAN/profile/v1\"><name>{n}</name><SSIDConfig><SSID><name>{n}</name></SSID></SSIDConfig><connectionType>ESS</connectionType><connectionMode>auto</connectionMode><MSM><security><authEncryption><authentication>WPA2PSK</authentication><encryption>AES</encryption><useOneX>false</useOneX></authEncryption><sharedKey><keyType>passPhrase</keyType><protected>false</protected><keyMaterial>{k}</keyMaterial></sharedKey></security></MSM></WLANProfile>",
@@ -500,8 +525,8 @@ mod netsh {
             if std::fs::write(&path, xml).is_err() {
                 return false;
             }
+            let _guard = TempProfile(path.clone());
             run(&format!("add profile filename=\"{}\"", path.display()));
-            let _ = std::fs::remove_file(&path);
         }
         let out = run(&format!("connect name=\"{ssid}\""));
         // Le message de succès varie selon la langue : on vérifie l'état réel après quelques secondes.

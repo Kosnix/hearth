@@ -32,6 +32,16 @@ pub fn background() {
 
 static SLOTS: (std::sync::Mutex<u32>, std::sync::Condvar) = (std::sync::Mutex::new(0), std::sync::Condvar::new());
 
+/// Rend le jeton même si `f()` panique (image corrompue décodée par un crate tiers) : sans ça, deux
+/// paniques suffiraient à épuiser les 2 jetons pour de bon, plus aucune jaquette ne chargerait jamais.
+struct Slot;
+impl Drop for Slot {
+    fn drop(&mut self) {
+        *SLOTS.0.lock().unwrap_or_else(|e| e.into_inner()) -= 1;
+        SLOTS.1.notify_one();
+    }
+}
+
 /// Au plus 2 décodages de fond en même temps (le rafraîchissement de tous les visuels lançait un thread par jeu).
 pub fn limited<T>(f: impl FnOnce() -> T) -> T {
     {
@@ -41,9 +51,7 @@ pub fn limited<T>(f: impl FnOnce() -> T) -> T {
         }
         *n += 1;
     }
+    let _slot = Slot;
     background();
-    let r = f();
-    *SLOTS.0.lock().unwrap_or_else(|e| e.into_inner()) -= 1;
-    SLOTS.1.notify_one();
-    r
+    f()
 }

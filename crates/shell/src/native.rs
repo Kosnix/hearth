@@ -10,7 +10,10 @@ pub fn open_file(title: &str, filter: &str) -> Option<PathBuf> {
     let mut file = [0u16; 1024];
     let wfilter: Vec<u16> = filter.encode_utf16().chain([0, 0]).collect();
     let wtitle: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
-    let owner = wm::find_window("Hearth");
+    // La fenêtre au premier plan si elle est à nous (Bureau ou console), sinon la console par défaut :
+    // sinon, ouvert depuis le Bureau, le sélecteur se rattachait toujours à la console (masquée ou non
+    // au premier plan), pouvant apparaître derrière la fenêtre réellement active.
+    let owner = if wm::foreground_is_mine() { Some(wm::foreground()) } else { wm::find_window("Hearth") };
     let mut ofn = OPENFILENAMEW {
         lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
         hwndOwner: owner.unwrap_or_default(),

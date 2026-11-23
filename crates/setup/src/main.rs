@@ -31,8 +31,20 @@ fn main() {
     // `/S` : mise à jour silencieuse (déjà confirmée dans Hearth) : ni question ni message, puis redémarrage
     // (repart sur une session propre ; Hearth, shell de la session, se relance tout seul à l'ouverture).
     if std::env::args().skip(1).any(|a| a.eq_ignore_ascii_case("/S") || a.eq_ignore_ascii_case("--silent")) {
-        if run().is_ok() {
-            let _ = Command::new("shutdown").args(["/r", "/t", "5"]).spawn();
+        match run() {
+            Ok(()) => {
+                let _ = Command::new("shutdown").args(["/r", "/t", "5"]).spawn();
+            }
+            Err(e) => {
+                // `run()` a déjà tué le shell en place avant de savoir si l'installation réussirait :
+                // en cas d'échec, filet de secours pour ne pas laisser la session sans shell jusqu'à la
+                // prochaine ouverture de session. Le binaire installé peut être l'ancienne version (si
+                // l'échec est survenu avant la copie) ou une nouvelle partiellement écrite ; on tente
+                // quand même, c'est mieux que rien.
+                let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("Hearth");
+                let _ = std::fs::write(dir.join("update-failed.log"), &e);
+                let _ = Command::new(installed_exe()).spawn();
+            }
         }
         return;
     }

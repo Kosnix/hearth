@@ -721,6 +721,9 @@ export component App inherits Window {
         } else if (zone == 8) {
             if (a == 0) { nsel = max(0, nsel - 1); }
             else if (a == 1) { nsel = max(0, min(notifs.length - 1, nsel + 1)); }
+            // Une notification épinglée n'est pas supprimée par l'action (elle installe la mise à jour) :
+            // la sélection ne doit alors pas être décalée comme si un élément avait disparu.
+            else if (a == 4 && notifs.length > 0 && notifs[nsel].pinned) { notif-action(nsel); }
             else if (a == 4 && notifs.length > 0) { notif-action(nsel); nsel = max(0, min(nsel, notifs.length - 2)); }
             else if (a == 7) { notif-action(-1); }
             else if (a == 5) { zone = 1; }
@@ -790,7 +793,11 @@ export component App inherits Window {
                     else if (a == 4 && library.length > 0) { launch(library[lsel].gid); }
                 }
             } else {
-                if (a == 5 && brow >= 1) { brow = 0; }
+                // Retour (a==5) : une seule pression ramène à la barre d'onglets depuis la grille
+                // d'offres (brow==1), comme depuis toute autre grille du programme (Jeux, Bibliothèque) ;
+                // la liste des mises en avant (brow==2) garde ses deux niveaux (elle-même imbriquée
+                // dans l'aperçu de la page, brow==0).
+                if (a == 5 && brow == 2) { brow = 0; }
                 else if (a == 0 && brow == 2) { brow = 0; }
                 else if ((a == 0 && brow == 0) || a == 5) { top = tab; zone = 1; }
                 else if (brow == 0) {
@@ -2398,50 +2405,60 @@ export component App inherits Window {
                 font-size: 28px;
                 color: Theme.dim;
             }
-            for n[i] in notifs: Rectangle {
+            // Fenêtre de défilement (8 visibles à la fois), comme les autres listes du programme
+            // (Réglages, OOBE, sélecteur générique) : sans ça, les notifications au-delà de la 9e-10e
+            // sortaient de l'écran sans aucun moyen d'y accéder.
+            Rectangle {
                 x: 36px;
-                y: 170px + i * 130px;
+                y: 170px;
                 width: parent.width - 72px;
-                height: 118px;
-                border-radius: 16px;
-                background: i == nsel ? Theme.accent : #ffffff14;
-                animate background { duration: 100ms; }
-                if n.unread: Rectangle {
-                    x: 14px;
-                    y: 14px;
-                    width: 12px;
-                    height: 12px;
-                    border-radius: 6px;
-                    background: Theme.danger;
-                }
-                Text {
-                    x: 40px;
-                    y: 18px;
-                    width: parent.width - 200px;
-                    text: n.title;
-                    font-size: 26px;
-                    font-weight: 700;
-                    color: i == nsel ? Theme.on-accent : Theme.text;
-                    overflow: elide;
-                }
-                Text {
-                    x: parent.width - self.width - 24px;
-                    y: 22px;
-                    text: n.time;
-                    font-size: 20px;
-                    color: i == nsel ? Theme.on-accent : Theme.dim;
-                }
-                Text {
-                    x: 40px;
-                    y: 62px;
-                    width: parent.width - 64px;
-                    text: n.text;
-                    font-size: 22px;
-                    color: i == nsel ? Theme.on-accent : Theme.dim;
-                    overflow: elide;
-                }
-                TouchArea {
-                    clicked => { root.nsel = i; root.nav(4); }
+                height: min(notifs.length, 8) * 130px;
+                clip: true;
+                for n[i] in notifs: Rectangle {
+                    x: 0px;
+                    y: (i - max(0, min(nsel - 7, notifs.length - 8))) * 130px;
+                    width: parent.width;
+                    height: 118px;
+                    border-radius: 16px;
+                    background: i == nsel ? Theme.accent : #ffffff14;
+                    animate background { duration: 100ms; }
+                    if n.unread: Rectangle {
+                        x: 14px;
+                        y: 14px;
+                        width: 12px;
+                        height: 12px;
+                        border-radius: 6px;
+                        background: Theme.danger;
+                    }
+                    Text {
+                        x: 40px;
+                        y: 18px;
+                        width: parent.width - 200px;
+                        text: n.title;
+                        font-size: 26px;
+                        font-weight: 700;
+                        color: i == nsel ? Theme.on-accent : Theme.text;
+                        overflow: elide;
+                    }
+                    Text {
+                        x: parent.width - self.width - 24px;
+                        y: 22px;
+                        text: n.time;
+                        font-size: 20px;
+                        color: i == nsel ? Theme.on-accent : Theme.dim;
+                    }
+                    Text {
+                        x: 40px;
+                        y: 62px;
+                        width: parent.width - 64px;
+                        text: n.text;
+                        font-size: 22px;
+                        color: i == nsel ? Theme.on-accent : Theme.dim;
+                        overflow: elide;
+                    }
+                    TouchArea {
+                        clicked => { root.nsel = i; root.nav(4); }
+                    }
                 }
             }
             HorizontalLayout {
@@ -3098,6 +3115,7 @@ export struct DeskGame {
     status: string,
     installed: bool,
     running: bool,
+    hidden: bool,
     cover: image,
     initial: string,
 }
@@ -3355,7 +3373,7 @@ export component DesktopWindow inherits Window {
                             x: parent.width - 180px;
                             y: 16px;
                             width: 80px;
-                            label: @tr("Cacher");
+                            label: g.hidden ? @tr("Afficher") : @tr("Cacher");
                             clicked => { root.hide-game(g.gid); }
                         }
                         DeskButton {

@@ -78,9 +78,9 @@ impl Shell {
         });
         w.on_hide_game(|g| {
             with_shell(|s| {
-                let id = s.games.borrow().get(g as usize).map(|x| x.id.clone());
-                if let Some(id) = id {
-                    s.set_hidden(&id, true);
+                let now = s.games.borrow().get(g as usize).map(|x| (x.id.clone(), !x.hidden));
+                if let Some((id, hide)) = now {
+                    s.set_hidden(&id, hide);
                 }
             })
         });
@@ -154,13 +154,16 @@ impl Shell {
         if let Some(f) = full {
             std::env::set_var("SLINT_FULLSCREEN", f);
         }
-        if hide {
-            // Jamais `hide()` : la fenêtre native serait détruite puis recréée (même panique OLE). On la réduit.
+        // Jamais `hide()` : la fenêtre native serait détruite puis recréée (même panique OLE). On la
+        // réduit, y compris quand c'est l'utilisateur qui clique sur la croix de fermeture native —
+        // sinon cette fermeture-là échappe à `set_desktop_visible` et détruit la fenêtre pour de vrai :
+        // `self.desktop` resterait `Some` d'un handle mort, et `desktop_open()` ne recréerait plus rien.
+        w.window().on_close_requested(|| {
             set_desktop_visible(false);
-            w.window().on_close_requested(|| {
-                set_desktop_visible(false);
-                slint::CloseRequestResponse::KeepWindowShown
-            });
+            slint::CloseRequestResponse::KeepWindowShown
+        });
+        if hide {
+            set_desktop_visible(false);
         }
         *self.desktop.borrow_mut() = Some(w);
     }
@@ -208,7 +211,9 @@ impl Shell {
         let f = self.desk_filter.get();
         let mut rows: Vec<(bool, String, DeskGame)> = vec![];
         for (i, g) in self.games.borrow().iter().enumerate() {
-            if g.hidden || (f == 1 && g.install) || (f == 2 && !g.install) || (!q.is_empty() && !g.name.to_lowercase().contains(&q)) {
+            // Un jeu caché reste listé (comme dans Bibliothèque en mode console) : sinon, caché depuis
+            // le Bureau, plus aucun moyen de le réafficher depuis le Bureau.
+            if (f == 1 && g.install) || (f == 2 && !g.install) || (!q.is_empty() && !g.name.to_lowercase().contains(&q)) {
                 continue;
             }
             let running = self.running.borrow().iter().any(|r| r.tile == i);
@@ -230,6 +235,7 @@ impl Shell {
                     status: status.into(),
                     installed: !g.install,
                     running,
+                    hidden: g.hidden,
                     cover,
                     initial: g.name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().to_string()).unwrap_or_default().into(),
                 },

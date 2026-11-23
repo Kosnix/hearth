@@ -324,13 +324,34 @@ fn steam_poll(c: &Challenge) -> Poll {
     }
 }
 
-fn steam_library(s: &Session) -> Vec<Owned> {
-    let url = format!(
-        "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?access_token={}&steamid={}&include_appinfo=1&include_played_free_games=1&format=json",
-        enc(&s.access),
-        enc(&s.account_id)
-    );
-    let Some(j) = http::get_json(&url, &[]) else { return vec![] };
+/// Rafraîchit l'access token Steam (il expire au bout de quelques heures) depuis le refresh token
+/// obtenu à la connexion — jusqu'ici jamais utilisé, contrairement à Epic : l'access token expirait
+/// silencieusement et la bibliothèque Steam possédée redevenait vide sans explication.
+fn steam_refresh(s: &Session) -> Option<Session> {
+    let mut p = vec![0x0A];
+    varint(s.refresh.len() as u64, &mut p);
+    p.extend_from_slice(s.refresh.as_bytes());
+    let (st, j) = http::post_form_status(&format!("{STEAM_API}/GenerateAccessTokenForApp/v1"), &[], &format!("input_protobuf_encoded={}&format=json", enc(&b64_encode(&p))))?;
+    (st == 200).then(|| j["response"]["access_token"].as_str().map(|a| Session { access: a.to_string(), ..s.clone() })).flatten()
+}
+
+fn steam_library(s: &mut Session) -> Vec<Owned> {
+    let url = |s: &Session| {
+        format!(
+            "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?access_token={}&steamid={}&include_appinfo=1&include_played_free_games=1&format=json",
+            enc(&s.access),
+            enc(&s.account_id)
+        )
+    };
+    let mut res = http::get_status(&url(s), &[]);
+    if !matches!(res, Some((200, _))) {
+        if let Some(n) = steam_refresh(s) {
+            *s = n;
+            store_session("Steam", s.clone());
+            res = http::get_status(&url(s), &[]);
+        }
+    }
+    let Some((200, j)) = res else { return vec![] };
     j["response"]["games"]
         .as_array()
         .into_iter()
@@ -371,7 +392,7 @@ pub fn library(store: &str) -> Vec<Owned> {
     let Some(mut s) = session(store) else { return vec![] };
     match store {
         "Epic Games" => epic_library(&mut s),
-        "Steam" => steam_library(&s),
+        "Steam" => steam_library(&mut s),
         _ => vec![],
     }
 }

@@ -12,6 +12,28 @@ use std::process::Command;
 const NO_WINDOW: u32 = 0x0800_0000;
 const ZIP: &str = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip";
 
+/// Un seul SteamCMD à la fois sur ce dossier : la recherche de mises à jour en fond (`latest_builds`,
+/// toutes les 6 h) et un téléchargement actif (`install`) sont deux threads indépendants qui, sans ce
+/// verrou, pouvaient lancer `steamcmd.exe` en parallèle sur la même config. Un verrou maison (pas
+/// `std::sync::Mutex`) : sa prise doit pouvoir voyager dans `Pending` d'un thread à l'autre pendant
+/// l'attente d'un code Steam Guard (`MutexGuard` n'est pas `Send`, un jeton vide l'est).
+static LOCK_TAKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub struct Lock;
+impl Lock {
+    fn acquire() -> Self {
+        while LOCK_TAKEN.swap(true, Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        Lock
+    }
+}
+impl Drop for Lock {
+    fn drop(&mut self) {
+        LOCK_TAKEN.store(false, Ordering::SeqCst);
+    }
+}
+
 pub fn dir() -> PathBuf {
     PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("Hearth").join("steamcmd")
 }
@@ -85,6 +107,7 @@ pub struct Pending {
     child: std::process::Child,
     out: Arc<Mutex<String>>,
     offset: u64,
+    _lock: Lock,
 }
 
 fn spawn_piped(args: &[&str]) -> Result<(std::process::Child, Arc<Mutex<String>>), String> {
@@ -135,7 +158,8 @@ fn snapshot(out: &Arc<Mutex<String>>, offset: u64) -> String {
 }
 
 /// Attend la réussite, un échec, ou une demande de code (jusqu'à 3 minutes : l'utilisateur peut valider sur son téléphone).
-fn await_login(mut child: std::process::Child, out: Arc<Mutex<String>>, code_sent: bool, offset: u64) -> Login_ {
+/// `lock` est conservé dans le `Pending` en cas d'attente de code : il ne sera relâché qu'à `submit_code`/`abandon`.
+fn await_login(mut child: std::process::Child, out: Arc<Mutex<String>>, code_sent: bool, offset: u64, lock: Lock) -> Login_ {
     let t0 = std::time::Instant::now();
     while t0.elapsed() < std::time::Duration::from_secs(180) {
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -153,7 +177,7 @@ fn await_login(mut child: std::process::Child, out: Arc<Mutex<String>>, code_sen
             return Login_::Done(Login::Failed(msg));
         }
         if !code_sent && (s.contains("steam guard code") || s.contains("two-factor code") || s.contains("enter the current code") || s.contains("guard code")) {
-            return Login_::Wait(Pending { child, out, offset });
+            return Login_::Wait(Pending { child, out, offset, _lock: lock });
         }
         if matches!(child.try_wait(), Ok(Some(_))) {
             return Login_::Done(Login::Failed(failure(&s)));
@@ -170,6 +194,7 @@ enum Login_ {
 
 /// Connexion (SteamCMD garde ensuite la session : plus de mot de passe à saisir). Renvoie le processus en attente si un code est demandé.
 pub fn login(user: &str, pass: &str, code: Option<&str>) -> (Login, Option<Pending>) {
+    let lock = Lock::acquire();
     if let Err(e) = ensure() {
         return (Login::Failed(e), None);
     }
@@ -183,7 +208,7 @@ pub fn login(user: &str, pass: &str, code: Option<&str>) -> (Login, Option<Pendi
         Err(e) => return (Login::Failed(e), None),
     };
     let log = out.clone();
-    let r = match await_login(child, out, code.is_some(), offset) {
+    let r = match await_login(child, out, code.is_some(), offset, lock) {
         Login_::Done(l) => (l, None),
         Login_::Wait(p) => (Login::NeedCode, Some(p)),
     };
@@ -198,7 +223,7 @@ pub fn submit_code(mut p: Pending, code: &str) -> Login {
         let _ = si.write_all(format!("{code}\n").as_bytes());
         let _ = si.flush();
     }
-    match await_login(p.child, p.out, true, p.offset) {
+    match await_login(p.child, p.out, true, p.offset, p._lock) {
         Login_::Done(l) => l,
         Login_::Wait(mut p) => {
             let _ = p.child.kill();
@@ -213,6 +238,7 @@ pub fn abandon(mut p: Pending) {
 
 /// Session mémorisée par SteamCMD pour cet identifiant ?
 pub fn session_ok(user: &str) -> bool {
+    let _lock = Lock::acquire();
     run(&["+@NoPromptForPassword", "1", "+login", user, "+quit"]).is_ok_and(|o| o.contains("Logged in OK") || o.contains("Waiting for user info"))
 }
 
@@ -228,6 +254,7 @@ fn last_progress(log: &str) -> Option<(f64, f64)> {
 
 /// Installe ou met à jour un jeu (bloquant, long). `pid` reçoit le processus (pour annuler), `progress` le pourcentage.
 pub fn install(user: &str, appid: &str, pid: &AtomicU32, progress: impl Fn(f64, f64)) -> Result<(), String> {
+    let _lock = Lock::acquire();
     ensure()?;
     let offset = console_len();
     let (mut child, out) = spawn_piped(&["+@NoPromptForPassword", "1", "+login", user, "+app_update", appid, "validate", "+quit"])?;
@@ -279,7 +306,11 @@ pub fn cancel(pid: u32) {
 /// Numéro de build public le plus récent de chaque jeu.
 pub fn latest_builds(user: &str, ids: &[String]) -> HashMap<String, String> {
     let mut map = HashMap::new();
-    if ids.is_empty() || ensure().is_err() {
+    if ids.is_empty() {
+        return map;
+    }
+    let _lock = Lock::acquire();
+    if ensure().is_err() {
         return map;
     }
     let mut args: Vec<&str> = vec!["+@NoPromptForPassword", "1", "+login", user, "+app_info_update", "1"];

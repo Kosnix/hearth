@@ -31,8 +31,15 @@ pub fn setup() -> Result<(), String> {
     }
 }
 
+/// Une seule requête élevée à la fois : `request.txt`/`result.txt` sont un unique fichier d'échange
+/// avec la tâche planifiée, sans identifiant de corrélation. Deux appels concurrents (ex. installer
+/// le client Steam puis Epic juste après) écraseraient la requête de l'un par l'autre et pourraient
+/// renvoyer le résultat de la mauvaise opération à l'appelant.
+static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Envoie une opération (`winget <id>`) à l'assistant élevé et attend son résultat (bloquant).
 pub fn request(op: &str) -> Result<(), String> {
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = dir();
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(d.join("result.txt"));

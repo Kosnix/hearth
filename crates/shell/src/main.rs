@@ -688,8 +688,16 @@ impl Shell {
         if (self.is_scmd_game(&g.exe) || steam_uri) && !self.steam_ready(i, &g) {
             return;
         }
-        self.start_splash(i, g.uri.is_some());
         if let Some(uri) = &g.uri {
+            // Un jeu de boutique (pas encapsulé dans un job, suivi par sa fenêtre) est déjà en cours de
+            // lancement ou de suivi pour une AUTRE tuile : refuser plutôt qu'écraser `ext_pending`, sinon
+            // la fenêtre qui finit par apparaître en premier se voit attribuer le nom/l'index de l'autre
+            // jeu (guide qui ferme le mauvais jeu, temps de jeu mal crédité, double lancement possible).
+            if self.ext_pending.get().is_some_and(|(t, _)| t != i) || self.ext_game.borrow().as_ref().is_some_and(|e| e.tile != i) {
+                self.push_notif(&g.name, &tr("Attendez la fin du lancement du jeu précédent"));
+                return;
+            }
+            self.start_splash(i, true);
             // Lancement par le client de la boutique : le jeu n'est pas encapsulé, on suivra sa fenêtre (tick).
             system::open_uri(uri);
             self.ext_pending.set(Some((i, std::time::Instant::now())));
@@ -698,6 +706,7 @@ impl Shell {
             }
             return;
         }
+        self.start_splash(i, false);
         let exe = Path::new(&g.exe);
         let compat = wm::compat::lookup(exe);
         compat.apply_ini();
@@ -1289,7 +1298,6 @@ impl Shell {
     }
 
     fn open_guide(&self, tile: usize) {
-        input::set_capture(true);
         self.guide_tile.set(tile);
         let closing = self.running.borrow().iter().any(|r| r.tile == tile && r.closing) || self.ext_game.borrow().as_ref().is_some_and(|e| e.tile == tile && e.closing);
         self.guide.set_game(self.games.borrow()[tile].name.as_str().into());
@@ -1298,6 +1306,10 @@ impl Shell {
         self.guide.set_sel(0);
         self.guide.set_volume(system::audio::volume().map_or(-1, |v| v as i32));
         if let Some(h) = wm::find_window(GUIDE_TITLE) {
+            // La capture n'est posée qu'une fois l'overlay effectivement retrouvé : sinon elle resterait
+            // bloquée à `true` sans aucun guide visible pour la relâcher (Retour), la manette virtuelle
+            // (ViGEm) arrêtant de transmettre au jeu pour de bon.
+            input::set_capture(true);
             let (x, y, _, height) = wm::primary_monitor();
             let width = (GUIDE_WIDTH * self.ui.window().scale_factor()) as i32;
             wm::show_overlay(h, x, y, width, height);
@@ -1465,7 +1477,10 @@ impl Shell {
         let tracked = self.running.borrow().iter().any(|r| r.session.owns(fg))
             || self.ext_game.borrow().as_ref().is_some_and(|e| e.hwnd == fg)
             || self.ext_pending.get().is_some();
-        if tracked || wm::foreground_game(&[]).is_some() {
+        // explorer.exe (bureau) : ce que Windows remet au premier plan par défaut quand un jeu plein
+        // écran se ferme, pas une vraie appli ouverte par l'utilisateur — sinon la manette (et le
+        // clavier) resterait muette indéfiniment après la fermeture d'un jeu.
+        if tracked || wm::foreground_game(&["explorer.exe"]).is_some() {
             return;
         }
         if let Some(m) = wm::find_window(MAIN_TITLE) {
@@ -2168,7 +2183,9 @@ impl Shell {
             if (g.install || g.hidden || all_tab) && !downloading && (query.is_empty() || t.name.to_lowercase().contains(&query)) {
                 b.push(t.clone());
             }
-            if (!g.install || downloading) && !g.hidden {
+            // Un jeu caché dont on relance le téléchargement (mise à jour…) doit quand même montrer
+            // son anneau de progression, sinon il disparaît des deux onglets jusqu'à la fin.
+            if (!g.install || downloading) && (!g.hidden || downloading) {
                 a.push((playtime::last(&playtime_key(g), &pt), t));
             }
         }

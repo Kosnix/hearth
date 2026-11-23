@@ -95,6 +95,8 @@ pub fn resolve(spec: &str) -> Option<String> {
     let img = &j["images"];
     let url = match kind {
         "hero" => img["background"].as_str()?,
+        // Jaquette verticale : `boxArtImage` (racine de la réponse), pas sous `images` (logo/fond/icônes).
+        "cover" => j["boxArtImage"].as_str().or_else(|| img["logo2x"].as_str()).or_else(|| img["logo"].as_str())?,
         _ => img["logo2x"].as_str().or_else(|| img["logo"].as_str())?,
     };
     Some(absolute(url))

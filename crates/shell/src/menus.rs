@@ -7,19 +7,23 @@ use std::rc::Rc;
 use slint::{SharedString, VecModel};
 
 use crate::i18n::tr;
-use crate::{prefs, Shell};
+use crate::{prefs, scmd, Shell};
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum Act {
-    Launch(usize),
-    Rename(usize),
-    Reart(usize),
-    Hide(usize),
-    Uninstall(usize),
-    ConfirmUninstall(usize),
+    // Identifiant stable du jeu (`Game::id`), pas son index dans `self.games` : celui-ci peut changer
+    // pendant qu'un menu reste ouvert (poll_installed() tourne toutes les 20 s en fond et peut
+    // réordonner la liste si un autre jeu est installé/désinstallé par une boutique) — un index capturé
+    // à l'ouverture du menu agirait alors sur le jeu qui s'y trouve maintenant, pas celui affiché.
+    Launch(String),
+    Rename(String),
+    Reart(String),
+    Hide(String),
+    Uninstall(String),
+    ConfirmUninstall(String),
     AddGame,
     ShowHidden,
-    UpdateYes(usize),
+    UpdateYes(String),
     DeleteProfile(usize),
     CancelDl(usize),
     SelfUpdate,
@@ -48,18 +52,18 @@ impl Shell {
         let running = self.running.borrow().iter().any(|r| r.tile == gid);
         let mut v: Vec<(String, Act)> = vec![];
         if g.install {
-            v.push((tr("Installer"), Act::Launch(gid)));
+            v.push((tr("Installer"), Act::Launch(g.id.clone())));
         } else {
-            v.push((tr(if running { "Reprendre" } else { "Jouer" }), Act::Launch(gid)));
-            v.push((tr("Modifier le nom"), Act::Rename(gid)));
-            v.push((tr("Changer le visuel"), Act::Reart(gid)));
+            v.push((tr(if running { "Reprendre" } else { "Jouer" }), Act::Launch(g.id.clone())));
+            v.push((tr("Modifier le nom"), Act::Rename(g.id.clone())));
+            v.push((tr("Changer le visuel"), Act::Reart(g.id.clone())));
         }
         if self.is_scmd_game(&g.exe) && !running {
-            v.push((tr("Vérifier / mettre à jour"), Act::UpdateYes(gid)));
+            v.push((tr("Vérifier / mettre à jour"), Act::UpdateYes(g.id.clone())));
         }
-        v.push((tr(if g.hidden { "Afficher" } else { "Cacher" }), Act::Hide(gid)));
+        v.push((tr(if g.hidden { "Afficher" } else { "Cacher" }), Act::Hide(g.id.clone())));
         if !g.install && !running {
-            v.push((tr(if g.store.is_empty() { "Retirer de Hearth" } else { "Désinstaller" }), Act::Uninstall(gid)));
+            v.push((tr(if g.store.is_empty() { "Retirer de Hearth" } else { "Désinstaller" }), Act::Uninstall(g.id.clone())));
         }
         v.push((tr("Annuler"), Act::Cancel));
         self.menu_show(g.name, v);
@@ -67,11 +71,17 @@ impl Shell {
 
     /// Une mise à jour est disponible : on demande à l'utilisateur.
     pub fn update_menu(&self, gid: usize) {
-        let Some(name) = self.games.borrow().get(gid).map(|g| g.name.clone()) else { return };
+        let Some(g) = self.games.borrow().get(gid).cloned() else { return };
         self.menu_show(
-            format!("{} : {name}", tr("Mise à jour disponible")),
-            vec![(tr("Mettre à jour maintenant"), Act::UpdateYes(gid)), (tr("Plus tard"), Act::Cancel)],
+            format!("{} : {}", tr("Mise à jour disponible"), g.name),
+            vec![(tr("Mettre à jour maintenant"), Act::UpdateYes(g.id)), (tr("Plus tard"), Act::Cancel)],
         );
+    }
+
+    /// Index courant d'un jeu par son identifiant stable (peut avoir bougé, ou disparu, depuis
+    /// l'ouverture du menu).
+    fn gid_of(&self, id: &str) -> Option<usize> {
+        self.games.borrow().iter().position(|g| g.id == id)
     }
 
     /// Menu du bouton « + » : ajouter un jeu, retrouver les jeux cachés.
@@ -86,16 +96,17 @@ impl Shell {
     }
 
     pub fn menu_pick(&self, i: usize) {
-        let Some(act) = self.menu_acts.borrow().get(i).copied() else { return };
+        let Some(act) = self.menu_acts.borrow().get(i).cloned() else { return };
         let back = self.ui.get_menu_return();
         match act {
             Act::Cancel => self.ui.set_zone(back),
-            Act::Launch(g) => {
+            Act::Launch(id) => {
+                let Some(g) = self.gid_of(&id) else { return };
                 self.ui.set_zone(0);
                 self.launch(g);
             }
-            Act::Rename(g) => {
-                let Some((id, name)) = self.games.borrow().get(g).map(|g| (g.id.clone(), g.name.clone())) else { return };
+            Act::Rename(id) => {
+                let Some(name) = self.games.borrow().iter().find(|g| g.id == id).map(|g| g.name.clone()) else { return };
                 *self.rename_id.borrow_mut() = Some(id);
                 self.settings.kb_open_text(&name);
                 self.kb_refresh();
@@ -104,25 +115,27 @@ impl Shell {
                 self.ui.set_kb_title(tr("Nom du jeu").into());
                 self.ui.set_zone(4);
             }
-            Act::Reart(g) => {
-                let Some((id, name)) = self.games.borrow().get(g).map(|g| (g.id.clone(), g.name.clone())) else { return };
+            Act::Reart(id) => {
+                let Some(name) = self.games.borrow().iter().find(|g| g.id == id).map(|g| g.name.clone()) else { return };
                 *self.identify_target.borrow_mut() = Some(id);
                 self.run_identify(name);
                 self.ui.set_zone(6);
             }
-            Act::Hide(g) => {
-                let Some((id, name, now_hidden)) = self.games.borrow().get(g).map(|g| (g.id.clone(), g.name.clone(), !g.hidden)) else { return };
+            Act::Hide(id) => {
+                let Some((name, now_hidden)) = self.games.borrow().iter().find(|g| g.id == id).map(|g| (g.name.clone(), !g.hidden)) else { return };
                 self.set_hidden(&id, now_hidden);
                 self.ui.set_zone(back);
                 self.push_notif(&tr(if now_hidden { "Jeu caché" } else { "Jeu affiché" }), &name);
             }
-            Act::Uninstall(g) => {
-                let Some(name) = self.games.borrow().get(g).map(|g| g.name.clone()) else { return };
-                self.menu_show(format!("{} {name} ?", tr("Désinstaller")), vec![(tr("Confirmer"), Act::ConfirmUninstall(g)), (tr("Annuler"), Act::Cancel)]);
+            Act::Uninstall(id) => {
+                let Some(name) = self.games.borrow().iter().find(|g| g.id == id).map(|g| g.name.clone()) else { return };
+                self.menu_show(format!("{} {name} ?", tr("Désinstaller")), vec![(tr("Confirmer"), Act::ConfirmUninstall(id)), (tr("Annuler"), Act::Cancel)]);
             }
-            Act::ConfirmUninstall(g) => {
+            Act::ConfirmUninstall(id) => {
                 self.ui.set_zone(back);
-                self.uninstall(g);
+                if let Some(g) = self.gid_of(&id) {
+                    self.uninstall(g);
+                }
             }
             Act::AddGame => self.add_open(),
             Act::ShowHidden => self.show_hidden(),
@@ -142,11 +155,9 @@ impl Shell {
                 self.ui.set_zone(back);
                 self.hearth_update_install();
             }
-            Act::UpdateYes(g) => {
+            Act::UpdateYes(id) => {
                 self.ui.set_zone(back);
-                if let Some(id) = self.games.borrow().get(g).map(|g| g.id.clone()) {
-                    self.steam_install(&id);
-                }
+                self.steam_install(&id);
             }
             Act::ConfirmBtUnpair => {
                 self.ui.set_zone(back);
@@ -187,10 +198,24 @@ impl Shell {
         if g.store.is_empty() {
             // Jeu ajouté à la main : on le retire seulement de Hearth, ses fichiers restent.
             self.games.borrow_mut().remove(gid);
+            // Tout index de tuile capturé ailleurs (jeu encapsulé en cours, jeu de boutique suivi,
+            // guide ouvert, splash) doit être décalé pareil, sinon il pointe sur le jeu suivant dans
+            // la liste après la suppression.
             for r in self.running.borrow_mut().iter_mut() {
                 if r.tile > gid {
                     r.tile -= 1;
                 }
+            }
+            if let Some(e) = self.ext_game.borrow_mut().as_mut() {
+                if e.tile > gid {
+                    e.tile -= 1;
+                }
+            }
+            if self.guide_tile.get() > gid {
+                self.guide_tile.set(self.guide_tile.get() - 1);
+            }
+            if self.splash_tile.get().is_some_and(|t| t > gid) {
+                self.splash_tile.set(self.splash_tile.get().map(|t| t - 1));
             }
             self.save_games();
             self.rebuild();
@@ -199,6 +224,12 @@ impl Shell {
         }
         if std::path::Path::new(&g.exe) == stores::epiccmd::exe() {
             let app = g.id.strip_prefix("epic-").unwrap_or_default().to_string();
+            // Même précaution que pour SteamCMD : ne pas désinstaller pendant qu'un téléchargement
+            // actif pour ce même jeu écrit encore dans son dossier.
+            if self.dl.borrow().iter().any(|d| d.appid == format!("epic:{app}") && matches!(d.state, scmd::DlState::Active)) {
+                stores::epiccmd::cancel(self.dl_pid.load(std::sync::atomic::Ordering::SeqCst));
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
             self.push_notif(&g.name, &tr("Désinstallation en cours…"));
             std::thread::spawn(move || {
                 let ok = stores::epiccmd::uninstall(&app);
@@ -213,6 +244,12 @@ impl Shell {
         }
         if self.is_scmd_game(&g.exe) {
             let appid = g.id.strip_prefix("steam-").map(String::from);
+            // Un téléchargement/mise à jour de ce jeu encore actif écrirait pendant qu'on supprime ses
+            // fichiers (dossier recréé en partie juste après, manifeste corrompu) : on l'arrête d'abord.
+            if appid.as_deref().is_some_and(|a| self.dl.borrow().iter().any(|d| d.appid == a && matches!(d.state, scmd::DlState::Active))) {
+                stores::steamcmd::cancel(self.dl_pid.load(std::sync::atomic::Ordering::SeqCst));
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
             let ok = appid.as_deref().is_some_and(stores::steamcmd::uninstall);
             if let Some(a) = &appid {
                 // Sinon la mise à jour reste proposée (notification, écran Téléchargements) jusqu'à

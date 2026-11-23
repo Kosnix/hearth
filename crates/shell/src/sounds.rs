@@ -50,8 +50,14 @@ pub fn current(music: bool) -> (String, String) {
     }
 }
 
+// Le pack par défaut (démarrage) et un choix explicite de l'utilisateur peuvent se déclencher presque
+// en même temps sur deux threads différents : sans verrou, les deux écriraient/décompresseraient le
+// même `pack.zip` en parallèle (pack corrompu, `.ok` écrit avant que l'autre ait fini d'extraire).
+static DL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Télécharge et décompresse un pack (une fois). Bloquant.
 fn download(blob: &str) -> bool {
+    let _guard = DL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if installed(blob) {
         return true;
     }
