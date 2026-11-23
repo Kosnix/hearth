@@ -18,7 +18,11 @@ fn main() {
     slint_build::compile_with_config("ui/app.slint", config).unwrap();
     println!("cargo:rerun-if-changed=lang");
     println!("cargo:rerun-if-changed=ui/app.slint");
-    // Icône de l'exécutable (logo Hearth).
+    // Icône de l'exécutable (logo Hearth) et manifeste (DPI). Sans ces deux rerun-if-changed, le
+    // premier `rerun-if-changed` émis plus haut désactive la recompilation par défaut sur changement
+    // de fichier : une modification de hearth.manifest resterait silencieusement non recompilée.
+    println!("cargo:rerun-if-changed=hearth.rc");
+    println!("cargo:rerun-if-changed=hearth.manifest");
     embed_resource::compile("hearth.rc", embed_resource::NONE).manifest_optional().unwrap();
     // Version affichée/comparée par l'auto-mise à jour (4 chiffres, `../../VERSION` : le semver de Cargo n'en
     // accepte que 3). `tools/release.ps1` l'incrémente avant chaque publication.

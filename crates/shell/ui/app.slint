@@ -607,11 +607,11 @@ export component App inherits Window {
     // Fondu à l'apparition : le contenu d'un onglet/écran est recréé (bloc `if`) au lieu d'être mis à
     // jour, donc une transition CSS classique ne s'applique pas toute seule — on repart de 0 puis on
     // anime vers 1 au tour suivant (un timer à très court délai sert de « prochaine image »), au lieu
-    // d'une apparition instantanée.
+    // d'une apparition instantanée. L'animation est sur chaque `opacity` qui consomme ces propriétés
+    // (pas sur `tab-fade`/`zone-fade` elles-mêmes) : sinon la remise à 0 s'anime aussi dans le mauvais
+    // sens (fondu visible depuis la valeur précédente) et masque entièrement l'entrée en fondu voulue.
     property <float> tab-fade: 1;
     property <float> zone-fade: 1;
-    animate tab-fade { duration: 180ms; easing: ease-out; }
-    animate zone-fade { duration: 160ms; easing: ease-out; }
     changed tab => { tab-fade = 0; tab-fade-timer.running = true; }
     changed zone => { zone-fade = 0; zone-fade-timer.running = true; }
     tab-fade-timer := Timer {
@@ -834,6 +834,7 @@ export component App inherits Window {
     // --- Onglet Jeux : bandeau de jaquettes, puis fiche du jeu sélectionné ---
     if tab == 0: Rectangle {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         x: 0px;
         y: 0px;
         width: parent.width;
@@ -842,6 +843,7 @@ export component App inherits Window {
     }
     if tab == 0: Rectangle {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         x: 0px;
         y: 700px;
         width: parent.width;
@@ -855,6 +857,7 @@ export component App inherits Window {
         width: 2560px;
         height: 712px;
         opacity: 0.55 * tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         // Toujours affiché s'il existe : à cette opacité et cette taille d'affichage, un héros plus petit que
         // l'écran reste discret une fois agrandi (léger flou) — préférable à un fond vide.
         source: games[sel].hero;
@@ -862,6 +865,7 @@ export component App inherits Window {
     // Voile sombre à gauche : le logo et le bouton Jouer restent lisibles sur n'importe quel visuel.
     if tab == 0 && games.length > 0: Rectangle {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         x: 0px;
         y: 728px;
         width: 1500px;
@@ -870,6 +874,7 @@ export component App inherits Window {
     }
     if tab == 0 && games.length > 0: Rectangle {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         x: 0px;
         y: 1140px;
         width: 2560px;
@@ -878,6 +883,7 @@ export component App inherits Window {
     }
     if tab == 0 && games.length > 0: Rectangle {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         x: 0px;
         y: 728px;
         width: parent.width;
@@ -887,6 +893,7 @@ export component App inherits Window {
     // Bandeau : la jaquette sélectionnée est agrandie, les autres défilent autour d'elle.
     if tab == 0: Rectangle {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         x: 0px;
         y: 250px;
         width: parent.width;
@@ -918,6 +925,7 @@ export component App inherits Window {
     // Partie gauche : uniquement le logo du jeu (son nom en repli s'il n'en a pas).
     if tab == 0 && games.length > 0 && games[sel].logo.width > 0: Image {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         x: 160px;
         y: 780px;
         width: min(900px, 340px * games[sel].logo.width / games[sel].logo.height);
@@ -927,6 +935,7 @@ export component App inherits Window {
     }
     if tab == 0 && games.length > 0 && games[sel].logo.width == 0: Text {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         x: 160px;
         y: 880px;
         width: 1000px;
@@ -938,6 +947,7 @@ export component App inherits Window {
     }
     if tab == 0 && games.length > 0 && (games[sel].played != "" || games[sel].store != ""): Text {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         x: 160px;
         y: 1128px;
         width: 1200px;
@@ -949,6 +959,7 @@ export component App inherits Window {
     // Bouton Jouer (orange) et menu d'options.
     if tab == 0 && games.length > 0: Rectangle {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         x: 160px;
         y: 1190px;
         width: 290px;
@@ -967,6 +978,7 @@ export component App inherits Window {
     }
     if tab == 0 && games.length > 0: Rectangle {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         x: 476px;
         y: 1190px;
         width: 82px;
@@ -986,6 +998,7 @@ export component App inherits Window {
     }
     if tab == 0 && games.length == 0: Text {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         x: 160px;
         y: 900px;
         width: 1700px;
@@ -998,10 +1011,12 @@ export component App inherits Window {
     // --- Onglets Non installés / Tout : recherche, puis grille de jaquettes ---
     if tab == 1: Rectangle {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         background: Theme.band;
     }
     if tab == 1: Rectangle {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         x: 80px;
         y: 170px;
         width: 1100px;
@@ -1030,6 +1045,7 @@ export component App inherits Window {
     }
     if tab == 1 && library.length == 0: Text {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         x: 160px;
         y: 400px;
         width: 1800px;
@@ -1040,6 +1056,7 @@ export component App inherits Window {
     }
     if tab == 1: Rectangle {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         x: 0px;
         y: 290px;
         width: parent.width;
@@ -1051,7 +1068,7 @@ export component App inherits Window {
             y: -max(0, lrow - 1) * 370px;
             width: parent.width;
             height: 1400px;
-            animate y { duration: 160ms; easing: ease-out; }
+            animate y { duration: 100ms; easing: ease-out; }
             for t[i] in library: Rectangle {
                 property <int> trow: floor(i / cols);
                 property <bool> on: zone == 0 && i == lsel;
@@ -1081,8 +1098,9 @@ export component App inherits Window {
     // --- Boutique unifiée : recherche, puis catalogue (toutes boutiques confondues) ---
     if tab == 2: Rectangle {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         x: 80px;
-        y: 200px;
+        y: 170px;
         width: 1100px;
         height: 92px;
         border-radius: 46px;
@@ -1110,7 +1128,7 @@ export component App inherits Window {
     // Aucun compte connecté : invitation directe à se connecter (une seule fois ; la connexion se gère ensuite dans Réglages).
     for b[i] in onboard: Rectangle {
         x: 1240px + i * 330px;
-        y: 200px;
+        y: 170px;
         width: 440px;
         height: 92px;
         border-radius: 46px;
@@ -1129,8 +1147,9 @@ export component App inherits Window {
     }
     if tab == 2: Text {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         x: 80px;
-        y: 330px;
+        y: 300px;
         text: offers-title;
         font-size: 34px;
         font-weight: 600;
@@ -1138,8 +1157,9 @@ export component App inherits Window {
     }
     if tab == 2 && offers-state != "": Text {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         x: 80px;
-        y: 460px;
+        y: 430px;
         text: offers-state == "loading" ? @tr("Chargement…") : (offers-state == "disconnected" ? @tr("Reliez une boutique dans Réglages > Comptes pour voir son catalogue ici.") : @tr("Aucune offre (réseau indisponible ?)"));
         font-size: 28px;
         color: Theme.dim;
@@ -1147,17 +1167,18 @@ export component App inherits Window {
     // Catalogue en grille : jaquette, puis nom, prix et boutique SOUS la jaquette (jamais par-dessus).
     if tab == 2: Rectangle {
         opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         x: 0px;
-        y: 390px;
+        y: 360px;
         width: parent.width;
-        height: 960px;
+        height: 990px;
         clip: true;
         Rectangle {
             x: 0px;
             y: -max(0, orow - 1) * 450px;
             width: parent.width;
             height: 2400px;
-            animate y { duration: 160ms; easing: ease-out; }
+            animate y { duration: 100ms; easing: ease-out; }
             for o[i] in offers: Rectangle {
                 property <int> trow: floor(i / cols);
                 property <bool> on: brow == 1 && zone == 0 && i == osel;
@@ -1367,6 +1388,7 @@ export component App inherits Window {
     // --- Fiche d'un jeu de la boutique : description, captures, prix par boutique ---
     if zone == 7: Rectangle {
         opacity: zone-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         background: Theme.bg-settings;
         TouchArea {
             pointer-event(e) => {
@@ -1515,6 +1537,7 @@ export component App inherits Window {
     // --- Visionneuse plein écran (jaquette, héros, captures) ---
     if zone == 14: Rectangle {
         opacity: zone-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         background: #000000;
         Image {
             width: 100%;
@@ -1541,6 +1564,7 @@ export component App inherits Window {
     // --- Téléchargements et mises à jour ---
     if zone == 10: Rectangle {
         opacity: zone-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         background: Theme.bg-settings;
         TouchArea {
             pointer-event(e) => {
@@ -1656,6 +1680,7 @@ export component App inherits Window {
     // --- Profils ---
     if zone == 11: Rectangle {
         opacity: zone-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         background: Theme.bg-settings;
         TouchArea {
             pointer-event(e) => {
@@ -1737,6 +1762,7 @@ export component App inherits Window {
 
     if zone == 12: Rectangle {
         opacity: zone-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         background: Theme.bg-settings;
         TouchArea {
             pointer-event(e) => {
@@ -1852,6 +1878,7 @@ export component App inherits Window {
     // --- Menu contextuel ---
     if zone == 9: Rectangle {
         opacity: zone-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         background: #000a;
         TouchArea {
             clicked => { root.zone = root.menu-return; }
@@ -1898,6 +1925,7 @@ export component App inherits Window {
 
     if zone == 2: Rectangle {
         opacity: zone-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         background: #000a;
         TouchArea {
             pointer-event(e) => {
@@ -1934,6 +1962,7 @@ export component App inherits Window {
 
     if zone == 3: Rectangle {
         opacity: zone-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         background: Theme.bg-settings;
         TouchArea {
             pointer-event(e) => {
@@ -2034,6 +2063,7 @@ export component App inherits Window {
     // --- Assistant de première exécution (zone 13) : plein écran, étapes à gauche, réglages de l'étape à droite ---
     if zone == 13: Rectangle {
         opacity: zone-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         background: Theme.bg-settings;
         TouchArea {}
         if oobe-step == 0: Rectangle {
@@ -2342,6 +2372,7 @@ export component App inherits Window {
     // Centre de notifications.
     if zone == 8: Rectangle {
         opacity: zone-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         background: #000a;
         TouchArea {
             pointer-event(e) => {
@@ -2427,6 +2458,7 @@ export component App inherits Window {
     // Sélecteur générique (explorateur de fichiers, identification d'un jeu…).
     if zone == 6: Rectangle {
         opacity: zone-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         background: Theme.bg;
         TouchArea {
             pointer-event(e) => {
@@ -2517,6 +2549,7 @@ export component App inherits Window {
     // QR code d'achat : à scanner avec un téléphone.
     if zone == 5: Rectangle {
         opacity: zone-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         background: Theme.bg.transparentize(0.07);
         TouchArea {
             pointer-event(e) => {
@@ -2584,6 +2617,7 @@ export component App inherits Window {
     // Clavier virtuel (mots de passe, saisies).
     if zone == 4: Rectangle {
         opacity: zone-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
         background: Theme.bg;
         TouchArea {
             pointer-event(e) => {

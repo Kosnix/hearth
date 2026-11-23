@@ -114,9 +114,6 @@ struct Shell {
     anim_n: Cell<u32>,
     ext_game: RefCell<Option<ExtGame>>,
     ext_pending: Cell<Option<(usize, std::time::Instant)>>,
-    /// Fenêtre étrangère (ni Hearth, ni un jeu suivi) actuellement au premier plan et depuis quand :
-    /// voir `reclaim_focus`.
-    foreign_fg: Cell<Option<(isize, std::time::Instant)>>,
     last_tab: Cell<i32>,
     /// Dernier ordre reçu au clavier physique (`NavKeys`) : pour savoir si c'est le clavier ou la manette
     /// qui a servi en dernier (affichage des indications à l'écran, voir `Pad.kind` == 2).
@@ -207,23 +204,35 @@ fn main() -> Result<(), slint::PlatformError> {
         return Ok(());
     }
     mark("profile");
-    // set_fullscreen() avant run() est ignoré par winit : plein écran dès la création.
-    if !desktop_only {
-        std::env::set_var("SLINT_FULLSCREEN", "1");
-    }
     // Legendary (jeux Epic) lit sa configuration ici, y compris quand il est lancé par le gestionnaire de fenêtres.
     std::env::set_var("LEGENDARY_CONFIG_PATH", stores::epiccmd::config());
+    // Console plein écran à résolution fixe, quel que soit le réglage de mise à l'échelle de Windows
+    // (voir hearth.manifest : le processus doit être authentiquement adapté au DPI pour que les
+    // coordonnées physiques lues partout ailleurs — wm::primary_monitor, GetWindowRect… — restent
+    // fiables). Slint restitue ensuite 1 pixel logique = 1 pixel physique nous-mêmes.
+    std::env::set_var("SLINT_SCALE_FACTOR", "1");
     // ponytail: femtovg cesse de se redessiner avec ce design (constaté sur l'Optiplex) ; rendu logiciel.
     // Glisser-déposer désactivé : winit initialise sinon OLE à la création de chaque fenêtre, ce qui échoue (RPC_E_CHANGED_MODE)
     // pour les fenêtres créées après coup (version bureau) une fois du COM multithread initialisé sur ce thread.
     let backend = std::env::var("HEARTH_BACKEND").unwrap_or_else(|_| "winit-skia".into());
     let renderer = backend.strip_prefix("winit-").unwrap_or("skia").to_string();
+    // Le vrai plein écran de winit (`Fullscreen::Borderless`, déclenché par SLINT_FULLSCREEN) redemande
+    // sa taille à l'OS lui-même, avec son propre risque d'incohérence DPI ; on préfère dimensionner et
+    // positionner nous-mêmes une fenêtre sans bordure à la résolution physique réelle du moniteur.
+    let (_, _, real_w, real_h) = wm::primary_monitor();
+    let (real_w, real_h) = (real_w as u32, real_h as u32);
     slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name(renderer)
-        .with_winit_window_attributes_hook(|attrs| {
+        .with_winit_window_attributes_hook(move |attrs| {
+            use slint::winit_030::winit::dpi::{PhysicalPosition, PhysicalSize};
             use slint::winit_030::winit::platform::windows::WindowAttributesExtWindows;
-            attrs.with_drag_and_drop(false)
+            let attrs = attrs.with_drag_and_drop(false);
+            if desktop_only {
+                attrs
+            } else {
+                attrs.with_decorations(false).with_inner_size(PhysicalSize::new(real_w, real_h)).with_position(PhysicalPosition::new(0, 0))
+            }
         })
         .select()?;
     let overrides = prefs::load();
@@ -263,7 +272,6 @@ fn main() -> Result<(), slint::PlatformError> {
         anim_n: Cell::new(0),
         ext_game: RefCell::new(None),
         ext_pending: Cell::new(None),
-        foreign_fg: Cell::new(None),
         last_tab: Cell::new(0),
         kb_last: Cell::new(None),
         bt_unpair_id: RefCell::new(None),
@@ -534,6 +542,9 @@ fn main() -> Result<(), slint::PlatformError> {
             wm::make_overlay(sp);
             wm::hide(sp);
             if let Some(m) = wm::find_window(MAIN_TITLE) {
+                // La taille/position demandée à winit à la création (voir plus haut) n'est pas fiable
+                // telle quelle : on recale nous-mêmes sur l'écran, comme pour un jeu.
+                wm::fit_to_monitor(m);
                 wm::focus(m);
                 // Dev : un ancien shell élevé peut masquer le nôtre ; HEARTH_DEV_TOPMOST le recouvre.
                 if std::env::var_os("HEARTH_DEV_TOPMOST").is_some() {
@@ -1438,36 +1449,27 @@ impl Shell {
         }
     }
 
-    /// Filet de sécurité : si une fenêtre qui ne nous appartient pas reste au premier plan plus de
-    /// quelques secondes sans qu'aucun jeu ni lancement ne soit en cours, Hearth reprend le focus
-    /// seul (ex. notification Windows, fenêtre orpheline…) plutôt que de rester muet indéfiniment
-    /// (la manette, lue même en arrière-plan, n'agit que si `foreground_is_mine()`, voir `nav`).
-    /// Un jeu suivi (job ou lancé par une boutique) ou un lancement en cours (`ext_pending`, qui
-    /// couvre aussi le cas où le client de la boutique réclame une action de l'utilisateur) ne sont
-    /// jamais concurrencés.
+    /// Filet de sécurité : une fenêtre qui ne nous appartient pas passe au premier plan puis disparaît
+    /// (notification Windows, boîte de dialogue…) sans que Hearth ne redevienne jamais le premier plan
+    /// tout seul — la manette, lue même en arrière-plan, n'agit alors plus (voir `foreground_is_mine`
+    /// dans `nav`). Ne reprend la main que si **rien de réel** (fenêtre visible, titrée, assez grande —
+    /// `foreground_game`, même logique que pour détecter un jeu) n'est au premier plan : ne concurrence
+    /// donc jamais une vraie application que l'utilisateur garde volontairement à côté de Hearth (par ex.
+    /// pour lui écrire), contrairement à une temporisation aveugle. Un jeu suivi (job ou lancé par une
+    /// boutique) ou un lancement en cours (`ext_pending`) ne sont jamais concernés.
     fn reclaim_focus(&self) {
         if wm::foreground_is_mine() {
-            self.foreign_fg.set(None);
             return;
         }
         let fg = wm::foreground();
         let tracked = self.running.borrow().iter().any(|r| r.session.owns(fg))
             || self.ext_game.borrow().as_ref().is_some_and(|e| e.hwnd == fg)
             || self.ext_pending.get().is_some();
-        if tracked {
-            self.foreign_fg.set(None);
+        if tracked || wm::foreground_game(&[]).is_some() {
             return;
         }
-        let now = std::time::Instant::now();
-        match self.foreign_fg.get() {
-            Some((h, since)) if h == fg.0 as isize && now.duration_since(since) > Duration::from_secs(3) => {
-                if let Some(m) = wm::find_window(MAIN_TITLE) {
-                    wm::focus(m);
-                }
-                self.foreign_fg.set(None);
-            }
-            Some((h, since)) if h == fg.0 as isize => self.foreign_fg.set(Some((h, since))),
-            _ => self.foreign_fg.set(Some((fg.0 as isize, now))),
+        if let Some(m) = wm::find_window(MAIN_TITLE) {
+            wm::focus(m);
         }
     }
 

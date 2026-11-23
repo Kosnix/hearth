@@ -1,13 +1,17 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <assemblyIdentity type="win32" name="Hearth.Shell" version="1.0.0.0"/>
-  <!-- Console plein écran à résolution fixe : l'affichage doit être identique quel que soit le
-       réglage de mise à l'échelle de Windows, pas redimensionné par lui (dpiAware=false : Windows
-       traite Hearth comme un programme non adapté au DPI et agrandit/réduit l'image lui-même en
-       fonction de l'écran, au lieu de changer la taille logique de l'interface). -->
+  <!-- Console plein écran à résolution fixe, quel que soit le réglage de mise à l'échelle de Windows :
+       on a besoin des vraies coordonnées physiques partout (wm::primary_monitor, EnumDisplaySettings,
+       GetMonitorInfo…), donc le processus doit être authentiquement adapté au DPI (sinon Windows ment
+       différemment selon l'API appelée sur l'échelle réelle, un vrai piège : certaines renvoient la
+       résolution physique, d'autres une résolution « virtualisée » selon le facteur d'échelle, de façon
+       incohérente). Slint restitue ensuite 1 pixel logique = 1 pixel physique nous-mêmes
+       (SLINT_SCALE_FACTOR=1, voir main.rs), sans jamais laisser Windows ou Slint agrandir l'image. -->
   <asmv3:application xmlns:asmv3="urn:schemas-microsoft-com:asm.v3">
     <asmv3:windowsSettings xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">
-      <dpiAware>false</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <dpiAware>true/pm</dpiAware>
     </asmv3:windowsSettings>
   </asmv3:application>
 </assembly>
