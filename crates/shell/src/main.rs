@@ -247,27 +247,11 @@ fn main() -> Result<(), slint::PlatformError> {
             }
         })
         .select()?;
-    // Les 4 fenêtres sont créées tout de suite, toutes avant la moindre itération de la boucle
-    // d'événements (comme avant ce découpage) : en créer une après coup, une fois la boucle lancée,
-    // échoue avec RPC_E_CHANGED_MODE (COM déjà réinitialisé entre-temps par winit — piège connu, voir
-    // CLAUDE.md). La fenêtre principale est affichée tout de suite (écran de démarrage, voir app.slint
-    // `boot-visible`) ; le reste de l'initialisation (jeux, art, réglages…), potentiellement coûteux,
-    // se fait ensuite seulement, une fois la boucle lancée et ce premier écran peint.
     let ui = App::new()?;
     let guide = GuideMenu::new()?;
     let splash = Splash::new()?;
     let pad = PadOverlay::new()?;
     mark("ui_created");
-    ui.show()?;
-    slint::Timer::single_shot(Duration::from_millis(50), move || {
-        if let Err(e) = run_shell(ui, guide, splash, pad, desktop_only) {
-            let _ = std::fs::write(games_file().with_file_name("panic.log"), format!("échec de démarrage : {e}"));
-        }
-    });
-    return slint::run_event_loop();
-}
-
-fn run_shell(ui: App, guide: GuideMenu, splash: Splash, pad: PadOverlay, desktop_only: bool) -> Result<(), slint::PlatformError> {
     let overrides = prefs::load();
     let games = load_games(stores::installed(), &overrides);
     mark("games");
@@ -708,9 +692,9 @@ fn run_shell(ui: App, guide: GuideMenu, splash: Splash, pad: PadOverlay, desktop
     mark("before_run");
     if desktop_only {
         shell.desktop_open();
-        shell.ui.set_boot_visible(false);
+        return slint::run_event_loop();
     }
-    Ok(())
+    shell.ui.run()
 }
 
 thread_local! {
