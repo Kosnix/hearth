@@ -126,7 +126,7 @@ impl Store for Steam {
                 let fin = it["final_price"].as_i64().unwrap_or(0);
                 let disc = it["discount_percent"].as_i64().unwrap_or(0);
                 out.push(offer(id, it["name"].as_str().unwrap_or(""), fin, disc, cur));
-                if out.len() >= 24 {
+                if out.len() >= 48 {
                     return out;
                 }
             }
@@ -148,7 +148,7 @@ impl Store for Steam {
                 let disc = if initial > fin && initial > 0 { (initial - fin) * 100 / initial } else { 0 };
                 Some(offer(id, it["name"].as_str()?, fin, disc, it["price"]["currency"].as_str().unwrap_or("EUR")))
             })
-            .take(24)
+            .take(48)
             .collect()
     }
 }

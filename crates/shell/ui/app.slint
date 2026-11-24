@@ -501,10 +501,19 @@ component NavKeys inherits FocusScope {
 export component App inherits Window {
     in property <string> ui-font;
     default-font-family: ui-font;
+    // Écran de démarrage : masque l'interface pendant son initialisation (jeux, art, réglages…).
+    // Affiché dès la création de la fenêtre (avant même que ces données existent), masqué dès que
+    // tout est prêt (voir main.rs) — jamais plus longtemps que le chargement lui-même.
+    in property <bool> boot-visible: true;
     in property <[Tile]> games; // onglet Jeux : jeux installés
     in property <[Tile]> library; // onglet Bibliothèque : jeux possédés à installer
     in property <string> search-query;
     in property <[Offer]> offers;
+    in property <bool> offers-more; // d'autres résultats déjà récupérés, pas encore affichés
+    callback show-more-offers();
+    in property <[string]> offer-stores; // puces de filtre boutique : "Tous" puis une par boutique présente
+    in-out property <int> ofilter: 0;
+    callback pick-offer-filter(int);
     in property <[Notif]> notifs;
     in property <[PickItem]> pick-items;
     in property <string> pick-title;
@@ -527,7 +536,7 @@ export component App inherits Window {
     in property <string> qr-action;
     in property <int> qr-return: 0;
     in-out property <int> osel: 0;
-    in-out property <int> brow: 0; // 0 recherche, 1 offres
+    in-out property <int> brow: 0; // 0 recherche, 1 offres, 2 ajouter une boutique, 3 filtre boutique
     in-out property <int> lbrow: 0; // 0 recherche (Bibliothèque), 1 grille
     in property <string> lib-query;
     // Menu contextuel (options d'un jeu, ajout).
@@ -798,24 +807,31 @@ export component App inherits Window {
                 // d'offres (brow==1), comme depuis toute autre grille du programme (Jeux, Bibliothèque) ;
                 // la liste des mises en avant (brow==2) garde ses deux niveaux (elle-même imbriquée
                 // dans l'aperçu de la page, brow==0).
-                if (a == 5 && brow == 2) { brow = 0; }
-                else if (a == 0 && brow == 2) { brow = 0; }
+                if (a == 5 && (brow == 2 || brow == 3)) { brow = 0; }
+                else if (a == 0 && (brow == 2 || brow == 3)) { brow = 0; }
                 else if ((a == 0 && brow == 0) || a == 5) { top = tab; zone = 1; }
                 else if (brow == 0) {
                     if (a == 4) { search-open(); }
                     else if (a == 3 && onboard.length > 0) { brow = 2; }
+                    else if (a == 3 && onboard.length == 0 && offer-stores.length > 1) { brow = 3; }
                     else if (a == 1 && offers.length > 0) { brow = 1; }
                 } else if (brow == 2) {
                     if (a == 2) { if (obsel == 0) { brow = 0; } else { obsel = obsel - 1; } }
                     else if (a == 3) { obsel = max(0, min(onboard.length - 1, obsel + 1)); }
                     else if (a == 1 && offers.length > 0) { brow = 1; }
                     else if (a == 4) { onboard-pick(obsel); }
+                } else if (brow == 3) {
+                    if (a == 2) { if (ofilter == 0) { brow = 0; } else { pick-offer-filter(ofilter - 1); } }
+                    else if (a == 3) { pick-offer-filter(min(offer-stores.length - 1, ofilter + 1)); }
+                    else if (a == 1 && offers.length > 0) { brow = 1; }
+                    else if (a == 4) { pick-offer-filter(ofilter); }
                 } else {
+                    // Case « Voir plus » : un cran de plus que la grille quand il reste des résultats non affichés.
                     if (a == 0) { if (osel < cols) { brow = 0; } else { osel = osel - cols; } }
-                    else if (a == 1) { osel = max(0, min(offers.length - 1, osel + cols)); }
+                    else if (a == 1) { osel = max(0, min(offers-more ? offers.length : offers.length - 1, osel + cols)); }
                     else if (a == 2) { osel = max(0, osel - 1); }
-                    else if (a == 3) { osel = max(0, min(offers.length - 1, osel + 1)); }
-                    else if (a == 4) { show-offer(osel); }
+                    else if (a == 3) { osel = max(0, min(offers-more ? offers.length : offers.length - 1, osel + 1)); }
+                    else if (a == 4) { if (offers-more && osel == offers.length) { show-more-offers(); } else { show-offer(osel); } }
                 }
             }
         }
@@ -1153,6 +1169,31 @@ export component App inherits Window {
             clicked => { root.brow = 2; root.obsel = i; root.onboard-pick(i); }
         }
     }
+    // Filtre par boutique (une puce par boutique présente dans les résultats, plus « Tous ») : même
+    // emplacement que l'invitation à connecter une boutique, qui disparaît une fois toutes connectées.
+    for st[i] in offer-stores: Rectangle {
+        x: 1240px + i * 210px;
+        y: 170px;
+        width: 190px;
+        height: 92px;
+        border-radius: 46px;
+        visible: tab == 2 && onboard.length == 0 && offer-stores.length > 1;
+        background: zone == 0 && brow == 3 && ofilter == i ? Theme.accent : Theme.glass;
+        animate background { duration: 100ms; }
+        Text {
+            x: 0px;
+            width: parent.width;
+            horizontal-alignment: center;
+            text: st;
+            font-size: 24px;
+            font-weight: 600;
+            overflow: elide;
+            color: zone == 0 && brow == 3 && ofilter == i ? Theme.on-accent : Theme.text;
+        }
+        TouchArea {
+            clicked => { root.brow = 3; root.pick-offer-filter(i); }
+        }
+    }
     if tab == 2: Text {
         opacity: tab-fade;
         animate opacity { duration: 100ms; easing: ease-out; }
@@ -1255,6 +1296,50 @@ export component App inherits Window {
                 }
                 TouchArea {
                     clicked => { root.brow = 1; root.osel = i; root.show-offer(i); }
+                }
+            }
+            // Case « Voir plus » : révèle le reste des résultats déjà récupérés (pas de requête réseau).
+            if offers-more: Rectangle {
+                property <int> i: offers.length;
+                property <int> trow: floor(i / cols);
+                property <bool> on: brow == 1 && zone == 0 && osel == i;
+                x: 40px + mod(i, cols) * 246px;
+                y: 20px + trow * 450px;
+                width: 210px;
+                height: 430px;
+                Rectangle {
+                    x: 0px;
+                    y: 0px;
+                    width: 210px;
+                    height: 315px;
+                    border-radius: 16px;
+                    background: Theme.glass;
+                    border-width: on ? 7px : 0px;
+                    border-color: Theme.accent;
+                    Text {
+                        width: 100%;
+                        height: 100%;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        text: "\u{E710}";
+                        font-family: Theme.icons;
+                        font-size: 64px;
+                        color: on ? Theme.text : Theme.dim;
+                    }
+                }
+                Text {
+                    x: 0px;
+                    y: 326px;
+                    width: 210px;
+                    height: 60px;
+                    text: @tr("Voir plus");
+                    font-size: 22px;
+                    font-weight: 600;
+                    color: on ? Theme.text : Theme.dim;
+                    horizontal-alignment: center;
+                }
+                TouchArea {
+                    clicked => { root.brow = 1; root.osel = i; root.show-more-offers(); }
                 }
             }
         }
@@ -2715,6 +2800,26 @@ export component App inherits Window {
             }
         }
     }
+
+    // Toujours en dernier (au-dessus de tout) : couvre l'interface tant qu'elle n'est pas prête.
+    if boot-visible: Rectangle {
+        background: Theme.deep;
+        Logo {
+            x: (parent.width - self.width) / 2;
+            y: parent.height / 2 - 160px;
+            size: 140px;
+        }
+        Text {
+            x: 0px;
+            y: parent.height / 2 + 20px;
+            width: parent.width;
+            horizontal-alignment: center;
+            text: "Hearth";
+            font-size: 48px;
+            font-weight: 700;
+            color: Theme.text;
+        }
+    }
 }
 
 // Ligne du menu en jeu : pastille d'icône, libellé, valeur et éventuelle jauge.
@@ -2963,7 +3068,7 @@ export component Splash inherits Window {
     always-on-top: true;
     background: Theme.deep;
     TouchArea { }
-    // Fond : dégradé à la couleur du jeu (sous le logo ou l'image, seul fond en mode « roue centrée »).
+    // Fond : dégradé à la couleur du jeu (seul fond quand il n'y a ni logo ni image assez grande).
     Rectangle {
         background: @linear-gradient(135deg, launch-hue.darker(0.4) 0%, Theme.deep 100%);
     }
@@ -3016,17 +3121,16 @@ export component Splash inherits Window {
     }
     // Léger voile pour que la roue reste visible sur n'importe quel fond.
     Rectangle {
-        x: plain ? (parent.width - 700px) / 2 : parent.width - 700px;
-        y: plain ? (plain-cover ? plain-cover-y + 580px : parent.height / 2 - 260px) : parent.height - 500px;
+        x: parent.width - 700px;
+        y: parent.height - 500px;
         width: 700px;
         height: 500px;
         background: @radial-gradient(circle, #000000a0 0%, #00000000 70%);
     }
-    // Roue de chargement : douze points qui s'estompent en tournant. Au centre sans visuel (sous la
-    // jaquette et le nom s'il y en a une), en coin sinon.
+    // Roue de chargement : douze points qui s'estompent en tournant. Toujours en bas à droite.
     for i in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]: Rectangle {
-        x: (plain ? parent.width / 2 : parent.width - 170px) + 46px * cos(i * 30deg) - 9px;
-        y: (plain ? (plain-cover ? plain-cover-y + 630px : parent.height / 2 - 10px) : parent.height - 170px) + 46px * sin(i * 30deg) - 9px;
+        x: parent.width - 170px + 46px * cos(i * 30deg) - 9px;
+        y: parent.height - 170px + 46px * sin(i * 30deg) - 9px;
         width: 18px;
         height: 18px;
         border-radius: 9px;

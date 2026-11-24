@@ -38,6 +38,7 @@ const GUIDE_TITLE: &str = "Hearth Guide";
 const SPLASH_TITLE: &str = "Hearth Splash";
 const PAD_TITLE: &str = "Hearth Pad";
 const GUIDE_WIDTH: f32 = 460.0; // px logiques
+const OFFERS_PAGE: usize = 24; // Boutique : nombre de cartes révélées par défaut / par clic sur « Voir plus ».
 const MAX_NOTES: usize = 5;
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Default)]
@@ -163,6 +164,13 @@ struct Shell {
     offers: Rc<VecModel<Offer>>,
     /// Offres du catalogue affiché (titres, URLs) et leurs images locales.
     offer_data: RefCell<Vec<stores::Offer>>,
+    /// Toutes les cartes déjà construites (art compris), même celles pas encore révélées (« Voir plus »)
+    /// ou cachées par le filtre de boutique courant. Index stable : celui du tableau renvoyé par la requête.
+    offers_full: RefCell<Vec<(stores::Offer, Offer)>>,
+    offers_shown: Cell<usize>,
+    /// Boutiques distinctes présentes dans `offers_full` (pour les puces de filtre) et filtre actif (`None` = Tous).
+    offer_store_names: RefCell<Vec<String>>,
+    offer_filter: RefCell<Option<String>>,
     featured: RefCell<Option<(Vec<stores::Offer>, Vec<Option<imgload::Buf>>)>>,
     store_status: RefCell<Vec<(String, bool, usize)>>,
     catalog_started: Cell<bool>,
@@ -239,14 +247,35 @@ fn main() -> Result<(), slint::PlatformError> {
             }
         })
         .select()?;
+    // Les 4 fenêtres sont créées tout de suite, toutes avant la moindre itération de la boucle
+    // d'événements (comme avant ce découpage) : en créer une après coup, une fois la boucle lancée,
+    // échoue avec RPC_E_CHANGED_MODE (COM déjà réinitialisé entre-temps par winit — piège connu, voir
+    // CLAUDE.md). La fenêtre principale est affichée tout de suite (écran de démarrage, voir app.slint
+    // `boot-visible`) ; le reste de l'initialisation (jeux, art, réglages…), potentiellement coûteux,
+    // se fait ensuite seulement, une fois la boucle lancée et ce premier écran peint.
+    let ui = App::new()?;
+    let guide = GuideMenu::new()?;
+    let splash = Splash::new()?;
+    let pad = PadOverlay::new()?;
+    mark("ui_created");
+    ui.show()?;
+    slint::Timer::single_shot(Duration::from_millis(50), move || {
+        if let Err(e) = run_shell(ui, guide, splash, pad, desktop_only) {
+            let _ = std::fs::write(games_file().with_file_name("panic.log"), format!("échec de démarrage : {e}"));
+        }
+    });
+    return slint::run_event_loop();
+}
+
+fn run_shell(ui: App, guide: GuideMenu, splash: Splash, pad: PadOverlay, desktop_only: bool) -> Result<(), slint::PlatformError> {
     let overrides = prefs::load();
     let games = load_games(stores::installed(), &overrides);
     mark("games");
     let shell = Rc::new(Shell {
-        ui: App::new()?,
-        guide: GuideMenu::new()?,
-        splash: Splash::new()?,
-        pad: PadOverlay::new()?,
+        ui,
+        guide,
+        splash,
+        pad,
         pad_acc: Cell::new(false),
         status_n: Cell::new(0),
         desktop: RefCell::new(None),
@@ -319,6 +348,10 @@ fn main() -> Result<(), slint::PlatformError> {
         settings: settings::Settings::new(),
         offers: Rc::new(VecModel::default()),
         offer_data: RefCell::new(vec![]),
+        offers_full: RefCell::new(vec![]),
+        offers_shown: Cell::new(0),
+        offer_store_names: RefCell::new(vec![]),
+        offer_filter: RefCell::new(None),
         featured: RefCell::new(Default::default()),
         store_status: RefCell::new(vec![]),
         catalog_started: Cell::new(false),
@@ -425,6 +458,10 @@ fn main() -> Result<(), slint::PlatformError> {
     shell.ui.on_menu_pick(move |i| s.menu_pick(i as usize));
     let s = shell.clone();
     shell.ui.on_deal_pick(move |i| s.deal_pick(i as usize));
+    let s = shell.clone();
+    shell.ui.on_show_more_offers(move || s.show_more_offers());
+    let s = shell.clone();
+    shell.ui.on_pick_offer_filter(move |i| s.pick_offer_filter(i as usize));
     let s = shell.clone();
     shell.ui.on_kb_char(move |t| s.kb_char(t.as_str()));
     let s = shell.clone();
@@ -537,6 +574,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // focus l'une après l'autre : l'ouverture de Hearth « saute » d'un écran à l'autre).
     let setup = Rc::new(slint::Timer::default());
     let t = setup.clone();
+    let s = shell.clone();
     if !desktop_only {
     setup.start(slint::TimerMode::Repeated, Duration::from_millis(4), move || {
         if let (Some(h), Some(sp), Some(pd)) = (wm::find_window(GUIDE_TITLE), wm::find_window(SPLASH_TITLE), wm::find_window(PAD_TITLE)) {
@@ -556,6 +594,8 @@ fn main() -> Result<(), slint::PlatformError> {
                     let (x, y, w, h) = wm::primary_monitor();
                     wm::show_overlay(m, x, y, w, h);
                 }
+                // Prêt : l'écran de démarrage n'a plus de raison d'être, jamais plus longtemps que ça.
+                s.ui.set_boot_visible(false);
             }
             t.stop();
         }
@@ -668,9 +708,9 @@ fn main() -> Result<(), slint::PlatformError> {
     mark("before_run");
     if desktop_only {
         shell.desktop_open();
-        return slint::run_event_loop();
+        shell.ui.set_boot_visible(false);
     }
-    shell.ui.run()
+    Ok(())
 }
 
 thread_local! {
@@ -847,7 +887,7 @@ impl Shell {
         }
         if wm::find_window(SPLASH_TITLE).is_some_and(wm::is_visible) {
             if nav == Nav::Back {
-                self.hide_splash();
+                self.cancel_launch();
             }
             return;
         }
@@ -1832,13 +1872,43 @@ impl Shell {
                 }
             }
         }
-        if self.catalog_gen.get() == gen {
-            if let Some(mut row) = self.offers.row_data(i) {
-                let img = imgload::image(&p);
-                row.art = img;
-                self.offers.set_row_data(i, row);
-            }
+        if self.catalog_gen.get() != gen {
+            return;
         }
+        let img = imgload::image(&p);
+        if let Some((_, row)) = self.offers_full.borrow_mut().get_mut(i) {
+            row.art = img;
+        }
+        // Révélée ou non (filtrée, ou au-delà de « Voir plus ») : au pire l'image attend dans offers_full
+        // qu'un changement de filtre ou un clic sur « Voir plus » recompose la liste affichée.
+        self.reveal_offers();
+    }
+
+    /// Reconstruit `offers` (le modèle exposé à l'UI) à partir de `offers_full` : filtre de boutique
+    /// courant, puis limité à `offers_shown` cartes (« Voir plus »).
+    fn reveal_offers(&self) {
+        let full = self.offers_full.borrow();
+        let filter = self.offer_filter.borrow();
+        let filtered: Vec<&Offer> = full.iter().filter(|(d, _)| filter.as_deref().is_none_or(|f| d.store == f)).map(|(_, u)| u).collect();
+        let shown = self.offers_shown.get().min(filtered.len());
+        self.ui.set_offers_more(shown < filtered.len());
+        self.offers.set_vec(filtered[..shown].iter().map(|o| (*o).clone()).collect::<Vec<_>>());
+        *self.offer_data.borrow_mut() =
+            full.iter().filter(|(d, _)| filter.as_deref().is_none_or(|f| d.store == f)).take(shown).map(|(d, _)| d.clone()).collect();
+    }
+
+    /// « Voir plus » : révèle un lot de cartes de plus parmi celles déjà récupérées (aucune requête réseau).
+    fn show_more_offers(&self) {
+        self.offers_shown.set(self.offers_shown.get() + OFFERS_PAGE);
+        self.reveal_offers();
+    }
+
+    /// Puce de filtre boutique cliquée : 0 = Tous, sinon index (+1) dans `offer_store_names`.
+    fn pick_offer_filter(&self, i: usize) {
+        *self.offer_filter.borrow_mut() = if i == 0 { None } else { self.offer_store_names.borrow().get(i - 1).cloned() };
+        self.offers_shown.set(OFFERS_PAGE);
+        self.ui.set_ofilter(i as i32);
+        self.reveal_offers();
     }
 
     fn apply_offers(&self, offers: &[stores::Offer], paths: &[Option<imgload::Buf>]) {
@@ -1856,7 +1926,6 @@ impl Shell {
             .collect();
         let own = self.owned_titles();
         let rows: Vec<Offer> = rows.into_iter().map(|mut r| { r.owned = own.contains(&stores::norm_title(&r.title)); r }).collect();
-        *self.offer_data.borrow_mut() = offers.to_vec();
         let state = if !rows.is_empty() {
             ""
         } else if !stores::any_connected() {
@@ -1865,7 +1934,17 @@ impl Shell {
             "empty"
         };
         self.ui.set_offers_state(state.into());
-        self.offers.set_vec(rows);
+        *self.offers_full.borrow_mut() = offers.iter().cloned().zip(rows).collect();
+        let mut names: Vec<String> = offers.iter().map(|o| o.store.clone()).collect();
+        names.sort();
+        names.dedup();
+        let chips: Vec<slint::SharedString> = std::iter::once(tr("Tous").into()).chain(names.iter().map(|n| n.as_str().into())).collect();
+        self.ui.set_offer_stores(Rc::new(VecModel::from(chips)).into());
+        *self.offer_store_names.borrow_mut() = names;
+        *self.offer_filter.borrow_mut() = None;
+        self.ui.set_ofilter(0);
+        self.offers_shown.set(OFFERS_PAGE);
+        self.reveal_offers();
     }
 
     fn search_open(&self) {
@@ -2054,6 +2133,28 @@ impl Shell {
         }
         self.splash_start.set(None);
         self.splash_timer.stop();
+    }
+
+    /// Annule un lancement en cours (écran de chargement) : O (PS5) / B (Xbox). Tue le job du jeu
+    /// lancé directement ; pour un lancement par une boutique (processus hors de notre contrôle),
+    /// au mieux : ferme sa fenêtre si elle est déjà repérée, sinon on ne fait que cesser de la suivre.
+    fn cancel_launch(&self) {
+        let Some(tile) = self.splash_tile.get() else { return };
+        self.hide_splash();
+        if let Some(pos) = self.running.borrow().iter().position(|r| r.tile == tile) {
+            self.running.borrow_mut().remove(pos).session.kill();
+        }
+        if self.ext_pending.get().is_some_and(|(t, _)| t == tile) {
+            self.ext_pending.set(None);
+        }
+        let mut ext = self.ext_game.borrow_mut();
+        if ext.as_ref().is_some_and(|e| e.tile == tile) {
+            if let Some(e) = ext.take() {
+                wm::kill_owner(e.hwnd);
+            }
+        }
+        drop(ext);
+        self.rebuild();
     }
 
     fn splash_tick(&self) {

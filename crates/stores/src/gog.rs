@@ -54,7 +54,7 @@ impl Store for Gog {
 }
 
 fn catalog(params: &str) -> Vec<Offer> {
-    let url = format!("https://catalog.gog.com/v1/catalog?limit=24&{params}&productType=in:game,pack&locale=fr-FR&countryCode=FR&currencyCode=EUR");
+    let url = format!("https://catalog.gog.com/v1/catalog?limit=48&{params}&productType=in:game,pack&locale=fr-FR&countryCode=FR&currencyCode=EUR");
     let Some(j) = http::get_json(&url, &[]) else { return vec![] };
     j["products"]
         .as_array()

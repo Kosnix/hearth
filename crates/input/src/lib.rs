@@ -215,7 +215,8 @@ fn read_wgi() -> u16 {
 
 const SONY: u16 = 0x054C;
 
-/// DualShock 4 / DualSense (HID) : boutons 0 Carré, 1 Croix, 2 Rond, 9 Options, 12 PS ; chapeau 0 = croix ; axes 0/1 = stick gauche (0..1).
+/// DualShock 4 / DualSense (HID) : boutons 0 Carré, 1 Croix, 2 Rond, 9 Options, 12 PS ; chapeau 0 = croix ;
+/// axes classés par `mouse::split` (voir ce commentaire : leur ordre n'est pas garanti).
 // ponytail: seul le schéma Sony est mappé ; autres manettes HID en phase 4.
 fn read_sony() -> u16 {
     let raws = sony_pads();
@@ -237,9 +238,10 @@ fn read_sony() -> u16 {
         if let Some(h) = s.first() {
             bits |= hat(*h);
         }
-        if a.len() >= 2 {
-            bits |= stick((a[0] - 0.5) * 2.0, (0.5 - a[1]) * 2.0);
-        }
+        // Stick gauche : jamais a[0]/a[1] en dur (voir `mouse::split`), une gâchette au repos (0) prise pour
+        // un stick dévié au maximum sinon -> navigation figée dans une direction, insensible au vrai stick.
+        let (st, _) = mouse::split(&a);
+        bits |= stick((st[0] - 0.5) * 2.0, (0.5 - st[1]) * 2.0);
     }
     bits
 }
