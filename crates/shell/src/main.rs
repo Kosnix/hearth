@@ -167,7 +167,10 @@ struct Shell {
     /// Toutes les cartes déjà construites (art compris), même celles pas encore révélées (« Voir plus »)
     /// ou cachées par le filtre de boutique courant. Index stable : celui du tableau renvoyé par la requête.
     offers_full: RefCell<Vec<(stores::Offer, Offer)>>,
-    offers_shown: Cell<usize>,
+    /// Requête (`None` = catalogue « à la une ») et nombre d'entrées demandées par boutique à la
+    /// dernière/prochaine requête réseau — « Voir plus » l'augmente et relit (voir `show_more_offers`).
+    catalog_query: RefCell<Option<String>>,
+    catalog_limit: Cell<usize>,
     /// Boutiques distinctes présentes dans `offers_full` (pour les puces de filtre) et filtre actif (`None` = Tous).
     offer_store_names: RefCell<Vec<String>>,
     offer_filter: RefCell<Option<String>>,
@@ -333,7 +336,8 @@ fn main() -> Result<(), slint::PlatformError> {
         offers: Rc::new(VecModel::default()),
         offer_data: RefCell::new(vec![]),
         offers_full: RefCell::new(vec![]),
-        offers_shown: Cell::new(0),
+        catalog_query: RefCell::new(None),
+        catalog_limit: Cell::new(OFFERS_PAGE),
         offer_store_names: RefCell::new(vec![]),
         offer_filter: RefCell::new(None),
         featured: RefCell::new(Default::default()),
@@ -558,7 +562,6 @@ fn main() -> Result<(), slint::PlatformError> {
     // focus l'une après l'autre : l'ouverture de Hearth « saute » d'un écran à l'autre).
     let setup = Rc::new(slint::Timer::default());
     let t = setup.clone();
-    let s = shell.clone();
     if !desktop_only {
     setup.start(slint::TimerMode::Repeated, Duration::from_millis(4), move || {
         if let (Some(h), Some(sp), Some(pd)) = (wm::find_window(GUIDE_TITLE), wm::find_window(SPLASH_TITLE), wm::find_window(PAD_TITLE)) {
@@ -578,8 +581,6 @@ fn main() -> Result<(), slint::PlatformError> {
                     let (x, y, w, h) = wm::primary_monitor();
                     wm::show_overlay(m, x, y, w, h);
                 }
-                // Prêt : l'écran de démarrage n'a plus de raison d'être, jamais plus longtemps que ça.
-                s.ui.set_boot_visible(false);
             }
             t.stop();
         }
@@ -1785,7 +1786,8 @@ fn fetch_all(offers: &[stores::Offer]) -> Vec<Option<PathBuf>> {
 }
 
 impl Shell {
-    /// Charge le catalogue unifié (« à la une ») ou les résultats d'une recherche.
+    /// Charge le catalogue unifié (« à la une ») ou les résultats d'une recherche, depuis le début
+    /// (filtre remis à « Tous », limite remise à une page).
     fn load_catalog(&self, query: Option<String>) {
         self.catalog_started.set(true);
         let gen = self.catalog_gen.get() + 1;
@@ -1796,19 +1798,40 @@ impl Shell {
             Some(q) => format!("{} « {q} »", tr("Résultats pour")),
             None => tr("À la une"),
         }.into());
+        *self.catalog_query.borrow_mut() = query.clone();
+        self.catalog_limit.set(OFFERS_PAGE);
+        *self.offer_filter.borrow_mut() = None;
+        self.ui.set_ofilter(0);
         if query.is_none() {
             if let Some((offers, paths)) = self.featured.borrow().as_ref() {
                 self.apply_offers(offers, paths);
                 return;
             }
         }
+        self.fetch_catalog(gen, query, OFFERS_PAGE);
+    }
+
+    /// « Voir plus » : relit le catalogue/la recherche courante, en demandant 24 jeux de plus par
+    /// boutique qu'au tour précédent — une vraie requête réseau (GOG pagine réellement ; Steam/Epic
+    /// ont une liste déjà bornée côté serveur et cesseront de grandir une fois celle-ci épuisée).
+    fn show_more_offers(&self) {
+        let gen = self.catalog_gen.get() + 1;
+        self.catalog_gen.set(gen);
+        let limit = self.catalog_limit.get() + OFFERS_PAGE;
+        self.catalog_limit.set(limit);
+        let query = self.catalog_query.borrow().clone();
+        self.fetch_catalog(gen, query, limit);
+    }
+
+    /// Requête réseau proprement dite (chargement initial ou « Voir plus ») : liste puis visuels.
+    fn fetch_catalog(&self, gen: u32, query: Option<String>, limit: usize) {
         self.offers.set_vec(vec![]);
         self.offer_data.borrow_mut().clear();
         self.ui.set_offers_state("loading".into());
         std::thread::spawn(move || {
             let offers = match &query {
-                Some(q) => stores::search(q),
-                None => stores::catalog(),
+                Some(q) => stores::search(q, limit),
+                None => stores::catalog(limit),
             };
             let featured = query.is_none();
             let listed = offers.clone();
@@ -1863,34 +1886,22 @@ impl Shell {
         if let Some((_, row)) = self.offers_full.borrow_mut().get_mut(i) {
             row.art = img;
         }
-        // Révélée ou non (filtrée, ou au-delà de « Voir plus ») : au pire l'image attend dans offers_full
-        // qu'un changement de filtre ou un clic sur « Voir plus » recompose la liste affichée.
         self.reveal_offers();
     }
 
-    /// Reconstruit `offers` (le modèle exposé à l'UI) à partir de `offers_full` : filtre de boutique
-    /// courant, puis limité à `offers_shown` cartes (« Voir plus »).
+    /// Reconstruit `offers` (le modèle exposé à l'UI) et `offer_data` à partir de `offers_full`,
+    /// filtré par boutique si un filtre est actif (« Tous » ne retire rien).
     fn reveal_offers(&self) {
         let full = self.offers_full.borrow();
         let filter = self.offer_filter.borrow();
-        let filtered: Vec<&Offer> = full.iter().filter(|(d, _)| filter.as_deref().is_none_or(|f| d.store == f)).map(|(_, u)| u).collect();
-        let shown = self.offers_shown.get().min(filtered.len());
-        self.ui.set_offers_more(shown < filtered.len());
-        self.offers.set_vec(filtered[..shown].iter().map(|o| (*o).clone()).collect::<Vec<_>>());
-        *self.offer_data.borrow_mut() =
-            full.iter().filter(|(d, _)| filter.as_deref().is_none_or(|f| d.store == f)).take(shown).map(|(d, _)| d.clone()).collect();
-    }
-
-    /// « Voir plus » : révèle un lot de cartes de plus parmi celles déjà récupérées (aucune requête réseau).
-    fn show_more_offers(&self) {
-        self.offers_shown.set(self.offers_shown.get() + OFFERS_PAGE);
-        self.reveal_offers();
+        let keep = |d: &stores::Offer| filter.as_deref().is_none_or(|f| d.store == f);
+        self.offers.set_vec(full.iter().filter(|(d, _)| keep(d)).map(|(_, u)| u.clone()).collect::<Vec<_>>());
+        *self.offer_data.borrow_mut() = full.iter().filter(|(d, _)| keep(d)).map(|(d, _)| d.clone()).collect();
     }
 
     /// Puce de filtre boutique cliquée : 0 = Tous, sinon index (+1) dans `offer_store_names`.
     fn pick_offer_filter(&self, i: usize) {
         *self.offer_filter.borrow_mut() = if i == 0 { None } else { self.offer_store_names.borrow().get(i - 1).cloned() };
-        self.offers_shown.set(OFFERS_PAGE);
         self.ui.set_ofilter(i as i32);
         self.reveal_offers();
     }
@@ -1918,6 +1929,9 @@ impl Shell {
             "empty"
         };
         self.ui.set_offers_state(state.into());
+        // « Voir plus » reste toujours proposé : Steam/Epic ont une liste déjà bornée côté serveur, donc
+        // au-delà d'un certain point un clic ne ramène plus rien de neuf, mais rien n'empêche de réessayer.
+        self.ui.set_offers_more(!rows.is_empty());
         *self.offers_full.borrow_mut() = offers.iter().cloned().zip(rows).collect();
         let mut names: Vec<String> = offers.iter().map(|o| o.store.clone()).collect();
         names.sort();
@@ -1925,9 +1939,6 @@ impl Shell {
         let chips: Vec<slint::SharedString> = std::iter::once(tr("Tous").into()).chain(names.iter().map(|n| n.as_str().into())).collect();
         self.ui.set_offer_stores(Rc::new(VecModel::from(chips)).into());
         *self.offer_store_names.borrow_mut() = names;
-        *self.offer_filter.borrow_mut() = None;
-        self.ui.set_ofilter(0);
-        self.offers_shown.set(OFFERS_PAGE);
         self.reveal_offers();
     }
 

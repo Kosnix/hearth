@@ -91,10 +91,10 @@ pub trait Store: Send + Sync {
     /// Le client de la boutique est-il installé ?
     fn detected(&self) -> bool;
     fn installed(&self) -> Vec<Game>;
-    /// Sélection mise en avant (réseau, bloquant).
-    fn featured(&self) -> Vec<Offer>;
-    /// Recherche dans le catalogue (réseau, bloquant).
-    fn search(&self, query: &str) -> Vec<Offer>;
+    /// Sélection mise en avant (réseau, bloquant), au plus `limit` entrées.
+    fn featured(&self, limit: usize) -> Vec<Offer>;
+    /// Recherche dans le catalogue (réseau, bloquant), au plus `limit` entrées.
+    fn search(&self, query: &str, limit: usize) -> Vec<Offer>;
 }
 
 pub fn all() -> Vec<Box<dyn Store>> {
@@ -207,21 +207,23 @@ fn collect(f: impl Fn(&dyn Store) -> Vec<Offer> + Sync) -> Vec<Offer> {
 
 /// Catalogue unifié « à la une » : seulement les boutiques reliées (écran Boutique — sans ça, GOG, qui a un
 /// catalogue public sans compte, apparaissait même non connecté, alors qu'on ne peut rien y acheter/installer).
-pub fn catalog() -> Vec<Offer> {
+/// `limit` : au plus ce nombre d'entrées par boutique (« Voir plus » l'augmente et relit tout, GOG a un vrai
+/// catalogue paginé ; Steam/Epic ont une liste déjà bornée côté serveur, donc finissent par ne plus grandir).
+pub fn catalog(limit: usize) -> Vec<Offer> {
     let stores: Vec<Box<dyn Store>> = all().into_iter().filter(|s| connected(s.name())).collect();
-    collect_from(&stores, |s| s.featured())
+    collect_from(&stores, |s| s.featured(limit))
 }
 
 /// Recherche dans les boutiques reliées (écran Boutique).
-pub fn search(query: &str) -> Vec<Offer> {
+pub fn search(query: &str, limit: usize) -> Vec<Offer> {
     let stores: Vec<Box<dyn Store>> = all().into_iter().filter(|s| connected(s.name())).collect();
-    collect_from(&stores, |s| s.search(query))
+    collect_from(&stores, |s| s.search(query, limit))
 }
 
 /// Recherche dans toutes les boutiques, reliées ou non (identification d'un jeu local, visuels manquants :
 /// les catalogues publics n'ont pas besoin d'un compte, et on n'achète rien ici).
 pub fn search_any(query: &str) -> Vec<Offer> {
-    collect(|s| s.search(query))
+    collect(|s| s.search(query, 24))
 }
 
 /// Téléchargement HTTPS simple (bloquant).
@@ -240,7 +242,7 @@ pub use steam::disable_overlay as steam_disable_overlay;
 
 /// Visuels d'un jeu sans visuel connu (ajouté à la main…) : recherche par titre sur Steam.
 pub fn resolve_art(title: &str) -> Option<Art> {
-    let offers = steam::Steam.search(title);
+    let offers = steam::Steam.search(title, 24);
     let n = norm(title);
     let pick = offers.iter().find(|o| norm(&o.title) == n).or_else(|| offers.iter().find(|o| norm(&o.title).starts_with(&n) || n.starts_with(&norm(&o.title))))?;
     let id = pick.url.trim_end_matches('/').rsplit('/').next()?.to_string();

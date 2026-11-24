@@ -44,27 +44,35 @@ impl Store for Gog {
         games
     }
 
-    fn featured(&self) -> Vec<Offer> {
-        catalog("order=desc:trending")
+    fn featured(&self, limit: usize) -> Vec<Offer> {
+        catalog("order=desc:trending", limit)
     }
 
-    fn search(&self, query: &str) -> Vec<Offer> {
-        catalog(&format!("query=like:{}&order=desc:score", crate::art::encode(query)))
+    fn search(&self, query: &str, limit: usize) -> Vec<Offer> {
+        catalog(&format!("query=like:{}&order=desc:score", crate::art::encode(query)), limit)
     }
 }
 
-fn catalog(params: &str) -> Vec<Offer> {
-    let url = format!("https://catalog.gog.com/v1/catalog?limit=48&{params}&productType=in:game,pack&locale=fr-FR&countryCode=FR&currencyCode=EUR");
-    let Some(j) = http::get_json(&url, &[]) else { return vec![] };
-    j["products"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|p| {
-            let title = p["title"].as_str()?.to_string();
+const PAGE_SIZE: usize = 48;
+
+/// Catalogue GOG : vraiment paginé côté serveur (`page`, vérifié), contrairement à Steam — "Voir plus"
+/// y fait donc avancer vers de nouvelles pages plutôt que de simplement replafonner la même réponse.
+fn catalog(params: &str, limit: usize) -> Vec<Offer> {
+    let mut out = vec![];
+    for page in 1..=limit.div_ceil(PAGE_SIZE) {
+        let url = format!(
+            "https://catalog.gog.com/v1/catalog?limit={PAGE_SIZE}&page={page}&{params}&productType=in:game,pack&locale=fr-FR&countryCode=FR&currencyCode=EUR"
+        );
+        let Some(j) = http::get_json(&url, &[]) else { break };
+        let products: Vec<&serde_json::Value> = j["products"].as_array().into_iter().flatten().collect();
+        if products.is_empty() {
+            break;
+        }
+        for p in products {
+            let Some(title) = p["title"].as_str().map(str::to_string) else { continue };
             let images: Vec<String> = ["coverVertical", "coverHorizontal"].iter().filter_map(|k| p[*k].as_str().map(String::from)).collect();
             if images.is_empty() {
-                return None;
+                continue;
             }
             let amount = p["price"]["finalMoney"]["amount"].as_str().and_then(|a| a.parse::<f64>().ok());
             let price = match amount {
@@ -82,9 +90,13 @@ fn catalog(params: &str) -> Vec<Offer> {
             if let Some(d) = p["releaseDate"].as_str() {
                 meta.push(d.to_string());
             }
-            Some(Offer { title, price, cents: amount.map(|v| (v * 100.0).round() as i64), store: "GOG".into(), images, heroes, url, meta: meta.join("  ·  "), ..Default::default() })
-        })
-        .collect()
+            out.push(Offer { title, price, cents: amount.map(|v| (v * 100.0).round() as i64), store: "GOG".into(), images, heroes, url, meta: meta.join("  ·  "), ..Default::default() });
+            if out.len() >= limit {
+                return out;
+            }
+        }
+    }
+    out
 }
 
 /// Résout `gog-api:<id>:cover|hero` en URL d'image (API publique des produits).

@@ -43,19 +43,21 @@ impl Store for Epic {
         games
     }
 
-    fn featured(&self) -> Vec<Offer> {
+    // Promotions gratuites publiques uniquement (pas de catalogue général sans compte) : liste déjà
+    // bornée côté serveur, `limit` n'y change donc rien.
+    fn featured(&self, _limit: usize) -> Vec<Offer> {
         let url = "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=fr&country=FR&allowCountries=FR";
         let Some(j) = http::get_json(url, &[]) else { return vec![] };
         j["data"]["Catalog"]["searchStore"]["elements"].as_array().into_iter().flatten().filter_map(offer).collect()
     }
 
-    fn search(&self, query: &str) -> Vec<Offer> {
+    fn search(&self, query: &str, limit: usize) -> Vec<Offer> {
         let body = serde_json::json!({
-            "query": "query q($k:String,$c:String!,$l:String){Catalog{searchStore(keywords:$k,country:$c,locale:$l,count:20,category:\"games/edition/base|bundles/games|editors\"){elements{title description productSlug urlSlug keyImages{type url} price(country:$c){totalPrice{discountPrice}}}}}}",
-            "variables": { "k": query, "c": "FR", "l": "fr" }
+            "query": "query q($k:String,$c:String!,$l:String,$n:Int){Catalog{searchStore(keywords:$k,country:$c,locale:$l,count:$n,category:\"games/edition/base|bundles/games|editors\"){elements{title description productSlug urlSlug keyImages{type url} price(country:$c){totalPrice{discountPrice}}}}}}",
+            "variables": { "k": query, "c": "FR", "l": "fr", "n": limit }
         });
         let Some(j) = http::post_json("https://store.epicgames.com/graphql", &[], &body.to_string()) else { return vec![] };
-        j["data"]["Catalog"]["searchStore"]["elements"].as_array().into_iter().flatten().filter_map(offer).collect()
+        j["data"]["Catalog"]["searchStore"]["elements"].as_array().into_iter().flatten().filter_map(offer).take(limit).collect()
     }
 }
 

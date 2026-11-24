@@ -111,7 +111,7 @@ impl Store for Steam {
         games
     }
 
-    fn featured(&self) -> Vec<Offer> {
+    fn featured(&self, limit: usize) -> Vec<Offer> {
         let Some(j) = http::get_json("https://store.steampowered.com/api/featuredcategories?cc=fr&l=french", &[]) else { return vec![] };
         let mut seen = vec![];
         let mut out = vec![];
@@ -126,7 +126,7 @@ impl Store for Steam {
                 let fin = it["final_price"].as_i64().unwrap_or(0);
                 let disc = it["discount_percent"].as_i64().unwrap_or(0);
                 out.push(offer(id, it["name"].as_str().unwrap_or(""), fin, disc, cur));
-                if out.len() >= 48 {
+                if out.len() >= limit {
                     return out;
                 }
             }
@@ -134,7 +134,9 @@ impl Store for Steam {
         out
     }
 
-    fn search(&self, query: &str) -> Vec<Offer> {
+    // L'API non-officielle `storesearch` ne pagine pas (`page`/`start` ignorés, vérifié) : un seul appel,
+    // borné à ce qu'elle rend elle-même. "Voir plus" ne fera donc plus grandir Steam au-delà de ça.
+    fn search(&self, query: &str, limit: usize) -> Vec<Offer> {
         let url = format!("https://store.steampowered.com/api/storesearch/?term={}&l=french&cc=FR", crate::art::encode(query));
         let Some(j) = http::get_json(&url, &[]) else { return vec![] };
         j["items"]
@@ -148,7 +150,7 @@ impl Store for Steam {
                 let disc = if initial > fin && initial > 0 { (initial - fin) * 100 / initial } else { 0 };
                 Some(offer(id, it["name"].as_str()?, fin, disc, it["price"]["currency"].as_str().unwrap_or("EUR")))
             })
-            .take(48)
+            .take(limit)
             .collect()
     }
 }
