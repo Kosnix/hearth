@@ -2694,7 +2694,7 @@ export component App inherits Window {
                     width: parent.width;
                     height: 118px;
                     border-radius: Theme.r-lg;
-                    background: i == nsel ? Theme.accent : #ffffff14;
+                    background: i == nsel ? Theme.accent : Theme.glass;
                     animate background { duration: 100ms; }
                     if n.unread: Rectangle {
                         x: 14px;
@@ -2783,7 +2783,7 @@ export component App inherits Window {
             width: parent.width - 240px;
             height: 96px;
             border-radius: Theme.r-lg;
-            background: i == psel ? Theme.accent : #ffffff14;
+            background: i == psel ? Theme.accent : Theme.glass;
             Rectangle {
                 x: 12px;
                 y: 8px;
@@ -2991,7 +2991,7 @@ component GuideRow inherits Rectangle {
     callback clicked;
     height: 76px;
     border-radius: Theme.r-lg;
-    background: selected ? Theme.accent : #ffffff14;
+    background: selected ? Theme.accent : Theme.glass;
     animate background { duration: 100ms; }
     Rectangle {
         x: 14px;
@@ -3173,7 +3173,7 @@ export component GuideMenu inherits Window {
         width: parent.width - 56px;
         height: 340px;
         border-radius: Theme.r-lg;
-        background: #ffffff14;
+        background: Theme.glass;
         clip: true;
         Text {
             x: 20px;
