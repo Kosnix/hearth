@@ -1502,23 +1502,6 @@ export component App inherits Window {
         }
     }
 
-    // --- Barre de navigation translucide, commune à tous les onglets (façon iOS) : fond élevé et
-    // filet de séparation, pour détacher la barre du haut du contenu qui défile dessous. Déclarée
-    // avant l'heure/le statut/les onglets pour qu'ils restent bien visibles devant, pas dessous.
-    Rectangle {
-        x: 0px;
-        y: 0px;
-        width: parent.width;
-        height: 165px;
-        background: Theme.panel;
-    }
-    Rectangle {
-        x: 0px;
-        y: 164px;
-        width: parent.width;
-        height: 1px;
-        background: Theme.separator;
-    }
     // Barre d'état, à droite de l'heure : réseau, volume, manette (avec batterie si elle est connue).
     HorizontalLayout {
         x: 350px;
@@ -1671,21 +1654,6 @@ export component App inherits Window {
         }
     }
 
-    // --- Barre du bas translucide (façon iOS), en écho à celle du haut ---
-    Rectangle {
-        x: 0px;
-        y: parent.height - 120px;
-        width: parent.width;
-        height: 120px;
-        background: Theme.panel;
-    }
-    Rectangle {
-        x: 0px;
-        y: parent.height - 120px;
-        width: parent.width;
-        height: 1px;
-        background: Theme.separator;
-    }
     // --- Pictogrammes de la manette ---
     HorizontalLayout {
         x: 40px;
