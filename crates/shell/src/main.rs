@@ -167,6 +167,8 @@ struct Shell {
     /// Toutes les cartes déjà construites (art compris), même celles pas encore révélées (« Voir plus »)
     /// ou cachées par le filtre de boutique courant. Index stable : celui du tableau renvoyé par la requête.
     offers_full: RefCell<Vec<(stores::Offer, Offer)>>,
+    /// Index dans `offers_full` sans aucune jaquette trouvée nulle part : masqués (voir `offer_no_art`).
+    offers_no_art: RefCell<std::collections::HashSet<usize>>,
     /// Requête (`None` = catalogue « à la une ») et nombre d'entrées demandées par boutique à la
     /// dernière/prochaine requête réseau — « Voir plus » l'augmente et relit (voir `show_more_offers`).
     catalog_query: RefCell<Option<String>>,
@@ -174,6 +176,8 @@ struct Shell {
     /// Boutiques distinctes présentes dans `offers_full` (pour les puces de filtre) et filtre actif (`None` = Tous).
     offer_store_names: RefCell<Vec<String>>,
     offer_filter: RefCell<Option<String>>,
+    /// 0 pertinence (ordre renvoyé par les boutiques), 1 nom A→Z, 2 prix croissant, 3 prix décroissant.
+    offer_sort: Cell<i32>,
     featured: RefCell<Option<(Vec<stores::Offer>, Vec<Option<imgload::Buf>>)>>,
     store_status: RefCell<Vec<(String, bool, usize)>>,
     catalog_started: Cell<bool>,
@@ -336,10 +340,12 @@ fn main() -> Result<(), slint::PlatformError> {
         offers: Rc::new(VecModel::default()),
         offer_data: RefCell::new(vec![]),
         offers_full: RefCell::new(vec![]),
+        offers_no_art: RefCell::new(Default::default()),
         catalog_query: RefCell::new(None),
         catalog_limit: Cell::new(OFFERS_PAGE),
         offer_store_names: RefCell::new(vec![]),
         offer_filter: RefCell::new(None),
+        offer_sort: Cell::new(0),
         featured: RefCell::new(Default::default()),
         store_status: RefCell::new(vec![]),
         catalog_started: Cell::new(false),
@@ -449,7 +455,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let s = shell.clone();
     shell.ui.on_show_more_offers(move || s.show_more_offers());
     let s = shell.clone();
-    shell.ui.on_pick_offer_filter(move |i| s.pick_offer_filter(i as usize));
+    shell.ui.on_open_offer_filters(move || s.open_offer_filters());
     let s = shell.clone();
     shell.ui.on_kb_char(move |t| s.kb_char(t.as_str()));
     let s = shell.clone();
@@ -1801,7 +1807,7 @@ impl Shell {
         *self.catalog_query.borrow_mut() = query.clone();
         self.catalog_limit.set(OFFERS_PAGE);
         *self.offer_filter.borrow_mut() = None;
-        self.ui.set_ofilter(0);
+        self.offer_sort.set(0);
         if query.is_none() {
             if let Some((offers, paths)) = self.featured.borrow().as_ref() {
                 self.apply_offers(offers, paths);
@@ -1850,9 +1856,16 @@ impl Shell {
                                 let key = sgdb_key.as_deref()?;
                                 stores::search_sgdb(title, key).first().and_then(|o| stores::fetch_first(&o.images))
                             });
-                            if let Some(p) = found.and_then(|p| imgload::decode(&p, 300, 450)) {
-                                let i = *i;
-                                let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.offer_art(gen, featured, i, p)));
+                            let i = *i;
+                            match found.and_then(|p| imgload::decode(&p, 300, 450)) {
+                                Some(p) => {
+                                    let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.offer_art(gen, featured, i, p)));
+                                }
+                                // Aucune jaquette nulle part (ni la boutique d'origine, ni SteamGridDB) :
+                                // presque toujours un jeu confidentiel/retiré, pas un vrai titre à montrer.
+                                None => {
+                                    let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.offer_no_art(gen, i)));
+                                }
                             }
                         }
                     });
@@ -1889,21 +1902,62 @@ impl Shell {
         self.reveal_offers();
     }
 
-    /// Reconstruit `offers` (le modèle exposé à l'UI) et `offer_data` à partir de `offers_full`,
-    /// filtré par boutique si un filtre est actif (« Tous » ne retire rien).
+    /// Aucune jaquette trouvée nulle part pour cette offre (voir `fetch_catalog`) : on la masque plutôt
+    /// que de montrer une tuile vide pour un jeu presque toujours confidentiel/retiré.
+    fn offer_no_art(&self, gen: u32, i: usize) {
+        if self.catalog_gen.get() != gen {
+            return;
+        }
+        self.offers_no_art.borrow_mut().insert(i);
+        self.reveal_offers();
+    }
+
+    /// Reconstruit `offers` (le modèle exposé à l'UI) et `offer_data` à partir de `offers_full` :
+    /// filtre de boutique (« Tous » ne retire rien), offres sans jaquette masquées (`offers_no_art`),
+    /// puis tri courant (voir `offer_sort`).
     fn reveal_offers(&self) {
         let full = self.offers_full.borrow();
         let filter = self.offer_filter.borrow();
-        let keep = |d: &stores::Offer| filter.as_deref().is_none_or(|f| d.store == f);
-        self.offers.set_vec(full.iter().filter(|(d, _)| keep(d)).map(|(_, u)| u.clone()).collect::<Vec<_>>());
-        *self.offer_data.borrow_mut() = full.iter().filter(|(d, _)| keep(d)).map(|(d, _)| d.clone()).collect();
+        let no_art = self.offers_no_art.borrow();
+        let keep = |i: usize, d: &stores::Offer| filter.as_deref().is_none_or(|f| d.store == f) && !no_art.contains(&i);
+        let mut kept: Vec<&(stores::Offer, Offer)> = full.iter().enumerate().filter(|(i, (d, _))| keep(*i, d)).map(|(_, p)| p).collect();
+        match self.offer_sort.get() {
+            1 => kept.sort_by(|(_, a), (_, b)| a.title.to_lowercase().cmp(&b.title.to_lowercase())),
+            2 => kept.sort_by_key(|(d, _)| d.cents.unwrap_or(i64::MAX)),
+            3 => kept.sort_by_key(|(d, _)| std::cmp::Reverse(d.cents.unwrap_or(i64::MIN))),
+            _ => {}
+        }
+        self.offers.set_vec(kept.iter().map(|(_, u)| u.clone()).collect::<Vec<_>>());
+        *self.offer_data.borrow_mut() = kept.iter().map(|(d, _)| d.clone()).collect();
     }
 
-    /// Puce de filtre boutique cliquée : 0 = Tous, sinon index (+1) dans `offer_store_names`.
-    fn pick_offer_filter(&self, i: usize) {
-        *self.offer_filter.borrow_mut() = if i == 0 { None } else { self.offer_store_names.borrow().get(i - 1).cloned() };
-        self.ui.set_ofilter(i as i32);
+    /// Bouton « Filtres » de la Boutique : un seul menu (boutique puis tri), qui se réaffiche après
+    /// chaque choix pour ajuster l'autre sans le rouvrir — fermé seulement par « Fermer ».
+    fn open_offer_filters(&self) {
+        let current = self.offer_filter.borrow().clone();
+        let mark = |on: bool, label: String| if on { format!("✓ {label}") } else { label };
+        let mut v: Vec<(String, menus::Act)> = vec![(mark(current.is_none(), tr("Toutes les boutiques")), menus::Act::OfferStore(None))];
+        for name in self.offer_store_names.borrow().iter() {
+            v.push((mark(current.as_deref() == Some(name.as_str()), name.clone()), menus::Act::OfferStore(Some(name.clone()))));
+        }
+        let sort = self.offer_sort.get();
+        for (i, label) in [tr("Pertinence"), tr("Nom (A→Z)"), tr("Prix croissant"), tr("Prix décroissant")].into_iter().enumerate() {
+            v.push((mark(sort == i as i32, label), menus::Act::OfferSort(i as i32)));
+        }
+        v.push((tr("Fermer"), menus::Act::Cancel));
+        self.menu_show(tr("Filtres"), v);
+    }
+
+    fn set_offer_store_filter(&self, f: Option<String>) {
+        *self.offer_filter.borrow_mut() = f;
         self.reveal_offers();
+        self.open_offer_filters();
+    }
+
+    fn set_offer_sort(&self, s: i32) {
+        self.offer_sort.set(s);
+        self.reveal_offers();
+        self.open_offer_filters();
     }
 
     fn apply_offers(&self, offers: &[stores::Offer], paths: &[Option<imgload::Buf>]) {
@@ -1932,12 +1986,11 @@ impl Shell {
         // « Voir plus » reste toujours proposé : Steam/Epic ont une liste déjà bornée côté serveur, donc
         // au-delà d'un certain point un clic ne ramène plus rien de neuf, mais rien n'empêche de réessayer.
         self.ui.set_offers_more(!rows.is_empty());
+        self.offers_no_art.borrow_mut().clear();
         *self.offers_full.borrow_mut() = offers.iter().cloned().zip(rows).collect();
         let mut names: Vec<String> = offers.iter().map(|o| o.store.clone()).collect();
         names.sort();
         names.dedup();
-        let chips: Vec<slint::SharedString> = std::iter::once(tr("Tous").into()).chain(names.iter().map(|n| n.as_str().into())).collect();
-        self.ui.set_offer_stores(Rc::new(VecModel::from(chips)).into());
         *self.offer_store_names.borrow_mut() = names;
         self.reveal_offers();
     }

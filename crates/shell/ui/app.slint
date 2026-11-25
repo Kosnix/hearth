@@ -507,9 +507,8 @@ export component App inherits Window {
     in property <[Offer]> offers;
     in property <bool> offers-more; // d'autres résultats déjà récupérés, pas encore affichés
     callback show-more-offers();
-    in property <[string]> offer-stores; // puces de filtre boutique : "Tous" puis une par boutique présente
-    in-out property <int> ofilter: 0;
-    callback pick-offer-filter(int);
+    // Filtres (boutique, tri…) et « Voir plus » : un seul bouton, le choix se fait dans le menu générique.
+    callback open-offer-filters();
     in property <[Notif]> notifs;
     in property <[PickItem]> pick-items;
     in property <string> pick-title;
@@ -809,7 +808,7 @@ export component App inherits Window {
                 else if (brow == 0) {
                     if (a == 4) { search-open(); }
                     else if (a == 3 && onboard.length > 0) { brow = 2; }
-                    else if (a == 1 && offer-stores.length > 1) { brow = 3; }
+                    else if (a == 1 && offers-state == "") { brow = 3; }
                     else if (a == 1 && offers.length > 0) { brow = 1; }
                 } else if (brow == 2) {
                     if (a == 2) { if (obsel == 0) { brow = 0; } else { obsel = obsel - 1; } }
@@ -817,10 +816,8 @@ export component App inherits Window {
                     else if (a == 1 && offers.length > 0) { brow = 1; }
                     else if (a == 4) { onboard-pick(obsel); }
                 } else if (brow == 3) {
-                    if (a == 2) { if (ofilter == 0) { brow = 0; } else { pick-offer-filter(ofilter - 1); } }
-                    else if (a == 3) { pick-offer-filter(min(offer-stores.length - 1, ofilter + 1)); }
-                    else if (a == 1 && offers.length > 0) { brow = 1; }
-                    else if (a == 4) { pick-offer-filter(ofilter); }
+                    if (a == 1 && offers.length > 0) { brow = 1; }
+                    else if (a == 4) { open-offer-filters(); }
                 } else {
                     // Case « Voir plus » : un cran de plus que la grille quand il reste des résultats non affichés.
                     if (a == 0) { if (osel < cols) { brow = 0; } else { osel = osel - cols; } }
@@ -1165,30 +1162,27 @@ export component App inherits Window {
             clicked => { root.brow = 2; root.obsel = i; root.onboard-pick(i); }
         }
     }
-    // Filtre par boutique (une puce par boutique présente dans les résultats, plus « Tous ») : même
-    // Rangée dédiée (sous la recherche/l'invitation à connecter une boutique), toujours à la même
-    // place : visible dès qu'il y a plus d'une boutique parmi les résultats, boutique manquante ou non.
-    for st[i] in offer-stores: Rectangle {
-        x: 80px + i * 210px;
+    // Filtres (boutique, tri…) : un seul bouton, sous la recherche, toujours à la même place dès qu'il
+    // y a des résultats — le choix se fait dans le menu générique (voir open-offer-filters).
+    if tab == 2 && offers-state == "": Rectangle {
+        x: 80px;
         y: 270px;
         width: 190px;
         height: 64px;
         border-radius: 32px;
-        visible: tab == 2 && offer-stores.length > 1;
-        background: zone == 0 && brow == 3 && ofilter == i ? Theme.accent : Theme.glass;
+        background: zone == 0 && brow == 3 ? Theme.accent : Theme.glass;
         animate background { duration: 100ms; }
         Text {
             x: 0px;
             width: parent.width;
             horizontal-alignment: center;
-            text: st;
+            text: @tr("Filtres");
             font-size: 22px;
             font-weight: 600;
-            overflow: elide;
-            color: zone == 0 && brow == 3 && ofilter == i ? Theme.on-accent : Theme.text;
+            color: zone == 0 && brow == 3 ? Theme.on-accent : Theme.text;
         }
         TouchArea {
-            clicked => { root.brow = 3; root.pick-offer-filter(i); }
+            clicked => { root.brow = 3; root.open-offer-filters(); }
         }
     }
     if tab == 2: Text {

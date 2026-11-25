@@ -29,6 +29,8 @@ pub enum Act {
     SelfUpdate,
     ConnectStore(usize),
     ConfirmBtUnpair,
+    OfferStore(Option<String>),
+    OfferSort(i32),
     Cancel,
 }
 
@@ -159,6 +161,8 @@ impl Shell {
                 self.ui.set_zone(back);
                 self.steam_install(&id);
             }
+            Act::OfferStore(f) => self.set_offer_store_filter(f),
+            Act::OfferSort(s) => self.set_offer_sort(s),
             Act::ConfirmBtUnpair => {
                 self.ui.set_zone(back);
                 if let Some((id, name)) = self.bt_unpair_id.borrow_mut().take() {
