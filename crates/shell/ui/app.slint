@@ -1582,10 +1582,19 @@ export component App inherits Window {
         font-size: 34px;
         color: Theme.text;
     }
-    HorizontalLayout {
-        x: 0px;
+    // Contrôle segmenté (façon iOS) : une seule piste élevée qui porte les 3 onglets, plutôt que
+    // trois pilules flottant séparément sur le fond.
+    Rectangle {
+        x: (parent.width - segtrack.width) / 2;
+        y: 78px;
+        width: segtrack.width;
+        height: 78px;
+        border-radius: Theme.r-pill;
+        background: Theme.fill2;
+    }
+    segtrack := HorizontalLayout {
+        x: (parent.width - self.width) / 2;
         y: 84px;
-        width: parent.width;
         height: 70px;
         alignment: center;
         spacing: 24px;
@@ -1593,9 +1602,12 @@ export component App inherits Window {
             width: tt.preferred-width + 64px;
             height: 66px;
             border-radius: Theme.r-pill;
-            background: tab == i ? Theme.accent : (zone == 1 && top == i ? #ffffff30 : Theme.glass);
+            background: tab == i ? Theme.accent : (zone == 1 && top == i ? Theme.fill : transparent);
             border-width: zone == 1 && top == i ? 3px : 0px;
             border-color: Theme.text;
+            drop-shadow-offset-y: tab == i ? 4px : 0px;
+            drop-shadow-blur: tab == i ? 12px : 0px;
+            drop-shadow-color: Theme.accent.transparentize(0.5);
             animate background { duration: 100ms; }
             tt := Text {
                 // Poids fixe : un gras qui n'apparaît qu'à la sélection fait changer la largeur du bouton (moche).
