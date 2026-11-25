@@ -1202,6 +1202,9 @@ export component App inherits Window {
         height: 92px;
         border-radius: Theme.r-pill;
         background: zone == 0 && lbrow == 0 ? Theme.accent : Theme.glass;
+        drop-shadow-offset-y: 6px;
+        drop-shadow-blur: 16px;
+        drop-shadow-color: zone == 0 && lbrow == 0 ? Theme.accent.transparentize(0.5) : #00000060;
         animate background { duration: 100ms; }
         Text {
             x: 36px;
@@ -1284,6 +1287,9 @@ export component App inherits Window {
         height: 92px;
         border-radius: Theme.r-pill;
         background: zone == 0 && brow == 0 ? Theme.accent : Theme.glass;
+        drop-shadow-offset-y: 6px;
+        drop-shadow-blur: 16px;
+        drop-shadow-color: zone == 0 && brow == 0 ? Theme.accent.transparentize(0.5) : #00000060;
         animate background { duration: 100ms; }
         Text {
             x: 36px;
@@ -1333,6 +1339,9 @@ export component App inherits Window {
         height: 64px;
         border-radius: Theme.r-pill;
         background: zone == 0 && brow == 3 ? Theme.accent : Theme.glass;
+        drop-shadow-offset-y: 5px;
+        drop-shadow-blur: 12px;
+        drop-shadow-color: zone == 0 && brow == 3 ? Theme.accent.transparentize(0.5) : #00000060;
         animate background { duration: 100ms; }
         Text {
             x: 0px;
