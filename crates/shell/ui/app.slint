@@ -75,23 +75,178 @@ export struct Offer {
     initial: string,
 }
 
+// Jetons et primitives : refonte visuelle façon iOS (Apple HIG, mode sombre — voir docs/design.md).
+// Rendu logiciel forcé sur cette machine (voir CLAUDE.md) : pas de vrai flou gaussien d'arrière-plan
+// pour les « matériaux » iOS, approché par de la transparence plate superposée (comme iOS lui-même en
+// mode « Réduire la transparence »).
 export global Theme {
-    // Jetons de couleur : renseignés par le shell (thème personnalisable, voir theme.rs) ; valeurs ci-dessous = thème par défaut.
-    in-out property <color> bg: #1b1b1d;
-    in-out property <color> bg-settings: #1b1b1d;
-    in-out property <color> bg-guide: #202022;
-    in-out property <color> deep: #0d0d0f;
-    in-out property <color> band: #262628;
-    in-out property <color> on-accent: #111111;
-    in-out property <color> panel: #262628f2;
+    // Jetons de couleur : renseignés par le shell (thème personnalisable, voir theme.rs) ; valeurs
+    // ci-dessous = thème par défaut. Noms et rôle alignés sur les couleurs système iOS (mode sombre) :
+    // bg = systemBackground, band/guide = secondarySystemBackground, tile = tertiarySystemBackground.
+    in-out property <color> bg: #000000;
+    in-out property <color> bg-settings: #000000;
+    in-out property <color> bg-guide: #1c1c1e;
+    in-out property <color> deep: #000000;
+    in-out property <color> band: #1c1c1e;
+    in-out property <color> on-accent: #ffffff;
+    in-out property <color> panel: #1c1c1ef2;
     in-out property <color> glass: #ffffff14;
-    in-out property <color> tile: #2b2b2e;
-    in-out property <color> accent: #ffa500;
+    in-out property <color> tile: #2c2c2e;
+    in-out property <color> accent: #0a84ff;
     in-out property <color> text: #ffffff;
-    in-out property <color> dim: #b4b4b9;
-    in-out property <color> ok: #4fd18f;
-    in-out property <color> danger: #ff5b5b;
+    in-out property <color> dim: #ebebf599; // secondaryLabel (~60 % blanc)
+    in-out property <color> ok: #30d158; // systemGreen (sombre)
+    in-out property <color> danger: #ff453a; // systemRed (sombre)
     out property <string> icons: "Segoe MDL2 Assets";
+
+    // --- Jetons additionnels (non pilotés par theme.rs, constants) ---
+    out property <color> text3: #ebebf54d; // tertiaryLabel (~30 % blanc)
+    out property <color> separator: #54545859; // separator iOS (non opaque)
+    out property <color> fill: #78788033; // systemFill : remplissage discret (cases, contrôles)
+    out property <color> fill2: #78788028; // secondarySystemFill
+    out property <color> card: #1c1c1e; // secondarySystemBackground : carte/panneau élevé sur `bg`
+
+    // Rayons façon iOS (cartes ≈ 14-20, boutons/puces ≈ 10-14, pleinement arrondi = pilule).
+    out property <length> r-sm: 10px;
+    out property <length> r-md: 14px;
+    out property <length> r-lg: 20px;
+    out property <length> r-pill: 999px;
+
+    // Échelle typographique façon SF, agrandie pour un visionnage « 10 pieds » (manette, grand écran).
+    out property <length> t-large: 56px; // Large Title
+    out property <length> t-title1: 44px;
+    out property <length> t-title2: 36px;
+    out property <length> t-title3: 30px;
+    out property <length> t-headline: 26px; // corps, en gras
+    out property <length> t-body: 24px;
+    out property <length> t-callout: 22px;
+    out property <length> t-footnote: 18px;
+    out property <length> t-caption: 16px;
+}
+
+// --- Primitives iOS réutilisables (HIG : boutons, cartes, listes, contrôles) ---
+
+// Bouton à pastille (Apple HIG « Buttons ») : `filled` = accent plein (action principale), sinon
+// un remplissage discret façon `fill` (action secondaire). Hauteur ≥ 44px (cible tactile iOS).
+component IosButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> filled: true;
+    in property <bool> on: false; // sélection manette/clavier (pas la souris) : contour accent
+    height: 64px;
+    border-radius: Theme.r-pill;
+    background: filled ? Theme.accent : Theme.fill;
+    border-width: on && !filled ? 3px : 0px;
+    border-color: Theme.accent;
+    animate background { duration: 100ms; }
+    Text {
+        text: root.text;
+        font-size: Theme.t-body;
+        font-weight: 600;
+        color: filled ? Theme.on-accent : Theme.text;
+    }
+}
+
+// Carte élevée (HIG « Materials » / groupes de Réglages) : fond `card` sur le fond `bg`, coins larges.
+component IosCard inherits Rectangle {
+    background: Theme.card;
+    border-radius: Theme.r-lg;
+}
+
+// Ligne de liste façon Réglages iOS : libellé à gauche, valeur/chevron à droite, séparateur fin en bas
+// (sauf dernière ligne d'un groupe, via `last`). `on` = ligne sélectionnée (manette/clavier).
+component IosListRow inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> on: false;
+    in property <bool> last: false;
+    in property <bool> chevron: false;
+    height: 76px;
+    background: on ? Theme.fill : transparent;
+    animate background { duration: 100ms; }
+    Text {
+        x: 28px;
+        text: label;
+        font-size: Theme.t-body;
+        color: Theme.text;
+    }
+    HorizontalLayout {
+        x: 0px;
+        width: parent.width - 28px;
+        alignment: end;
+        spacing: 12px;
+        Text {
+            text: value;
+            font-size: Theme.t-body;
+            color: Theme.dim;
+        }
+        if chevron: Text {
+            text: "\u{E974}"; // chevron droit (Segoe Fluent)
+            font-family: Theme.icons;
+            font-size: Theme.t-callout;
+            color: Theme.text3;
+        }
+    }
+    if !last: Rectangle {
+        x: 28px;
+        y: parent.height - 1px;
+        width: parent.width - 28px;
+        height: 1px;
+        background: Theme.separator;
+    }
+}
+
+// Contrôle segmenté (HIG « Segmented Controls ») : `items`, `sel` l'index choisi, `on` = focus manette.
+component IosSegmented inherits Rectangle {
+    in property <[string]> items;
+    in property <int> sel: 0;
+    in property <bool> on: false;
+    callback pick(int);
+    height: 64px;
+    border-radius: Theme.r-md;
+    background: Theme.fill;
+    HorizontalLayout {
+        padding: 4px;
+        spacing: 4px;
+        for it[i] in items: Rectangle {
+            border-radius: Theme.r-sm;
+            background: sel == i ? Theme.card : transparent;
+            border-width: on && sel == i ? 2px : 0px;
+            border-color: Theme.accent;
+            animate background { duration: 100ms; }
+            Text {
+                text: it;
+                font-size: Theme.t-callout;
+                font-weight: 600;
+                color: sel == i ? Theme.text : Theme.dim;
+            }
+            TouchArea {
+                clicked => { root.pick(i); }
+            }
+        }
+    }
+}
+
+// Bascule (HIG « Toggles ») : piste pleinement arrondie, pastille blanche qui glisse. `on` = état,
+// `sel` = sélection manette/clavier (contour), distinct de l'état lui-même.
+component IosToggle inherits Rectangle {
+    in property <bool> on: false;
+    in property <bool> sel: false;
+    width: 92px;
+    height: 52px;
+    border-radius: Theme.r-pill;
+    background: on ? Theme.ok : Theme.fill;
+    border-width: sel ? 3px : 0px;
+    border-color: Theme.accent;
+    animate background { duration: 150ms; }
+    Rectangle {
+        x: on ? parent.width - self.width - 4px : 4px;
+        y: 4px;
+        width: parent.height - 8px;
+        height: parent.height - 8px;
+        border-radius: self.height / 2;
+        background: #ffffff;
+        animate x { duration: 150ms; easing: ease-out; }
+    }
 }
 
 // Dernière manette utilisée : 0 Xbox/générique, 1 PlayStation (renseigné par le shell).
