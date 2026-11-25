@@ -1008,6 +1008,8 @@ export component App inherits Window {
     }
 
     // --- Onglet Jeux : bandeau de jaquettes, puis fiche du jeu sélectionné ---
+    // Fondu vers le fond plutôt qu'un bord net : la transition band -> bg passait jusqu'ici par une
+    // ligne dure (couleur pleine suivie d'un voile sombre), très visible à l'oeil.
     if tab == 0: Rectangle {
         opacity: tab-fade;
         animate opacity { duration: 100ms; easing: ease-out; }
@@ -1015,16 +1017,7 @@ export component App inherits Window {
         y: 0px;
         width: parent.width;
         height: 700px;
-        background: Theme.band;
-    }
-    if tab == 0: Rectangle {
-        opacity: tab-fade;
-        animate opacity { duration: 100ms; easing: ease-out; }
-        x: 0px;
-        y: 700px;
-        width: parent.width;
-        height: 28px;
-        background: @linear-gradient(180deg, #00000070 0%, #00000000 100%);
+        background: @linear-gradient(180deg, Theme.band 0%, Theme.band 78%, Theme.bg 100%);
     }
     // Visuel du jeu en fond de la fiche, très atténué, avec fondu croisé d'un jeu à l'autre.
     if tab == 0 && games.length > 0: HeroFade {
@@ -1163,8 +1156,7 @@ export component App inherits Window {
         width: 82px;
         height: 82px;
         border-radius: 41px;
-        border-width: 3px;
-        border-color: #ffffffd0;
+        background: Theme.fill2;
         Text {
             text: "···";
             font-size: 34px;
