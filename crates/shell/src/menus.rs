@@ -230,12 +230,16 @@ impl Shell {
             let app = g.id.strip_prefix("epic-").unwrap_or_default().to_string();
             // Même précaution que pour SteamCMD : ne pas désinstaller pendant qu'un téléchargement
             // actif pour ce même jeu écrit encore dans son dossier.
-            if self.dl.borrow().iter().any(|d| d.appid == format!("epic:{app}") && matches!(d.state, scmd::DlState::Active)) {
+            let had_active_dl = self.dl.borrow().iter().any(|d| d.appid == format!("epic:{app}") && matches!(d.state, scmd::DlState::Active));
+            if had_active_dl {
                 stores::epiccmd::cancel(self.dl_pid.load(std::sync::atomic::Ordering::SeqCst));
-                std::thread::sleep(std::time::Duration::from_millis(300));
             }
             self.push_notif(&g.name, &tr("Désinstallation en cours…"));
             std::thread::spawn(move || {
+                // Hors du thread UI : laisse le temps à l'annulation de libérer ses fichiers sans geler l'interface.
+                if had_active_dl {
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                }
                 let ok = stores::epiccmd::uninstall(&app);
                 let _ = slint::invoke_from_event_loop(move || {
                     crate::with_shell(|s| {
@@ -250,20 +254,32 @@ impl Shell {
             let appid = g.id.strip_prefix("steam-").map(String::from);
             // Un téléchargement/mise à jour de ce jeu encore actif écrirait pendant qu'on supprime ses
             // fichiers (dossier recréé en partie juste après, manifeste corrompu) : on l'arrête d'abord.
-            if appid.as_deref().is_some_and(|a| self.dl.borrow().iter().any(|d| d.appid == a && matches!(d.state, scmd::DlState::Active))) {
+            let had_active_dl = appid.as_deref().is_some_and(|a| self.dl.borrow().iter().any(|d| d.appid == a && matches!(d.state, scmd::DlState::Active)));
+            if had_active_dl {
                 stores::steamcmd::cancel(self.dl_pid.load(std::sync::atomic::Ordering::SeqCst));
-                std::thread::sleep(std::time::Duration::from_millis(300));
             }
-            let ok = appid.as_deref().is_some_and(stores::steamcmd::uninstall);
-            if let Some(a) = &appid {
-                // Sinon la mise à jour reste proposée (notification, écran Téléchargements) jusqu'à
-                // la prochaine recherche programmée (jusqu'à 6 h) pour un jeu qui n'est déjà plus installé.
-                self.updates.borrow_mut().retain(|u| u != a);
-                self.prompted.borrow_mut().remove(a);
-            }
-            self.push_notif(&g.name, &tr(if ok { "Jeu désinstallé" } else { "Désinstallation impossible" }));
-            self.poll_installed();
-            self.dl_refresh();
+            self.push_notif(&g.name, &tr("Désinstallation en cours…"));
+            let name = g.name.clone();
+            std::thread::spawn(move || {
+                // Hors du thread UI : la suppression des fichiers et l'attente de libération ne doivent pas geler l'interface.
+                if had_active_dl {
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                }
+                let ok = appid.as_deref().is_some_and(stores::steamcmd::uninstall);
+                let _ = slint::invoke_from_event_loop(move || {
+                    crate::with_shell(|s| {
+                        if let Some(a) = &appid {
+                            // Sinon la mise à jour reste proposée (notification, écran Téléchargements) jusqu'à
+                            // la prochaine recherche programmée (jusqu'à 6 h) pour un jeu qui n'est déjà plus installé.
+                            s.updates.borrow_mut().retain(|u| u != a);
+                            s.prompted.borrow_mut().remove(a);
+                        }
+                        s.push_notif(&name, &tr(if ok { "Jeu désinstallé" } else { "Désinstallation impossible" }));
+                        s.poll_installed();
+                        s.dl_refresh();
+                    })
+                });
+            });
             return;
         }
         let started = match g.store.as_str() {

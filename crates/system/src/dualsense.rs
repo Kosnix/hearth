@@ -12,15 +12,32 @@
 //!   0xA2) : bandeau lumineux activé par le bit 2 de `valid_flag1`, couleur aux octets 45/46/47 (USB)
 //!   ou 47/48/49 (Bluetooth).
 
+use std::sync::{Mutex, OnceLock};
+
 use hidapi::HidApi;
 
 const VENDOR: u16 = 0x054C;
 const PRODUCT: u16 = 0x0CE6;
 
+/// `HidApi::new()` réénumère tous les périphériques HID du système (SetupAPI) : coûteux à refaire à
+/// chaque appel alors que `battery()` est interrogée en continu toutes les 10 s. On garde une seule
+/// instance, rafraîchie (beaucoup plus légère qu'une recréation complète) à chaque usage.
+fn with_api<T>(f: impl FnOnce(&HidApi) -> Option<T>) -> Option<T> {
+    static API: OnceLock<Mutex<Option<HidApi>>> = OnceLock::new();
+    let mut guard = API.get_or_init(|| Mutex::new(None)).lock().ok()?;
+    if guard.is_none() {
+        *guard = HidApi::new().ok();
+    }
+    let api = guard.as_mut()?;
+    let _ = api.refresh_devices();
+    f(api)
+}
+
 fn open() -> Option<hidapi::HidDevice> {
-    let api = HidApi::new().ok()?;
-    let path = api.device_list().find(|d| d.vendor_id() == VENDOR && d.product_id() == PRODUCT && d.usage_page() == 0x01 && d.usage() == 0x05)?.path().to_owned();
-    api.open_path(&path).ok()
+    with_api(|api| {
+        let path = api.device_list().find(|d| d.vendor_id() == VENDOR && d.product_id() == PRODUCT && d.usage_page() == 0x01 && d.usage() == 0x05)?.path().to_owned();
+        api.open_path(&path).ok()
+    })
 }
 
 /// Pourcentage (0-100) et indicateur de charge, si le décodage est plausible (bits de charge connus) :

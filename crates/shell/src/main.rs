@@ -1337,9 +1337,12 @@ impl Shell {
     }
 
     fn open_guide(&self, tile: usize) {
+        // `tile` peut avoir été invalidé par un rechargement de la liste pendant la partie (voir
+        // `reload_games`) : on renonce plutôt que de paniquer ou d'afficher un autre jeu.
+        let Some(name) = self.games.borrow().get(tile).map(|g| g.name.clone()) else { return };
         self.guide_tile.set(tile);
         let closing = self.running.borrow().iter().any(|r| r.tile == tile && r.closing) || self.ext_game.borrow().as_ref().is_some_and(|e| e.tile == tile && e.closing);
-        self.guide.set_game(self.games.borrow()[tile].name.as_str().into());
+        self.guide.set_game(name.as_str().into());
         self.guide.set_art(self.tile_for(tile).map(|t| t.cover).unwrap_or_default());
         self.guide.set_closing(closing);
         self.guide.set_sel(0);
@@ -1480,8 +1483,9 @@ impl Shell {
             ended
         };
         for &(tile, secs) in &ended {
-            let key = playtime_key(&self.games.borrow()[tile]);
-            playtime::record(&key, secs);
+            if let Some(g) = self.games.borrow().get(tile) {
+                playtime::record(&playtime_key(g), secs);
+            }
         }
         if !ended.is_empty() {
             self.rebuild();
@@ -2398,6 +2402,11 @@ impl Shell {
         for r in self.running.borrow_mut().iter_mut() {
             if let Some(p) = old.get(r.tile).and_then(|g| new.iter().position(|n| n.id == g.id)) {
                 r.tile = p;
+            }
+        }
+        if let Some(e) = self.ext_game.borrow_mut().as_mut() {
+            if let Some(p) = old.get(e.tile).and_then(|g| new.iter().position(|n| n.id == g.id)) {
+                e.tile = p;
             }
         }
         *self.games.borrow_mut() = new;

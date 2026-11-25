@@ -23,6 +23,16 @@ pub fn load() -> HashMap<String, Override> {
 
 pub fn save(map: &HashMap<String, Override>) {
     if let Ok(s) = serde_json::to_string_pretty(map) {
-        let _ = std::fs::write(file(), s);
+        write_atomic(&file(), &s);
+    }
+}
+
+/// Écrit `path` en passant par un fichier temporaire + renommage (atomique sur le même volume NTFS) :
+/// une coupure pendant l'écriture laisse l'ancien contenu intact au lieu d'un fichier tronqué/corrompu
+/// que le prochain lancement ne saurait plus relire (perte silencieuse de tous les réglages).
+pub fn write_atomic(path: &std::path::Path, data: &str) {
+    let tmp = path.with_extension("tmp");
+    if std::fs::write(&tmp, data).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
     }
 }

@@ -46,7 +46,7 @@ pub fn load() -> Store {
 
 pub fn save(s: &Store) {
     if let Ok(t) = serde_json::to_string_pretty(s) {
-        let _ = std::fs::write(file(), t);
+        crate::prefs::write_atomic(&file(), &t);
     }
 }
 

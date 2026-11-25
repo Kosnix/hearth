@@ -50,7 +50,10 @@ impl Session {
             let si = STARTUPINFOW { cb: size_of::<STARTUPINFOW>() as u32, ..Default::default() };
             let mut pi = PROCESS_INFORMATION::default();
             // Suspendu le temps de l'ajouter au job, pour que ses enfants y soient aussi.
-            CreateProcessW(PCWSTR::null(), Some(PWSTR(line.as_mut_ptr())), None, None, false, CREATE_SUSPENDED | CREATE_NO_WINDOW, None, cwd, &si, &mut pi)?;
+            if let Err(e) = CreateProcessW(PCWSTR::null(), Some(PWSTR(line.as_mut_ptr())), None, None, false, CREATE_SUSPENDED | CREATE_NO_WINDOW, None, cwd, &si, &mut pi) {
+                let _ = CloseHandle(job);
+                return Err(e);
+            }
             let _ = AssignProcessToJobObject(job, pi.hProcess);
             ResumeThread(pi.hThread);
             let _ = CloseHandle(pi.hThread);

@@ -33,7 +33,7 @@ pub fn record(key: &str, secs: u64) {
     e.secs += secs;
     e.last = now();
     if let Ok(s) = serde_json::to_string(&m) {
-        let _ = std::fs::write(file(), s);
+        crate::prefs::write_atomic(&file(), &s);
     }
 }
 

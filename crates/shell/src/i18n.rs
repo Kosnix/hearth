@@ -112,7 +112,7 @@ fn persist() {
     v["lang"] = LANGS[lang()].0.into();
     v["anim"] = anim().into();
     v["toasts"] = toasts().into();
-    let _ = std::fs::write(file(), v.to_string());
+    crate::prefs::write_atomic(&file(), &v.to_string());
 }
 
 /// Valeur textuelle d'une préférence de `settings.json` (ex. clé SteamGridDB).
@@ -137,7 +137,7 @@ pub fn set_toasts(on: bool) {
 pub fn set_pref(key: &str, value: &str) {
     let mut v: serde_json::Value = std::fs::read_to_string(file()).ok().and_then(|s| serde_json::from_str(s.trim_start_matches('\u{feff}')).ok()).unwrap_or_else(|| serde_json::json!({}));
     v[key] = value.into();
-    let _ = std::fs::write(file(), v.to_string());
+    crate::prefs::write_atomic(&file(), &v.to_string());
 }
 
 static SFX: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);

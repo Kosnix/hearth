@@ -86,7 +86,8 @@ fn decode(path: &Path) -> Option<Vec<f32>> {
     let mut format = probed.format;
     let track = format.default_track()?;
     let id = track.id;
-    let rate = track.codec_params.sample_rate? as f64;
+    // Un fichier corrompu (pack téléchargé) peut annoncer un taux nul : éviter la division par zéro plus bas.
+    let rate = track.codec_params.sample_rate.filter(|&r| r > 0)? as f64;
     let mut dec = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).ok()?;
     let mut raw: Vec<f32> = vec![];
     let mut channels = 2usize;
@@ -197,7 +198,7 @@ impl MusicStream {
         let format = probed.format;
         let track = format.default_track()?;
         let track_id = track.id;
-        let rate = track.codec_params.sample_rate? as f64;
+        let rate = track.codec_params.sample_rate.filter(|&r| r > 0)? as f64;
         let decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).ok()?;
         Some(Self { path: path.to_path_buf(), format, decoder, track_id, rate, gain, pending: vec![], ppos: 0 })
     }

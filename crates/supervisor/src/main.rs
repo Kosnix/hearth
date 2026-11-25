@@ -44,7 +44,7 @@ fn main() {
 fn supervise() {
     apply_config();
     let shell = exe_dir().join(SHELL_EXE);
-    let event = unsafe { CreateEventW(None, false, false, CONSOLE_EVENT) }.expect("CreateEventW");
+    let event = create_console_event();
     let mut crashes: Vec<Instant> = Vec::new();
     loop {
         apply_staged();
@@ -83,6 +83,24 @@ fn supervise() {
         }
         thread::sleep(Duration::from_millis(500 * crashes.len() as u64));
     }
+}
+
+/// Créé l'évènement nommé qui reçoit le signal de `hearth console`. Ce process est le shell Windows
+/// de la session : un `panic!` ici tuerait le bureau de l'utilisateur jusqu'à relance de session. En
+/// cas d'échec transitoire (quota de handles épuisé…) on retente, et seulement en tout dernier
+/// recours on se rabat sur un évènement anonyme (la bascule console/bureau par `hearth console` ne
+/// fonctionnera plus, mais `WaitForSingleObject` reste valide : pas de panique ni de boucle folle).
+fn create_console_event() -> windows::Win32::Foundation::HANDLE {
+    for attempt in 0..5 {
+        match unsafe { CreateEventW(None, false, false, CONSOLE_EVENT) } {
+            Ok(h) => return h,
+            Err(e) => {
+                log(&format!("CreateEventW a échoué (essai {attempt}) : {e}"));
+                thread::sleep(Duration::from_millis(200));
+            }
+        }
+    }
+    unsafe { CreateEventW(None, false, false, PCWSTR::null()) }.expect("CreateEventW (repli anonyme)")
 }
 
 /// Ouvre explorer et attend `hearth console`. Si un shell existe déjà (superviseur lancé

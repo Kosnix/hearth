@@ -252,6 +252,11 @@ pub fn disable_overlay() -> bool {
                 break;
             }
         }
+        // Steam encore vivant après l'attente : il réécrira son propre état en se fermant et
+        // écraserait silencieusement le patch qu'on s'apprête à appliquer — abandonner plutôt.
+        if steam_running() {
+            return false;
+        }
         std::thread::sleep(std::time::Duration::from_secs(2));
     }
     for f in files {

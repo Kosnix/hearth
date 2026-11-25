@@ -90,9 +90,13 @@ unsafe fn install_hook() -> Result<(), Box<dyn std::error::Error>> {
     log(&format!("Present trouvé à {present:p}"));
     let target: PresentFn = std::mem::transmute(present);
     let hook = GenericDetour::new(target, present_hook)?;
-    hook.enable()?;
+    // Le hook doit être rangé dans HOOK avant d'être activé : dès `enable()`, le jeu peut appeler
+    // Present depuis son thread de rendu et `present_hook` lit HOOK.get().unwrap() immédiatement.
+    if HOOK.set(hook).is_err() {
+        return Err("accroche déjà installée".into());
+    }
+    HOOK.get().unwrap().enable()?;
     log("accroche active");
-    let _ = HOOK.set(hook);
     Ok(())
 }
 

@@ -75,9 +75,21 @@ fn expand_env(s: &str) -> String {
     let mut out = String::new();
     let mut parts = s.split('%');
     out.push_str(parts.next().unwrap_or_default());
-    while let (Some(var), Some(rest)) = (parts.next(), parts.next()) {
-        out.push_str(&std::env::var(var).unwrap_or_else(|_| format!("%{var}%")));
-        out.push_str(rest);
+    loop {
+        match (parts.next(), parts.next()) {
+            (Some(var), Some(rest)) => {
+                out.push_str(&std::env::var(var).unwrap_or_else(|_| format!("%{var}%")));
+                out.push_str(rest);
+            }
+            // `%` isolé (nombre impair dans la chaîne) : pas de paire à substituer, on le restitue
+            // tel quel plutôt que de perdre silencieusement le reste de la chaîne.
+            (Some(last), None) => {
+                out.push('%');
+                out.push_str(last);
+                break;
+            }
+            _ => break,
+        }
     }
     out
 }

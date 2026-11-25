@@ -52,8 +52,11 @@ pub fn list_dir(dir: &Path) -> Vec<Entry> {
     }
     dirs.sort_by_key(|e| e.label.to_lowercase());
     exes.sort_by_key(|e| e.label.to_lowercase());
+    // Tronqués séparément : un dossier à beaucoup de sous-dossiers ne doit pas faire disparaître
+    // les .exe qu'il contient (l'utilisateur cherche justement un exécutable à ajouter).
+    dirs.truncate(400);
+    exes.truncate(100);
     dirs.extend(exes);
-    dirs.truncate(500);
     dirs
 }
 

@@ -78,12 +78,26 @@ fn run() -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("hearth.exe"), SUPERVISOR).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("hearth-shell.exe"), SHELL).map_err(|e| e.to_string())?;
-    // Une ancienne version en cours d'exécution verrouille ses fichiers.
+    // Une ancienne version en cours d'exécution verrouille ses fichiers : le temps qu'elle libère sa
+    // copie peut dépasser un court délai fixe sur une machine chargée (antivirus, disque lent) — on
+    // retente plutôt que de risquer un échec intermittent de `install` juste après le `taskkill`.
     for p in ["hearth.exe", "hearth-shell.exe"] {
         let _ = Command::new("taskkill").args(["/F", "/IM", p]).output();
     }
-    std::thread::sleep(std::time::Duration::from_millis(800));
-    let st = Command::new(dir.join("hearth.exe")).arg("install").status().map_err(|e| e.to_string());
+    let mut last = Err("hearth.exe install".to_string());
+    for attempt in 0..15 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+        }
+        match Command::new(dir.join("hearth.exe")).arg("install").status() {
+            Ok(st) if st.success() => {
+                last = Ok(());
+                break;
+            }
+            Ok(_) => last = Err("hearth.exe install".into()),
+            Err(e) => last = Err(e.to_string()),
+        }
+    }
     let _ = std::fs::remove_dir_all(&dir);
-    if st?.success() { Ok(()) } else { Err("hearth.exe install".into()) }
+    last
 }
