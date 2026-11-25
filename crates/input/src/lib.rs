@@ -179,7 +179,7 @@ fn xinput_get_state_ex() -> Option<GetState> {
     unsafe {
         let dll = LoadLibraryW(w!("xinput1_4.dll")).ok()?;
         let f = GetProcAddress(dll, PCSTR(100 as *const u8))?;
-        Some(std::mem::transmute::<_, GetState>(f))
+        Some(std::mem::transmute::<unsafe extern "system" fn() -> isize, GetState>(f))
     }
 }
 
@@ -270,7 +270,7 @@ impl XInput {
     fn read(&mut self) -> u16 {
         // Interroger un emplacement vide est lent : on ne le refait qu'une fois par seconde.
         self.tick = self.tick.wrapping_add(1);
-        let retry = self.tick % 100 == 0;
+        let retry = self.tick.is_multiple_of(100);
         let mut bits = 0;
         for i in 0..4 {
             if !self.connected[i] && !retry {

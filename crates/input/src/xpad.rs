@@ -81,7 +81,7 @@ fn read() -> Option<XGamepad> {
     let raws = crate::sony_pads();
     // Plusieurs manettes Sony branchées : celle choisie dans Réglages > Manettes (sinon la première trouvée).
     let raw = match crate::primary_pad() {
-        Some(id) => raws.iter().find(|r| r.NonRoamableId().ok().is_some_and(|n| n.to_string() == id)).or(raws.first()).cloned(),
+        Some(id) => raws.iter().find(|r| r.NonRoamableId().ok().is_some_and(|n| n == id)).or(raws.first()).cloned(),
         None => raws.into_iter().next(),
     }?;
     let (nb, ns, na) = (raw.ButtonCount().ok()?, raw.SwitchCount().ok()?, raw.AxisCount().ok()?);

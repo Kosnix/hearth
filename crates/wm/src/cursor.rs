@@ -66,6 +66,12 @@ impl Policy {
     }
 }
 
+impl Default for Policy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Drop for Policy {
     fn drop(&mut self) {
         restore();

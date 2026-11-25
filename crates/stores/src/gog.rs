@@ -40,7 +40,7 @@ impl Store for Gog {
                 Some(Game { id: format!("gog-{id}"), store: "GOG", title, launch: Launch::Exe { path: exe, args }, art })
             })
             .collect();
-        games.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+        games.sort_by_key(|a| a.title.to_lowercase());
         games
     }
 
@@ -76,7 +76,7 @@ fn catalog(params: &str, limit: usize) -> Vec<Offer> {
             }
             let amount = p["price"]["finalMoney"]["amount"].as_str().and_then(|a| a.parse::<f64>().ok());
             let price = match amount {
-                Some(v) if v == 0.0 => "Gratuit".to_string(),
+                Some(0.0) => "Gratuit".to_string(),
                 Some(v) => format!("{v:.2} €").replace('.', ","),
                 None => String::new(),
             };

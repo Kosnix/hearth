@@ -1,7 +1,7 @@
 //! Steam : bibliothèque installée via les manifestes locaux, catalogue via l'API publique de la boutique.
 
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 
@@ -34,8 +34,8 @@ pub fn root_dir() -> Option<PathBuf> {
     root()
 }
 
-fn libraries(root: &PathBuf) -> Vec<PathBuf> {
-    let mut v = vec![root.clone()];
+fn libraries(root: &Path) -> Vec<PathBuf> {
+    let mut v = vec![root.to_path_buf()];
     if let Ok(t) = std::fs::read_to_string(root.join("steamapps").join("libraryfolders.vdf")) {
         for (k, val) in pairs(&t) {
             if k == "path" {
@@ -107,7 +107,7 @@ impl Store for Steam {
                 games.push(Game { art: art(&id), launch, id: format!("steam-{id}"), store: "Steam", title });
             }
         }
-        games.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+        games.sort_by_key(|a| a.title.to_lowercase());
         games
     }
 

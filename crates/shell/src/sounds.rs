@@ -99,7 +99,7 @@ pub fn start() {
                 download(&blob);
             }
         }
-        let _ = slint::invoke_from_event_loop(|| apply());
+        let _ = slint::invoke_from_event_loop(apply);
     });
 }
 

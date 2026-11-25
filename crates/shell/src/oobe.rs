@@ -287,11 +287,9 @@ impl Shell {
                 }
             }
             4 => self.oobe_activate(sel, kind),
-            5 => {
-                if step > 1 {
-                    play(Sfx::Back);
-                    self.oobe_enter(self.oobe_step.get() - 1);
-                }
+            5 if step > 1 => {
+                play(Sfx::Back);
+                self.oobe_enter(self.oobe_step.get() - 1);
             }
             _ => {}
         }

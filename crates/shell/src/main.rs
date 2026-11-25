@@ -1719,10 +1719,10 @@ impl Shell {
         if FIRST.swap(false, std::sync::atomic::Ordering::Relaxed) {
             mark("first_animate");
         }
-        // Tick à 25 Hz pour un mouvement fluide ; les vérifications coûteuses (fenêtres, manette) une fois sur cinq.
+        // Tick à 25 Hz pour un mouvement fluide ; les vérifications coûteuses (fenêtres, manette) une fois sur deux.
         let n = self.anim_n.get().wrapping_add(1);
         self.anim_n.set(n);
-        if n % 2 == 0 {
+        if n.is_multiple_of(2) {
             if self.ui.get_tab() == 2 && !self.catalog_started.get() {
                 self.load_catalog(None);
             }
@@ -1922,7 +1922,7 @@ impl Shell {
         let keep = |i: usize, d: &stores::Offer| filter.as_deref().is_none_or(|f| d.store == f) && !no_art.contains(&i);
         let mut kept: Vec<&(stores::Offer, Offer)> = full.iter().enumerate().filter(|(i, (d, _))| keep(*i, d)).map(|(_, p)| p).collect();
         match self.offer_sort.get() {
-            1 => kept.sort_by(|(_, a), (_, b)| a.title.to_lowercase().cmp(&b.title.to_lowercase())),
+            1 => kept.sort_by_key(|(_, a)| a.title.to_lowercase()),
             2 => kept.sort_by_key(|(d, _)| d.cents.unwrap_or(i64::MAX)),
             3 => kept.sort_by_key(|(d, _)| std::cmp::Reverse(d.cents.unwrap_or(i64::MIN))),
             _ => {}
@@ -2373,7 +2373,7 @@ impl Shell {
         a.sort_by_key(|(last, _)| std::cmp::Reverse(*last));
         let a: Vec<Tile> = a.into_iter().map(|(_, t)| t).collect();
         // Toujours alphabétique : sans ça, l'ordre dépend de la boutique qui a signalé le jeu en premier.
-        b.sort_by(|x, y| x.name.to_lowercase().cmp(&y.name.to_lowercase()));
+        b.sort_by_key(|t| t.name.to_lowercase());
         let sel = cur.and_then(|g| a.iter().position(|t| t.gid == g)).unwrap_or((self.ui.get_sel().max(0) as usize).min(a.len().saturating_sub(1)));
         let lsel = cur_lib.and_then(|g| b.iter().position(|t| t.gid == g)).unwrap_or((self.ui.get_lsel().max(0) as usize).min(b.len().saturating_sub(1)));
         self.tiles.set_vec(a);
