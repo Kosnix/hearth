@@ -1064,18 +1064,18 @@ export component App inherits Window {
         opacity: tab-fade;
         animate opacity { duration: 100ms; easing: ease-out; }
         x: 0px;
-        y: 250px;
+        y: 190px;
         width: parent.width;
-        height: 420px;
+        height: 480px;
         for t[i] in games: Rectangle {
             property <int> d: i - sel;
             // Les jeux précédents restent visibles : la liste ne défile que lorsque la sélection dépasse la 3e place.
             property <int> k: i - max(0, sel - 2);
-            x: 160px + k * 246px + (d > 0 ? 24px : 0px);
+            x: 160px + k * 283px + (d > 0 ? 28px : 0px);
             opacity: k < 0 ? (k == -1 ? 0.35 : 0) : 1;
-            y: d == 0 ? 14px : 48px;
-            width: d == 0 ? 234px : 210px;
-            height: d == 0 ? 370px : 332px;
+            y: d == 0 ? 18px : 58px;
+            width: d == 0 ? 270px : 240px;
+            height: d == 0 ? 426px : 382px;
             animate x, y, width, height, opacity { duration: 190ms; easing: ease-out; }
             if k >= -1 && k <= 9: GameTile {
                 width: parent.width;
@@ -1270,6 +1270,11 @@ export component App inherits Window {
     }
 
     // --- Boutique unifiée : recherche, puis catalogue (toutes boutiques confondues) ---
+    if tab == 2: Rectangle {
+        opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
+        background: Theme.band;
+    }
     if tab == 2: Rectangle {
         opacity: tab-fade;
         animate opacity { duration: 100ms; easing: ease-out; }
