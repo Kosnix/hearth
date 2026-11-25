@@ -1521,8 +1521,8 @@ export component App inherits Window {
     // Barre d'état, à droite de l'heure : réseau, volume, manette (avec batterie si elle est connue).
     HorizontalLayout {
         x: 350px;
-        y: 30px;
-        height: 56px;
+        y: 43px;
+        height: 78px;
         spacing: 34px;
         Rectangle {
             width: 40px;
@@ -1530,6 +1530,7 @@ export component App inherits Window {
                 text: st-net == 0 ? "\u{E839}" : "\u{E701}";
                 font-family: Theme.icons;
                 font-size: 34px;
+                vertical-alignment: center;
                 color: st-net < 0 ? Theme.danger : Theme.text;
             }
         }
@@ -1540,12 +1541,14 @@ export component App inherits Window {
                 text: st-vol == 0 ? "\u{E74F}" : "\u{E767}";
                 font-family: Theme.icons;
                 font-size: 34px;
+                vertical-alignment: center;
                 color: Theme.text;
             }
             vtxt := Text {
                 x: 46px;
                 text: st-vol < 0 ? "" : st-vol + "%";
                 font-size: 24px;
+                vertical-alignment: center;
                 color: Theme.dim;
             }
         }
@@ -1556,6 +1559,7 @@ export component App inherits Window {
                 text: "\u{E7FC}";
                 font-family: Theme.icons;
                 font-size: 34px;
+                vertical-alignment: center;
                 // En charge : jamais la couleur « danger », même si le pourcentage reste bas le temps
                 // que la charge démarre (sinon une manette en train de charger a l'air en panne).
                 color: st-pad-charging ? Theme.ok : (st-pad <= 15 ? Theme.danger : Theme.text);
@@ -1572,6 +1576,7 @@ export component App inherits Window {
                 x: st-pad-charging ? 72px : 46px;
                 text: st-pad <= 100 ? st-pad + "%" : "";
                 font-size: 24px;
+                vertical-alignment: center;
                 color: st-pad-charging ? Theme.dim : (st-pad <= 15 ? Theme.danger : Theme.dim);
             }
         }
@@ -1581,7 +1586,9 @@ export component App inherits Window {
     // de démarrage et à l'écran de connexion d'une boutique, qui la gardent.
     Text {
         x: 80px;
-        y: 34px;
+        y: 43px;
+        height: 78px;
+        vertical-alignment: center;
         text: clock;
         font-size: 34px;
         color: Theme.text;
@@ -1590,7 +1597,7 @@ export component App inherits Window {
     // trois pilules flottant séparément sur le fond.
     Rectangle {
         x: (parent.width - segtrack.width) / 2;
-        y: 78px;
+        y: 43px;
         width: segtrack.width;
         height: 78px;
         border-radius: Theme.r-pill;
@@ -1598,7 +1605,7 @@ export component App inherits Window {
     }
     segtrack := HorizontalLayout {
         x: (parent.width - self.width) / 2;
-        y: 84px;
+        y: 47px;
         width: self.preferred-width;
         height: 70px;
         alignment: center;
@@ -1628,7 +1635,7 @@ export component App inherits Window {
     }
     HorizontalLayout {
         x: 0px;
-        y: 62px;
+        y: 46px;
         width: parent.width - 70px;
         height: 72px;
         alignment: end;
