@@ -1501,6 +1501,23 @@ export component App inherits Window {
         }
     }
 
+    // --- Barre de navigation translucide, commune à tous les onglets (façon iOS) : fond élevé et
+    // filet de séparation, pour détacher la barre du haut du contenu qui défile dessous. Déclarée
+    // avant l'heure/le statut/les onglets pour qu'ils restent bien visibles devant, pas dessous.
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: 165px;
+        background: Theme.panel;
+    }
+    Rectangle {
+        x: 0px;
+        y: 164px;
+        width: parent.width;
+        height: 1px;
+        background: Theme.separator;
+    }
     // Barre d'état, à droite de l'heure : réseau, volume, manette (avec batterie si elle est connue).
     HorizontalLayout {
         x: 350px;
@@ -1559,22 +1576,6 @@ export component App inherits Window {
             }
         }
     }
-    // --- Barre de navigation translucide, commune à tous les onglets (façon iOS) : fond élevé et
-    // filet de séparation, pour détacher la barre du haut du contenu qui défile dessous.
-    Rectangle {
-        x: 0px;
-        y: 0px;
-        width: parent.width;
-        height: 165px;
-        background: Theme.panel;
-    }
-    Rectangle {
-        x: 0px;
-        y: 164px;
-        width: parent.width;
-        height: 1px;
-        background: Theme.separator;
-    }
     // --- Barre du haut : heure à gauche, onglets au centre, raccourcis et profil à droite (thème FireLike) ---
     // Pas de logo Hearth ici : le menu principal n'a pas besoin de la marque, contrairement à l'assistant
     // de démarrage et à l'écran de connexion d'une boutique, qui la gardent.
@@ -1598,6 +1599,7 @@ export component App inherits Window {
     segtrack := HorizontalLayout {
         x: (parent.width - self.width) / 2;
         y: 84px;
+        width: self.preferred-width;
         height: 70px;
         alignment: center;
         spacing: 24px;
