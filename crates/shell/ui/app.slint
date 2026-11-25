@@ -592,7 +592,7 @@ component TopIcon inherits Rectangle {
     width: 72px;
     height: 72px;
     border-radius: Theme.r-pill;
-    background: selected ? Theme.accent : transparent;
+    background: selected ? Theme.accent : Theme.fill2;
     animate background { duration: 100ms; }
     TouchArea {
         clicked => { root.clicked(); }
@@ -1140,8 +1140,11 @@ export component App inherits Window {
         y: 1190px;
         width: 290px;
         height: 82px;
-        border-radius: Theme.r-md;
+        border-radius: Theme.r-pill;
         background: Theme.accent;
+        drop-shadow-offset-y: 8px;
+        drop-shadow-blur: 20px;
+        drop-shadow-color: Theme.accent.transparentize(0.4);
         Text {
             text: games[sel].running ? @tr("Reprendre") : @tr("Jouer");
             font-size: 34px;
