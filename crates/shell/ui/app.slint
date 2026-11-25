@@ -882,64 +882,141 @@ export component App inherits Window {
         background: Theme.bg;
     }
 
-    // --- Onglet Jeux : bandeau de jaquettes, puis fiche du jeu sélectionné ---
-    // Fondu vers le fond plutôt qu'un bord net : la transition band -> bg passait jusqu'ici par une
-    // ligne dure (couleur pleine suivie d'un voile sombre), très visible à l'oeil.
-    if tab == 0: Rectangle {
-        opacity: tab-fade;
-        animate opacity { duration: 100ms; easing: ease-out; }
-        x: 0px;
-        y: 0px;
-        width: parent.width;
-        height: 700px;
-        background: @linear-gradient(180deg, Theme.band 0%, Theme.band 78%, Theme.bg 100%);
-    }
-    // Visuel du jeu en fond de la fiche, très atténué, avec fondu croisé d'un jeu à l'autre.
+    // --- Onglet Jeux : héros en haut (façon écran d'accueil Apple TV), logo/infos/bouton Jouer
+    // dessus, jaquettes en bas façon dock. Mêmes proportions qu'avant (héros à 0.55 d'opacité,
+    // jaquettes 270×426/240×382, logo 340px) : seule la disposition change (haut/bas inversés),
+    // avec un léger décalage pour ne pas passer sous la barre du haut.
     if tab == 0 && games.length > 0: HeroFade {
         x: 0px;
-        y: 728px;
+        y: 0px;
         width: 2560px;
         height: 712px;
         opacity: 0.55 * tab-fade;
         animate opacity { duration: 100ms; easing: ease-out; }
-        // Toujours affiché s'il existe : à cette opacité et cette taille d'affichage, un héros plus petit que
-        // l'écran reste discret une fois agrandi (léger flou) — préférable à un fond vide.
         source: games[sel].hero;
+    }
+    // Voile sombre en haut (toute la largeur) : la barre (icônes, profil) reste lisible même sur un héros clair.
+    if tab == 0 && games.length > 0: Rectangle {
+        opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
+        x: 0px;
+        y: 0px;
+        width: 2560px;
+        height: 300px;
+        background: @linear-gradient(180deg, Theme.bg 0%, Theme.bg.transparentize(1) 100%);
     }
     // Voile sombre à gauche : le logo et le bouton Jouer restent lisibles sur n'importe quel visuel.
     if tab == 0 && games.length > 0: Rectangle {
         opacity: tab-fade;
         animate opacity { duration: 100ms; easing: ease-out; }
         x: 0px;
-        y: 728px;
+        y: 0px;
         width: 1500px;
         height: 712px;
         background: @linear-gradient(90deg, Theme.bg 0%, Theme.bg.transparentize(0.12) 40%, Theme.bg.transparentize(1) 100%);
     }
+    // Fondu du bord bas du héros (juste avant le dock) plutôt qu'une ligne dure.
     if tab == 0 && games.length > 0: Rectangle {
         opacity: tab-fade;
         animate opacity { duration: 100ms; easing: ease-out; }
         x: 0px;
-        y: 1140px;
+        y: 452px;
         width: 2560px;
-        height: 300px;
+        height: 260px;
         background: @linear-gradient(180deg, Theme.bg.transparentize(1) 0%, Theme.bg 100%);
     }
-    if tab == 0 && games.length > 0: Rectangle {
-        opacity: tab-fade;
-        animate opacity { duration: 100ms; easing: ease-out; }
-        x: 0px;
-        y: 728px;
-        width: parent.width;
-        height: 260px;
-        background: @linear-gradient(180deg, Theme.bg 0%, Theme.bg.transparentize(1) 100%);
-    }
-    // Bandeau : la jaquette sélectionnée est agrandie, les autres défilent autour d'elle.
+    // Bande derrière le dock, fondue vers le fond (plutôt qu'un bord net).
     if tab == 0: Rectangle {
         opacity: tab-fade;
         animate opacity { duration: 100ms; easing: ease-out; }
         x: 0px;
-        y: 190px;
+        y: 740px;
+        width: parent.width;
+        height: 700px;
+        background: @linear-gradient(180deg, Theme.bg 0%, Theme.bg 22%, Theme.band 100%);
+    }
+    // Logo du jeu (son nom en repli s'il n'en a pas), décalé pour laisser la barre du haut respirer.
+    if tab == 0 && games.length > 0 && games[sel].logo.width > 0: Image {
+        opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
+        x: 160px;
+        y: 170px;
+        width: min(900px, 340px * games[sel].logo.width / games[sel].logo.height);
+        height: 340px;
+        source: games[sel].logo;
+        image-fit: contain;
+    }
+    if tab == 0 && games.length > 0 && games[sel].logo.width == 0: Text {
+        opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
+        x: 160px;
+        y: 270px;
+        width: 1000px;
+        text: games[sel].name;
+        font-size: 72px;
+        font-weight: 800;
+        color: Theme.text;
+        wrap: word-wrap;
+    }
+    if tab == 0 && games.length > 0 && (games[sel].played != "" || games[sel].store != ""): Text {
+        opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
+        x: 160px;
+        y: 518px;
+        width: 1200px;
+        text: (games[sel].store != "" ? games[sel].store + (games[sel].played != "" ? "  ·  " : "") : "") + games[sel].played;
+        font-size: 26px;
+        color: Theme.dim;
+        overflow: elide;
+    }
+    // Bouton Jouer (orange) et menu d'options.
+    if tab == 0 && games.length > 0: Rectangle {
+        opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
+        x: 160px;
+        y: 580px;
+        width: 290px;
+        height: 82px;
+        border-radius: Theme.r-pill;
+        background: Theme.accent;
+        drop-shadow-offset-y: 8px;
+        drop-shadow-blur: 20px;
+        drop-shadow-color: Theme.accent.transparentize(0.4);
+        Text {
+            text: games[sel].running ? @tr("Reprendre") : @tr("Jouer");
+            font-size: 34px;
+            font-weight: 800;
+            color: Theme.on-accent;
+        }
+        TouchArea {
+            clicked => { root.zone = 0; root.launch(root.games[root.sel].gid); }
+        }
+    }
+    if tab == 0 && games.length > 0: Rectangle {
+        opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
+        x: 476px;
+        y: 580px;
+        width: 82px;
+        height: 82px;
+        border-radius: 41px;
+        background: Theme.fill2;
+        Text {
+            text: "···";
+            font-size: 34px;
+            font-weight: 800;
+            color: Theme.text;
+        }
+        TouchArea {
+            clicked => { root.game-menu(root.games[root.sel].gid); }
+        }
+    }
+    // Dock : la jaquette sélectionnée est agrandie, les autres défilent autour d'elle, ancré en bas.
+    if tab == 0: Rectangle {
+        opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
+        x: 0px;
+        y: 770px;
         width: parent.width;
         height: 480px;
         for t[i] in games: Rectangle {
@@ -964,82 +1041,6 @@ export component App inherits Window {
                 }
                 options => { root.sel = i; root.game-menu(t.gid); }
             }
-        }
-    }
-    // Partie gauche : uniquement le logo du jeu (son nom en repli s'il n'en a pas).
-    if tab == 0 && games.length > 0 && games[sel].logo.width > 0: Image {
-        opacity: tab-fade;
-        animate opacity { duration: 100ms; easing: ease-out; }
-        x: 160px;
-        y: 780px;
-        width: min(900px, 340px * games[sel].logo.width / games[sel].logo.height);
-        height: 340px;
-        source: games[sel].logo;
-        image-fit: contain;
-    }
-    if tab == 0 && games.length > 0 && games[sel].logo.width == 0: Text {
-        opacity: tab-fade;
-        animate opacity { duration: 100ms; easing: ease-out; }
-        x: 160px;
-        y: 880px;
-        width: 1000px;
-        text: games[sel].name;
-        font-size: 72px;
-        font-weight: 800;
-        color: Theme.text;
-        wrap: word-wrap;
-    }
-    if tab == 0 && games.length > 0 && (games[sel].played != "" || games[sel].store != ""): Text {
-        opacity: tab-fade;
-        animate opacity { duration: 100ms; easing: ease-out; }
-        x: 160px;
-        y: 1128px;
-        width: 1200px;
-        text: (games[sel].store != "" ? games[sel].store + (games[sel].played != "" ? "  ·  " : "") : "") + games[sel].played;
-        font-size: 26px;
-        color: Theme.dim;
-        overflow: elide;
-    }
-    // Bouton Jouer (orange) et menu d'options.
-    if tab == 0 && games.length > 0: Rectangle {
-        opacity: tab-fade;
-        animate opacity { duration: 100ms; easing: ease-out; }
-        x: 160px;
-        y: 1190px;
-        width: 290px;
-        height: 82px;
-        border-radius: Theme.r-pill;
-        background: Theme.accent;
-        drop-shadow-offset-y: 8px;
-        drop-shadow-blur: 20px;
-        drop-shadow-color: Theme.accent.transparentize(0.4);
-        Text {
-            text: games[sel].running ? @tr("Reprendre") : @tr("Jouer");
-            font-size: 34px;
-            font-weight: 800;
-            color: Theme.on-accent;
-        }
-        TouchArea {
-            clicked => { root.zone = 0; root.launch(root.games[root.sel].gid); }
-        }
-    }
-    if tab == 0 && games.length > 0: Rectangle {
-        opacity: tab-fade;
-        animate opacity { duration: 100ms; easing: ease-out; }
-        x: 476px;
-        y: 1190px;
-        width: 82px;
-        height: 82px;
-        border-radius: 41px;
-        background: Theme.fill2;
-        Text {
-            text: "···";
-            font-size: 34px;
-            font-weight: 800;
-            color: Theme.text;
-        }
-        TouchArea {
-            clicked => { root.game-menu(root.games[root.sel].gid); }
         }
     }
     if tab == 0 && games.length == 0: Text {
