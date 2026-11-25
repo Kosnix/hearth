@@ -2348,7 +2348,10 @@ impl Shell {
 
     /// Reconstruit les onglets Jeux (installés, triés par dernière partie) et Bibliothèque (à installer).
     pub fn rebuild(&self) {
-        let cur = self.tiles.row_data(self.ui.get_sel().max(0) as usize).map(|t| t.gid);
+        let old_sel = self.ui.get_sel().max(0) as usize;
+        // Au-delà du dernier jeu : le raccourci Bibliothèque (tuile de droite), pas un jeu réel.
+        let sel_on_library_shortcut = old_sel >= self.tiles.row_count();
+        let cur = self.tiles.row_data(old_sel).map(|t| t.gid);
         let cur_lib = self.library.row_data(self.ui.get_lsel().max(0) as usize).map(|t| t.gid);
         let pt = playtime::load();
         let mut running: Vec<usize> = self.running.borrow().iter().map(|r| r.tile).collect();
@@ -2378,7 +2381,9 @@ impl Shell {
         let a: Vec<Tile> = a.into_iter().map(|(_, t)| t).collect();
         // Toujours alphabétique : sans ça, l'ordre dépend de la boutique qui a signalé le jeu en premier.
         b.sort_by_key(|t| t.name.to_lowercase());
-        let sel = cur.and_then(|g| a.iter().position(|t| t.gid == g)).unwrap_or((self.ui.get_sel().max(0) as usize).min(a.len().saturating_sub(1)));
+        let sel = cur.and_then(|g| a.iter().position(|t| t.gid == g)).unwrap_or_else(|| {
+            if sel_on_library_shortcut { a.len() } else { old_sel.min(a.len().saturating_sub(1)) }
+        });
         let lsel = cur_lib.and_then(|g| b.iter().position(|t| t.gid == g)).unwrap_or((self.ui.get_lsel().max(0) as usize).min(b.len().saturating_sub(1)));
         self.tiles.set_vec(a);
         self.library.set_vec(b);
