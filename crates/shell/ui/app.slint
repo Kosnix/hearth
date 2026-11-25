@@ -469,6 +469,10 @@ component GameTile inherits Rectangle {
     border-radius: Theme.r-lg;
     clip: true;
     background: @linear-gradient(135deg, tile.hue 0%, tile.hue.darker(0.75) 100%);
+    drop-shadow-offset-y: 10px;
+    drop-shadow-blur: 22px;
+    drop-shadow-color: selected ? Theme.accent.transparentize(0.45) : #00000070;
+    animate drop-shadow-color { duration: 100ms; }
     Image {
         width: 100%;
         height: 100%;
@@ -1389,6 +1393,9 @@ export component App inherits Window {
                     border-radius: Theme.r-lg;
                     clip: true;
                     background: @linear-gradient(135deg, #3a3a44 0%, #25252b 100%);
+                    drop-shadow-offset-y: 8px;
+                    drop-shadow-blur: 18px;
+                    drop-shadow-color: on ? Theme.accent.transparentize(0.45) : #00000070;
                     // Jaquette absente : grande initiale en filigrane (comme une tuile de jeu sans visuel).
                     if o.art.width == 0: Text {
                         text: o.initial;
@@ -1548,6 +1555,22 @@ export component App inherits Window {
                 color: st-pad-charging ? Theme.dim : (st-pad <= 15 ? Theme.danger : Theme.dim);
             }
         }
+    }
+    // --- Barre de navigation translucide, commune à tous les onglets (façon iOS) : fond élevé et
+    // filet de séparation, pour détacher la barre du haut du contenu qui défile dessous.
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: 165px;
+        background: Theme.panel;
+    }
+    Rectangle {
+        x: 0px;
+        y: 164px;
+        width: parent.width;
+        height: 1px;
+        background: Theme.separator;
     }
     // --- Barre du haut : heure à gauche, onglets au centre, raccourcis et profil à droite (thème FireLike) ---
     // Pas de logo Hearth ici : le menu principal n'a pas besoin de la marque, contrairement à l'assistant
