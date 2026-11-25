@@ -2135,7 +2135,7 @@ export component App inherits Window {
         Rectangle {
             width: 700px;
             height: 120px + menu-items.length * 84px;
-            border-radius: 24px;
+            border-radius: Theme.r-lg;
             background: Theme.panel;
             TouchArea { }
             Text {
@@ -2143,7 +2143,7 @@ export component App inherits Window {
                 y: 28px;
                 width: parent.width - 80px;
                 text: menu-title;
-                font-size: 32px;
+                font-size: Theme.t-title3;
                 font-weight: 700;
                 color: Theme.text;
                 overflow: elide;
@@ -2159,8 +2159,15 @@ export component App inherits Window {
                 Text {
                     x: 28px;
                     text: item;
-                    font-size: 28px;
+                    font-size: Theme.t-callout;
                     color: i == msel ? Theme.on-accent : Theme.text;
+                }
+                if i < menu-items.length - 1 && i != msel && i + 1 != msel: Rectangle {
+                    x: 28px;
+                    y: parent.height;
+                    width: parent.width - 56px;
+                    height: 1px;
+                    background: Theme.separator;
                 }
                 TouchArea {
                     clicked => { root.msel = i; root.menu-pick(i); }
@@ -2196,8 +2203,15 @@ export component App inherits Window {
                 Text {
                     x: 24px;
                     text: item;
-                    font-size: 28px;
+                    font-size: Theme.t-callout;
                     color: i == pw ? Theme.on-accent : Theme.text;
+                }
+                if i < 4 && i != pw && i + 1 != pw: Rectangle {
+                    x: 24px;
+                    y: parent.height;
+                    width: parent.width - 48px;
+                    height: 1px;
+                    background: Theme.separator;
                 }
                 TouchArea {
                     clicked => {
