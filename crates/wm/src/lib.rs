@@ -174,6 +174,29 @@ fn parent_map() -> std::collections::HashMap<u32, u32> {
     map
 }
 
+/// Un processus de ce nom d'exécutable (ex. « epicgameslauncher.exe », casse indifférente) tourne-t-il ?
+pub fn process_running(exe: &str) -> bool {
+    unsafe {
+        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return false };
+        let mut e = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+        let mut found = false;
+        if Process32FirstW(snap, &mut e).is_ok() {
+            loop {
+                let n = e.szExeFile.iter().position(|&c| c == 0).unwrap_or(e.szExeFile.len());
+                if String::from_utf16_lossy(&e.szExeFile[..n]).eq_ignore_ascii_case(exe) {
+                    found = true;
+                    break;
+                }
+                if Process32NextW(snap, &mut e).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snap);
+        found
+    }
+}
+
 fn image_path(p: HANDLE) -> Option<PathBuf> {
     let mut buf = [0u16; 1024];
     let mut len = buf.len() as u32;
@@ -420,6 +443,33 @@ pub fn minimize_windows_of(exes: &[&str]) -> usize {
         }
     }
     count
+}
+
+/// Met au premier plan la première fenêtre visible (de taille réelle) d'un de ces processus — ex. la
+/// fenêtre de connexion de Steam, sinon cachée derrière la console plein écran. Vrai si trouvée.
+pub fn focus_window_of(exes: &[&str]) -> bool {
+    for h in top_windows() {
+        unsafe {
+            if !IsWindowVisible(h).as_bool() {
+                continue;
+            }
+        }
+        let mut r = RECT::default();
+        unsafe {
+            let _ = GetWindowRect(h, &mut r);
+        }
+        if r.right - r.left < MIN_W || r.bottom - r.top < MIN_H || !exes.contains(&exe_name(h).as_str()) {
+            continue;
+        }
+        unsafe {
+            if IsIconic(h).as_bool() {
+                let _ = ShowWindow(h, SW_RESTORE);
+            }
+        }
+        focus(h);
+        return true;
+    }
+    false
 }
 
 /// Ctrl est-il enfoncé ? (les raccourcis de test Ctrl+Alt+Maj+F1..F8 ne doivent pas fermer la console via Alt+F4)

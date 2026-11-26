@@ -387,19 +387,34 @@ component GameTile inherits Rectangle {
             color: #ffffff;
         }
     }
-    // Pastilles discrètes (coin bas) : elles ne masquent plus le titre de la jaquette.
+    // Jeu lancé : étiquette « Reprendre » en bas de la jaquette (A la ramène au premier plan).
     if tile.running: Rectangle {
-        x: 10px;
-        y: parent.height - 40px;
-        width: badge.preferred-width + 20px;
-        height: 30px;
-        border-radius: 15px;
+        x: (parent.width - self.width) / 2;
+        y: parent.height - self.height - (compact ? 12px : 18px);
+        width: resume.preferred-width + (compact ? 28px : 36px);
+        height: compact ? 34px : 42px;
+        border-radius: self.height / 2;
         background: Theme.accent;
-        badge := Text {
-            text: @tr("En cours");
-            font-size: 16px;
-            font-weight: 700;
-            color: Theme.on-accent;
+        drop-shadow-offset-y: 4px;
+        drop-shadow-blur: 12px;
+        drop-shadow-color: #00000080;
+        resume := HorizontalLayout {
+            alignment: center;
+            spacing: compact ? 6px : 8px;
+            Text {
+                vertical-alignment: center;
+                text: "\u{E768}";
+                font-family: Theme.icons;
+                font-size: compact ? 14px : 17px;
+                color: Theme.on-accent;
+            }
+            Text {
+                vertical-alignment: center;
+                text: @tr("Reprendre");
+                font-size: compact ? 17px : 21px;
+                font-weight: 800;
+                color: Theme.on-accent;
+            }
         }
     }
     if tile.install: Rectangle {
@@ -568,6 +583,12 @@ export component App inherits Window {
     in-out property <int> brow: 0; // 0 recherche, 1 offres, 2 ajouter une boutique, 3 filtre boutique
     in-out property <int> lbrow: 0; // 0 recherche (Bibliothèque), 1 grille
     property <bool> lib-back: false; // rangée de recherche de la Bibliothèque : bouton retour sélectionné
+    // Lancement depuis le dock : la jaquette grandit jusqu'au plein écran (0 = à sa place, 1 = plein écran),
+    // puis se rétracte au retour. Avancée image par image côté Rust (`Shell::zoom_to`) : un `animate`
+    // sur une affectation faite depuis Rust n'était pas joué (saut direct à la valeur finale).
+    in property <image> zoom-cover;
+    in property <image> zoom-hero;
+    in property <float> zoom-t: 0;
     in property <string> lib-query;
     // Menu contextuel (options d'un jeu, ajout).
     in property <string> menu-title;
@@ -948,19 +969,19 @@ export component App inherits Window {
         opacity: tab-fade;
         animate opacity { duration: 100ms; easing: ease-out; }
         x: 160px;
-        y: 170px;
+        y: 240px;
         width: min(900px, 340px * games[sel].logo.width / games[sel].logo.height);
         height: 340px;
         source: games[sel].logo;
         image-fit: contain;
     }
-    // Nom en repli, calé en bas de la zone du logo : il reste collé à la ligne d'infos et au bouton
-    // Jouer au lieu de flotter au milieu d'un grand vide.
+    // Nom en repli, calé en bas de la zone du logo : il reste collé à la ligne d'infos au lieu de
+    // flotter au milieu d'un grand vide.
     if tab == 0 && sel < games.length && games[sel].logo.width == 0: Text {
         opacity: tab-fade;
         animate opacity { duration: 100ms; easing: ease-out; }
         x: 160px;
-        y: 170px;
+        y: 250px;
         width: 1200px;
         height: 330px;
         vertical-alignment: bottom;
@@ -971,12 +992,12 @@ export component App inherits Window {
         wrap: word-wrap;
         overflow: elide;
     }
-    // Raccourci Bibliothèque sélectionné : même en-tête qu'un jeu (titre, infos, bouton) plutôt qu'un vide.
+    // Raccourci Bibliothèque sélectionné : même en-tête qu'un jeu (titre, infos) plutôt qu'un vide.
     if tab == 0 && sel == games.length: Text {
         opacity: tab-fade;
         animate opacity { duration: 100ms; easing: ease-out; }
         x: 160px;
-        y: 170px;
+        y: 250px;
         width: 1200px;
         height: 330px;
         vertical-alignment: bottom;
@@ -989,87 +1010,25 @@ export component App inherits Window {
         opacity: tab-fade;
         animate opacity { duration: 100ms; easing: ease-out; }
         x: 160px;
-        y: 518px;
+        y: 600px;
         width: 1200px;
         text: library.length == 0 ? @tr("Aucun jeu") : (library.length == 1 ? @tr("1 jeu") : @tr("{} jeux", library.length));
         font-size: 26px;
         color: Theme.dim;
         overflow: elide;
     }
-    if tab == 0 && sel == games.length: Rectangle {
-        opacity: tab-fade;
-        animate opacity { duration: 100ms; easing: ease-out; }
-        x: 160px;
-        y: 580px;
-        width: 290px;
-        height: 82px;
-        border-radius: Theme.r-pill;
-        background: Theme.accent;
-        drop-shadow-offset-y: 8px;
-        drop-shadow-blur: 20px;
-        drop-shadow-color: Theme.accent.transparentize(0.4);
-        Text {
-            text: @tr("Ouvrir");
-            font-size: 34px;
-            font-weight: 800;
-            color: Theme.on-accent;
-        }
-        TouchArea {
-            clicked => { root.zone = 0; root.lbrow = 0; root.lib-back = false; root.tab = 1; }
-        }
-    }
+    // Pas de bouton Jouer ni « ··· » : A sur la jaquette lance (ou ramène le jeu déjà lancé, étiquette
+    // « Reprendre »), le bouton Options ouvre le menu du jeu.
     if tab == 0 && sel < games.length && (games[sel].played != "" || games[sel].store != ""): Text {
         opacity: tab-fade;
         animate opacity { duration: 100ms; easing: ease-out; }
         x: 160px;
-        y: 518px;
+        y: 600px;
         width: 1200px;
         text: (games[sel].store != "" ? games[sel].store + (games[sel].played != "" ? "  ·  " : "") : "") + games[sel].played;
         font-size: 26px;
         color: Theme.dim;
         overflow: elide;
-    }
-    // Bouton Jouer (orange) et menu d'options.
-    if tab == 0 && sel < games.length: Rectangle {
-        opacity: tab-fade;
-        animate opacity { duration: 100ms; easing: ease-out; }
-        x: 160px;
-        y: 580px;
-        width: 290px;
-        height: 82px;
-        border-radius: Theme.r-pill;
-        background: Theme.accent;
-        drop-shadow-offset-y: 8px;
-        drop-shadow-blur: 20px;
-        drop-shadow-color: Theme.accent.transparentize(0.4);
-        Text {
-            text: games[sel].running ? @tr("Reprendre") : @tr("Jouer");
-            font-size: 34px;
-            font-weight: 800;
-            color: Theme.on-accent;
-        }
-        TouchArea {
-            clicked => { root.zone = 0; root.launch(root.games[root.sel].gid); }
-        }
-    }
-    if tab == 0 && sel < games.length: Rectangle {
-        opacity: tab-fade;
-        animate opacity { duration: 100ms; easing: ease-out; }
-        x: 476px;
-        y: 580px;
-        width: 82px;
-        height: 82px;
-        border-radius: 41px;
-        background: Theme.fill2;
-        Text {
-            text: "···";
-            font-size: 34px;
-            font-weight: 800;
-            color: Theme.text;
-        }
-        TouchArea {
-            clicked => { root.game-menu(root.games[root.sel].gid); }
-        }
     }
     // Dock : la jaquette sélectionnée est agrandie, les autres défilent autour d'elle, ancré en bas.
     // Le raccourci Bibliothèque occupe la dernière place (index games.length), même traitement
@@ -1711,6 +1670,34 @@ export component App inherits Window {
         Hint { btn: 1; label: @tr("Retour"); }
         Hint { btn: 3; label: @tr("Options"); }
         Hint { btn: 2; label: @tr("Menu"); }
+    }
+
+    // --- Jaquette qui grandit au lancement (et se rétracte au retour) : part exactement de la tuile
+    // sélectionnée du dock (même géométrie que ci-dessus), finit en plein écran sur le héros du jeu,
+    // que l'écran de lancement reprend tel quel pour un enchaînement sans coupure. ---
+    if zoom-t > 0: Rectangle {
+        property <float> e: zoom-t;
+        x: (160px + min(sel, 2) * 283px) * (1 - e);
+        y: 788px * (1 - e);
+        width: 270px + (root.width - 270px) * e;
+        height: 426px + (root.height - 426px) * e;
+        border-radius: Theme.r-lg * (1 - e);
+        clip: true;
+        background: Theme.deep;
+        Image {
+            width: 100%;
+            height: 100%;
+            source: zoom-cover;
+            image-fit: cover;
+        }
+        if zoom-hero.width > 0: Image {
+            width: 100%;
+            height: 100%;
+            source: zoom-hero;
+            image-fit: cover;
+            opacity: max(0, min(1, (e - 0.3) / 0.5));
+        }
+        TouchArea { }
     }
 
     // --- Fiche d'un jeu de la boutique : description, captures, prix par boutique ---
@@ -3298,6 +3285,9 @@ export component Splash inherits Window {
     in property <string> launch-status; // « Démarrage de X », déjà traduit côté Rust
     in property <float> launch-t: 0; // 0..1 : progression de l'animation d'entrée
     in property <float> launch-spin: 0; // degrés
+    // Image plein écran laissée par l'agrandissement de la jaquette (vide sinon) : elle s'efface
+    // au fil de l'animation d'entrée pour révéler l'écran de lancement.
+    in property <image> launch-zoom;
     // Rien d'assez propre à montrer (pas de logo, pas d'image assez grande) : la jaquette si on l'a (quasiment
     // toujours), sinon juste la roue, au centre, avec le nom.
     property <bool> plain: launch-logo.width == 0 && launch-art.width == 0;
@@ -3310,6 +3300,15 @@ export component Splash inherits Window {
     // Fond : dégradé à la couleur du jeu (seul fond quand il n'y a ni logo ni image assez grande).
     Rectangle {
         background: @linear-gradient(135deg, launch-hue.darker(0.4) 0%, Theme.deep 100%);
+    }
+    // Après l'agrandissement de la jaquette : la même image plein écran que la dernière de l'animation,
+    // opaque et sous tout le reste — le logo/la roue apparaissent dessus sans aucun creux (un fondu
+    // laissait voir un instant le fond coloré ci-dessus).
+    if launch-zoom.width > 0: Image {
+        width: parent.width;
+        height: parent.height;
+        source: launch-zoom;
+        image-fit: cover;
     }
     if launch-logo.width > 0: Image {
         width: min(parent.width * 0.5, 900px);

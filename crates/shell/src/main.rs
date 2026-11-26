@@ -17,6 +17,7 @@ mod addflow;
 mod i18n;
 mod imgload;
 mod keyboard;
+mod launchers;
 mod menus;
 mod native;
 mod oobe;
@@ -112,6 +113,15 @@ struct Shell {
     rename_id: RefCell<Option<String>>,
     scmd_stage: Cell<u8>,
     steam_wait: Cell<bool>,
+    /// Un lanceur de boutique (Epic, GOG Galaxy) démarre avant un jeu (voir `launchers`).
+    launcher_wait: Cell<bool>,
+    /// Jaquette agrandie en plein écran au lancement : 0 rien, 1 en train de grandir (l'écran de
+    /// lancement suit), 2 en attente derrière le jeu — elle se rétracte au retour sur Hearth.
+    zoom: Cell<u8>,
+    zoom_timer: slint::Timer,
+    /// Animation de `zoom-t` en cours : (début, valeur de départ, valeur d'arrivée).
+    zoom_anim: Cell<Option<(std::time::Instant, f32, f32)>>,
+    zoom_anim_timer: slint::Timer,
     anim_n: Cell<u32>,
     ext_game: RefCell<Option<ExtGame>>,
     ext_pending: Cell<Option<(usize, std::time::Instant)>>,
@@ -228,8 +238,13 @@ fn main() -> Result<(), slint::PlatformError> {
     // Console plein écran à résolution fixe, quel que soit le réglage de mise à l'échelle de Windows
     // (voir hearth.manifest : le processus doit être authentiquement adapté au DPI pour que les
     // coordonnées physiques lues partout ailleurs — wm::primary_monitor, GetWindowRect… — restent
-    // fiables). Slint restitue ensuite 1 pixel logique = 1 pixel physique nous-mêmes.
-    std::env::set_var("SLINT_SCALE_FACTOR", "1");
+    // fiables). L'interface est dessinée pour un canevas de 2560×1440 pixels logiques : l'échelle est
+    // celle qui l'y fait tenir entièrement sur l'écran réel (0,75 en 1080p, 1 en 1440p, 1,5 en 4K,
+    // ~0,65 dans une fenêtre de Bureau à distance), le sens qui a de la marge s'agrandissant (ancrages
+    // sur parent.width/height). Valeur fixée nous-mêmes, jamais celle de la mise à l'échelle Windows.
+    let (_, _, mw, mh) = wm::primary_monitor();
+    let scale = (mw as f32 / 2560.0).min(mh as f32 / 1440.0).clamp(0.3, 4.0);
+    std::env::set_var("SLINT_SCALE_FACTOR", format!("{scale:.4}"));
     // ponytail: femtovg cesse de se redessiner avec ce design (constaté sur l'Optiplex) ; rendu logiciel.
     // Glisser-déposer désactivé : winit initialise sinon OLE à la création de chaque fenêtre, ce qui échoue (RPC_E_CHANGED_MODE)
     // pour les fenêtres créées après coup (version bureau) une fois du COM multithread initialisé sur ce thread.
@@ -293,6 +308,11 @@ fn main() -> Result<(), slint::PlatformError> {
         rename_id: RefCell::new(None),
         scmd_stage: Cell::new(0),
         steam_wait: Cell::new(false),
+        launcher_wait: Cell::new(false),
+        zoom: Cell::new(0),
+        zoom_timer: slint::Timer::default(),
+        zoom_anim: Cell::new(None),
+        zoom_anim_timer: slint::Timer::default(),
         anim_n: Cell::new(0),
         ext_game: RefCell::new(None),
         ext_pending: Cell::new(None),
@@ -719,21 +739,31 @@ impl Shell {
             self.install_owned(&g);
             return;
         }
+        // Un jeu de boutique (pas encapsulé dans un job, suivi par sa fenêtre) est déjà en cours de
+        // lancement ou de suivi pour une AUTRE tuile : refuser plutôt qu'écraser `ext_pending`, sinon
+        // la fenêtre qui finit par apparaître en premier se voit attribuer le nom/l'index de l'autre
+        // jeu (guide qui ferme le mauvais jeu, temps de jeu mal crédité, double lancement possible).
+        if g.uri.is_some() && (self.ext_pending.get().is_some_and(|(t, _)| t != i) || self.ext_game.borrow().as_ref().is_some_and(|e| e.tile != i)) {
+            self.push_notif(&g.name, &tr("Attendez la fin du lancement du jeu précédent"));
+            return;
+        }
+        // Animation et écran de lancement tout de suite, dès l'appui : la préparation éventuelle du
+        // lanceur (ci-dessous) se fait derrière, sans que rien n'en paraisse. Pas une seconde fois quand
+        // `launch` est rappelé une fois le lanceur prêt.
+        let resuming = self.splash_tile.get() == Some(i) && (self.splash_start.get().is_some() || self.zoom.get() == 1);
+        if !resuming {
+            self.begin_splash(i, g.uri.is_some());
+        }
         // Jeux Steam : client lancé et connecté, superposition Steam coupée (une fois), fenêtre Steam réduite.
         let steam_uri = g.uri.is_some() && g.store == "Steam";
         if (self.is_scmd_game(&g.exe) || steam_uri) && !self.steam_ready(i, &g) {
             return;
         }
+        // Epic, GOG Galaxy : lanceur démarré réduit d'abord s'il ne tourne pas (le jeu repart ensuite seul).
+        if !self.launcher_ready(i, &g) {
+            return;
+        }
         if let Some(uri) = &g.uri {
-            // Un jeu de boutique (pas encapsulé dans un job, suivi par sa fenêtre) est déjà en cours de
-            // lancement ou de suivi pour une AUTRE tuile : refuser plutôt qu'écraser `ext_pending`, sinon
-            // la fenêtre qui finit par apparaître en premier se voit attribuer le nom/l'index de l'autre
-            // jeu (guide qui ferme le mauvais jeu, temps de jeu mal crédité, double lancement possible).
-            if self.ext_pending.get().is_some_and(|(t, _)| t != i) || self.ext_game.borrow().as_ref().is_some_and(|e| e.tile != i) {
-                self.push_notif(&g.name, &tr("Attendez la fin du lancement du jeu précédent"));
-                return;
-            }
-            self.start_splash(i, true);
             // Lancement par le client de la boutique : le jeu n'est pas encapsulé, on suivra sa fenêtre (tick).
             system::open_uri(uri);
             self.ext_pending.set(Some((i, std::time::Instant::now())));
@@ -742,7 +772,6 @@ impl Shell {
             }
             return;
         }
-        self.start_splash(i, false);
         let exe = Path::new(&g.exe);
         let compat = wm::compat::lookup(exe);
         compat.apply_ini();
@@ -767,6 +796,9 @@ impl Shell {
             }
             Err(_e) => {
                 self.hide_splash();
+                if self.zoom.get() != 0 {
+                    self.zoom_out();
+                }
                 system::sfx::play(system::sfx::Sfx::Error);
             }
         }
@@ -1744,6 +1776,11 @@ impl Shell {
                 self.pad.global::<Pad>().set_kind(pad);
             }
             self.fg_main.set(wm::find_window(MAIN_TITLE).is_some_and(|h| h == wm::foreground()));
+            // Jaquette restée en plein écran derrière le jeu : dès que Hearth repasse au premier plan sans
+            // écran de lancement (jeu fermé, lancement annulé ou échoué, retour à l'accueil), elle se rétracte.
+            if self.zoom.get() == 2 && self.fg_main.get() && self.splash_start.get().is_none() {
+                self.zoom_out();
+            }
             let tab = self.ui.get_tab();
             if tab != self.last_tab.replace(tab) && tab == 1 {
                 self.ui.set_lsel(0);
@@ -2184,10 +2221,74 @@ impl Shell {
 
 }
 
+/// Durée de l'agrandissement (et de la rétractation) de la jaquette ; `HEARTH_ZOOM_MS` la change (tests au ralenti).
+fn zoom_ms() -> u64 {
+    std::env::var("HEARTH_ZOOM_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(420)
+}
+
 impl Shell {
+    /// Lancement depuis le dock de Jeux : la jaquette grandit jusqu'au plein écran, puis l'écran de
+    /// lancement prend le relais sur la même image. Sinon (Bibliothèque, animations coupées…), l'écran
+    /// de lancement directement.
+    fn begin_splash(&self, i: usize, uri: bool) {
+        let from_dock = i18n::anim()
+            && self.ui.get_tab() == 0
+            && self.ui.get_zone() == 0
+            && self.tiles.row_data(self.ui.get_sel().max(0) as usize).is_some_and(|t| t.gid as usize == i);
+        let Some(t) = from_dock.then(|| self.tile_for(i)).flatten() else {
+            self.start_splash(i, uri);
+            return;
+        };
+        self.ui.set_zoom_cover(t.cover);
+        self.ui.set_zoom_hero(t.hero);
+        self.zoom_to(1.0);
+        self.zoom.set(1);
+        self.splash_tile.set(Some(i));
+        self.zoom_timer.start(slint::TimerMode::SingleShot, Duration::from_millis(zoom_ms() + 30), move || {
+            with_shell(|s| {
+                if s.zoom.get() == 1 {
+                    s.zoom.set(2);
+                    s.start_splash(i, uri);
+                }
+            })
+        });
+    }
+
+    /// Animation inverse : l'image plein écran se rétracte vers la jaquette du dock.
+    fn zoom_out(&self) {
+        self.zoom_timer.stop();
+        self.zoom.set(0);
+        self.zoom_to(0.0);
+    }
+
+    /// Fait glisser `zoom-t` de sa valeur actuelle vers `to` en `zoom_ms()`, avec accélération puis
+    /// décélération (cubique), une image toutes les ~8 ms.
+    fn zoom_to(&self, to: f32) {
+        self.zoom_anim.set(Some((std::time::Instant::now(), self.ui.get_zoom_t(), to)));
+        self.zoom_anim_timer.start(slint::TimerMode::Repeated, Duration::from_millis(8), || {
+            with_shell(|s| {
+                let Some((t0, from, to)) = s.zoom_anim.get() else {
+                    s.zoom_anim_timer.stop();
+                    return;
+                };
+                let p = (t0.elapsed().as_secs_f32() * 1000.0 / zoom_ms() as f32).min(1.0);
+                let e = if p < 0.5 { 4.0 * p * p * p } else { 1.0 - (-2.0 * p + 2.0).powi(3) / 2.0 };
+                s.ui.set_zoom_t(from + (to - from) * e);
+                if p >= 1.0 {
+                    s.zoom_anim.set(None);
+                    s.zoom_anim_timer.stop();
+                }
+            })
+        });
+    }
+
     /// Écran de lancement : fenêtre superposée au jeu, qui reste le temps du chargement.
     fn start_splash(&self, i: usize, uri: bool) {
         let Some(t) = self.tile_for(i) else { return };
+        // Après l'agrandissement de la jaquette : le premier plan de l'écran de lancement est la même image
+        // plein écran que la dernière de l'animation (héros s'il existe, sinon jaquette), qui s'efface ensuite.
+        let zoomed = self.zoom.get() == 2;
+        self.splash.set_launch_zoom(if !zoomed { Default::default() } else if t.hero.size().width > 0 { t.hero.clone() } else { t.cover.clone() });
         self.splash.set_launch_name(t.name.clone());
         self.splash.set_launch_cover(t.cover);
         // Ordre : le logo du jeu si on l'a ; sinon un héros assez grand pour ne pas être flou une fois agrandi ;
@@ -2212,6 +2313,12 @@ impl Shell {
     }
 
     pub fn hide_splash(&self) {
+        // Jaquette encore en train de grandir : l'écran de lancement ne doit plus s'afficher après coup ;
+        // elle se rétractera au prochain passage de Hearth au premier plan (voir `animate`).
+        if self.zoom.get() == 1 {
+            self.zoom_timer.stop();
+            self.zoom.set(2);
+        }
         if let Some(h) = wm::find_window(SPLASH_TITLE) {
             wm::hide(h);
         }
@@ -2257,7 +2364,9 @@ impl Shell {
         let shown_exe = self.running.borrow().iter().any(|r| Some(r.tile) == tile && r.session.owns(fg));
         let shown_ext = self.ext_game.borrow().as_ref().is_some_and(|e| Some(e.tile) == tile);
         // Lancement direct dont le processus s'est arrêté avant même d'apparaître (plantage, antitriche refusé…) : inutile d'attendre.
-        let gave_up_exe = !self.splash_uri.get() && tile.is_some_and(|t| !self.running.borrow().iter().any(|r| r.tile == t));
+        // (Pas pendant que le lanceur de la boutique démarre : le jeu n'est simplement pas encore parti.)
+        let preparing = self.steam_wait.get() || self.launcher_wait.get();
+        let gave_up_exe = !preparing && !self.splash_uri.get() && tile.is_some_and(|t| !self.running.borrow().iter().any(|r| r.tile == t));
         let done = ((shown_exe || shown_ext) && el > 5.0) || gave_up_exe || el > 90.0;
         if done || wm::find_window(SPLASH_TITLE).is_none_or(|h| !wm::is_visible(h)) {
             self.hide_splash();

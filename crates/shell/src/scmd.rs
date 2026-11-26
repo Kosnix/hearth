@@ -501,7 +501,7 @@ impl Shell {
         if self.steam_wait.replace(true) {
             return false;
         }
-        self.push_notif("Steam", &tr("Préparation de Steam…"));
+        // Pas de notification : l'écran de lancement du jeu est déjà affiché, Steam démarre derrière.
         self.steam_keep(180);
         std::thread::spawn(move || {
             // Une fois : on coupe la superposition Steam (elle s'ouvre avec le bouton guide en même temps que le menu de Hearth).
@@ -527,8 +527,16 @@ impl Shell {
                     if ok {
                         s.launch(i);
                     } else {
+                        // Connexion requise : l'écran de lancement s'efface (la jaquette se rétracte) et
+                        // laisse la fenêtre de Steam visible pour se connecter.
+                        s.hide_splash();
                         stores::steam_client_start(false);
+                        // Ramener la fenêtre de connexion devant la console, sinon elle reste cachée
+                        // derrière, hors de portée. (`steam_keep` ne réduit Steam qu'une fois connecté.)
                         s.steam_keep(900);
+                        slint::Timer::single_shot(Duration::from_millis(1500), || {
+                            wm::focus_window_of(&["steamwebhelper.exe", "steam.exe"]);
+                        });
                         s.push_notif("Steam", &tr("Connectez-vous dans la fenêtre Steam (une seule fois), puis relancez le jeu"));
                     }
                 })
