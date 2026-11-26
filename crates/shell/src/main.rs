@@ -70,6 +70,11 @@ struct ExtGame {
     hwnd: wm::HWND,
     started: std::time::Instant,
     closing: bool,
+    /// Processus de la fenêtre repérée et ses descendants : un lanceur de jeu (première fenêtre vue)
+    /// qui démarre le vrai jeu puis se ferme ne doit pas faire croire la partie terminée.
+    tree: wm::ProcTree,
+    /// Depuis quand la fenêtre suivie a disparu sans qu'aucune autre de l'arbre ne l'ait remplacée.
+    lost: Option<std::time::Instant>,
 }
 
 /// Jeu en cours : `tile` est l'indice du jeu dans `Shell::games`.
@@ -1437,6 +1442,7 @@ impl Shell {
                     if let Some(e) = ext.as_mut().filter(|e| e.tile == tile) {
                         if e.closing {
                             wm::kill_owner(e.hwnd);
+                            e.tree.kill();
                         } else {
                             e.closing = true;
                             wm::close_window(e.hwnd);
@@ -1550,7 +1556,7 @@ impl Shell {
         }
         let fg = wm::foreground();
         let tracked = self.running.borrow().iter().any(|r| r.session.owns(fg))
-            || self.ext_game.borrow().as_ref().is_some_and(|e| e.hwnd == fg)
+            || self.ext_game.borrow().as_ref().is_some_and(|e| e.hwnd == fg || e.tree.contains(wm::window_pid(fg), &wm::proctree::snapshot()))
             || self.ext_pending.get().is_some();
         // explorer.exe (bureau) : ce que Windows remet au premier plan par défaut quand un jeu plein
         // écran se ferme, pas une vraie appli ouverte par l'utilisateur — sinon la manette (et le
@@ -2342,6 +2348,7 @@ impl Shell {
         if ext.as_ref().is_some_and(|e| e.tile == tile) {
             if let Some(e) = ext.take() {
                 wm::kill_owner(e.hwnd);
+                e.tree.kill();
             }
         }
         drop(ext);
@@ -2715,12 +2722,35 @@ impl Shell {
             if t0.elapsed() > Duration::from_secs(240) {
                 self.ext_pending.set(None);
             } else if let Some(h) = wm::foreground_game(&["steam.exe", "steamwebhelper.exe", "explorer.exe", "hearth-shell.exe", "hearth.exe", "claude.exe", "cmd.exe"]) {
-                *self.ext_game.borrow_mut() = Some(ExtGame { tile, hwnd: h, started: std::time::Instant::now(), closing: false });
+                let tree = wm::ProcTree::new(wm::window_pid(h));
+                *self.ext_game.borrow_mut() = Some(ExtGame { tile, hwnd: h, started: std::time::Instant::now(), closing: false, tree, lost: None });
                 self.ext_pending.set(None);
                 self.rebuild();
             }
         }
-        let ended = self.ext_game.borrow().as_ref().filter(|e| !wm::is_alive(e.hwnd)).map(|e| (e.tile, e.started.elapsed().as_secs()));
+        // Fenêtre suivie disparue : se raccrocher à une autre fenêtre de l'arbre (le vrai jeu lancé par
+        // un lanceur, ou une nouvelle fenêtre après changement de mode) ; tant qu'un de ses processus
+        // tourne encore, patienter (le jeu peut mettre du temps à ouvrir sa fenêtre) ; sinon, fin.
+        let ended = {
+            let mut ext = self.ext_game.borrow_mut();
+            match ext.as_mut() {
+                None => None,
+                Some(e) => {
+                    let snap = e.tree.refresh();
+                    if wm::is_alive(e.hwnd) {
+                        e.lost = None;
+                        None
+                    } else if let Some(h) = wm::main_windows().into_iter().find(|&h| e.tree.contains(wm::window_pid(h), &snap)) {
+                        e.hwnd = h;
+                        e.lost = None;
+                        None
+                    } else {
+                        let since = *e.lost.get_or_insert_with(std::time::Instant::now);
+                        (!e.tree.alive(&snap) || since.elapsed() > Duration::from_secs(90)).then(|| (e.tile, e.started.elapsed().as_secs()))
+                    }
+                }
+            }
+        };
         if let Some((tile, secs)) = ended {
             *self.ext_game.borrow_mut() = None;
             if let Some(g) = self.games.borrow().get(tile).cloned() {

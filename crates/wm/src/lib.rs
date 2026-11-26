@@ -3,6 +3,9 @@
 
 pub mod compat;
 pub mod cursor;
+pub mod proctree;
+
+pub use proctree::ProcTree;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -27,11 +30,12 @@ pub use windows::Win32::Foundation::HWND;
 const MIN_W: i32 = 640;
 const MIN_H: i32 = 480;
 
-/// Un jeu lancé par le shell : tous ses processus enfants sont dans le même job.
+/// Un jeu lancé par le shell : tous ses processus enfants sont dans le même job — sauf ceux qu'un
+/// lanceur relance hors du job (élévation), suivis par `tree` (filiation, même via un parent disparu).
 pub struct Session {
     job: HANDLE,
     dir: PathBuf,
-    root_pid: u32,
+    tree: ProcTree,
 }
 
 impl Session {
@@ -58,11 +62,18 @@ impl Session {
             ResumeThread(pi.hThread);
             let _ = CloseHandle(pi.hThread);
             let _ = CloseHandle(pi.hProcess);
-            Ok(Session { job, dir, root_pid: pi.dwProcessId })
+            Ok(Session { job, dir, tree: ProcTree::new(pi.dwProcessId) })
         }
     }
 
+    /// Le jeu tourne-t-il encore : un processus dans le job, ou un descendant qui en est sorti (le
+    /// job seul déclarait le jeu fermé dès que son lanceur quittait, partie en cours). À appeler
+    /// régulièrement : c'est aussi ce qui fait connaître à l'arbre les nouveaux processus.
     pub fn alive(&self) -> bool {
+        for pid in self.job_pids() {
+            self.tree.add(pid);
+        }
+        let snap = self.tree.refresh();
         let mut info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
         let ok = unsafe {
             QueryInformationJobObject(
@@ -73,12 +84,33 @@ impl Session {
                 None,
             )
         };
-        ok.is_ok() && info.ActiveProcesses > 0
+        (ok.is_ok() && info.ActiveProcesses > 0) || self.tree.alive(&snap)
+    }
+
+    fn job_pids(&self) -> Vec<u32> {
+        #[repr(C)]
+        struct List {
+            assigned: u32,
+            listed: u32,
+            ids: [usize; 256],
+        }
+        let mut l = List { assigned: 0, listed: 0, ids: [0; 256] };
+        let ok = unsafe { QueryInformationJobObject(Some(self.job), JobObjectBasicProcessIdList, &mut l as *mut _ as _, size_of::<List>() as u32, None) };
+        if ok.is_err() {
+            return vec![];
+        }
+        l.ids[..(l.listed as usize).min(l.ids.len())].iter().map(|&p| p as u32).collect()
     }
 
     /// Fenêtre d'un processus du job, d'un descendant qui s'en est détaché (launcher relançant le vrai
     /// jeu avec élévation ou `breakaway`), ou à défaut d'un exécutable du dossier du jeu.
     pub fn owns(&self, hwnd: HWND) -> bool {
+        self.owns_with(hwnd, &mut None)
+    }
+
+    /// `snap` : instantané des processus, pris au premier besoin seulement et partagé entre appels
+    /// (en tester plusieurs fenêtres d'affilée n'en coûte qu'un).
+    fn owns_with(&self, hwnd: HWND, snap: &mut Option<Vec<proctree::Proc>>) -> bool {
         let mut pid = 0;
         unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
         if pid == 0 {
@@ -96,28 +128,13 @@ impl Session {
             }
             Err(_) => (false, false),
         };
-        in_job || dir_match || self.descends_from_root(pid)
-    }
-
-    /// Un processus détaché du job par son launcher reste reconnu s'il descend, par filiation Windows
-    /// (indépendante du job, qui survit même si le launcher lui-même a déjà quitté), du processus
-    /// initialement lancé.
-    fn descends_from_root(&self, pid: u32) -> bool {
-        let parents = parent_map();
-        let mut cur = pid;
-        for _ in 0..16 {
-            match parents.get(&cur) {
-                Some(&parent) if parent == self.root_pid => return true,
-                Some(&parent) if parent != 0 && parent != cur => cur = parent,
-                _ => return false,
-            }
-        }
-        false
+        in_job || dir_match || self.tree.contains(pid, snap.get_or_insert_with(proctree::snapshot))
     }
 
     /// Fenêtres principales du jeu, la plus haute dans l'ordre Z en premier.
     pub fn windows(&self) -> Vec<HWND> {
-        top_windows().into_iter().filter(|h| is_main_window(*h) && self.owns(*h)).collect()
+        let mut snap = None;
+        top_windows().into_iter().filter(|h| is_main_window(*h) && self.owns_with(*h, &mut snap)).collect()
     }
 
     pub fn main_window(&self) -> Option<HWND> {
@@ -133,10 +150,12 @@ impl Session {
         }
     }
 
+    /// Fermeture forcée : le job, et les processus du jeu qui en sont sortis.
     pub fn kill(&self) {
         unsafe {
             let _ = TerminateJobObject(self.job, 1);
         }
+        self.tree.kill();
     }
 }
 
@@ -155,23 +174,25 @@ fn quote(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\\\""))
 }
 
-/// Table pid -> pid parent, par instantané global des processus (Toolhelp).
-fn parent_map() -> std::collections::HashMap<u32, u32> {
-    let mut map = std::collections::HashMap::new();
-    unsafe {
-        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return map };
-        let mut e = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
-        if Process32FirstW(snap, &mut e).is_ok() {
-            loop {
-                map.insert(e.th32ProcessID, e.th32ParentProcessID);
-                if Process32NextW(snap, &mut e).is_err() {
-                    break;
-                }
+/// Processus propriétaire d'une fenêtre (0 si inconnu).
+pub fn window_pid(h: HWND) -> u32 {
+    let mut pid = 0;
+    unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
+    pid
+}
+
+/// Fenêtres principales visibles (assez grandes pour être celle d'un jeu), ordre Z décroissant.
+pub fn main_windows() -> Vec<HWND> {
+    top_windows()
+        .into_iter()
+        .filter(|&h| {
+            let mut r = RECT::default();
+            unsafe {
+                let _ = GetWindowRect(h, &mut r);
             }
-        }
-        let _ = CloseHandle(snap);
-    }
-    map
+            is_main_window(h) && r.right - r.left >= MIN_W && r.bottom - r.top >= MIN_H
+        })
+        .collect()
 }
 
 /// Un processus de ce nom d'exécutable (ex. « epicgameslauncher.exe », casse indifférente) tourne-t-il ?
