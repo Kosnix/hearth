@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 vigem-client = "0.1.4"
+hidapi = { version = "2", default-features = false, features = ["windows-native"] }
 
 [dependencies.windows]
 workspace = true

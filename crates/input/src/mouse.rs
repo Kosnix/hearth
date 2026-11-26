@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use windows::Gaming::Input::GameControllerSwitchPosition as Hat;
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
@@ -60,19 +59,8 @@ fn key(vk: VIRTUAL_KEY) {
     send(&[k(KEYBD_EVENT_FLAGS(0)), k(KEYEVENTF_KEYUP)]);
 }
 
-struct Raw {
-    b: Vec<bool>,
-    a: Vec<f64>,
-}
-
-fn read() -> Option<Raw> {
-    let raw = crate::sony_pads().into_iter().next()?;
-    let (nb, ns, na) = (raw.ButtonCount().ok()?, raw.SwitchCount().ok()?, raw.AxisCount().ok()?);
-    let mut b = vec![false; nb as usize];
-    let mut s = vec![Hat::Center; ns as usize];
-    let mut a = vec![0.5; na as usize];
-    raw.GetCurrentReading(&mut b, &mut s, &mut a).map_err(|_| crate::sony_invalidate(&raw)).ok()?;
-    Some(Raw { b, a })
+fn read() -> Option<crate::hidpad::SonyState> {
+    crate::sony_states().into_iter().next()
 }
 
 /// Stick -1..1 avec zone morte, courbe progressive (précis au centre, rapide au bout).
@@ -97,7 +85,7 @@ pub fn spawn(on_event: Arc<dyn Fn(Nav) + Send + Sync>) {
                 thread::sleep(Duration::from_millis(500));
                 continue;
             };
-            let on = |i: usize| r.b.get(i) == Some(&true);
+            let on = |i: usize| r.buttons[i];
             let both = on(10) && on(11);
             if both && !chord && (CHORD.load(Ordering::Relaxed) || active()) {
                 let now = !active();
@@ -109,7 +97,7 @@ pub fn spawn(on_event: Arc<dyn Fn(Nav) + Send + Sync>) {
             }
             chord = both;
             if active() && !osk() {
-                let (st, _) = split(&r.a);
+                let st = r.sticks;
                 let (x, y) = (curve(st[0]), curve(st[1]));
                 fx += x * 9.0;
                 fy += y * 9.0;

@@ -3,6 +3,7 @@
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
+mod hidpad;
 mod mouse;
 mod xpad;
 
@@ -77,6 +78,7 @@ type GetState = unsafe extern "system" fn(u32, *mut XINPUT_STATE) -> u32;
 /// Lance le thread de lecture ; `on_nav` est appelé depuis ce thread.
 pub fn spawn(on_nav: impl Fn(Nav) + Send + Sync + 'static) {
     let on_nav = std::sync::Arc::new(on_nav);
+    hidpad::spawn();
     mouse::spawn(on_nav.clone());
     xpad::spawn();
     thread::spawn(move || {
@@ -98,9 +100,11 @@ pub fn spawn(on_nav: impl Fn(Nav) + Send + Sync + 'static) {
             while let Some(nav) = poll_hotkey() {
                 on_nav(nav);
             }
-            // Avec une manette Sony, sa copie virtuelle Xbox (ViGEm) n'est pas relue : une seule source, pas de double lecture.
+            // Avec une manette Sony, sa copie virtuelle Xbox (ViGEm) n'est pas relue : une seule source, pas de
+            // double lecture. Seul son emplacement XInput est écarté — les vraies manettes Xbox branchées en
+            // même temps restent utilisables (Windows.Gaming.Input, qui ne distingue pas la copie, est laissé de côté).
             let sony = read_sony();
-            let other = if xpad::present() { 0 } else { read_wgi() | xinput.read() };
+            let other = if xpad::present() { xinput.read(xpad::virtual_slot()) } else { read_wgi() | xinput.read(None) };
             if sony != 0 {
                 LAST_PAD.store(1, Ordering::Relaxed);
             } else if other != 0 {
@@ -215,49 +219,77 @@ fn read_wgi() -> u16 {
 
 const SONY: u16 = 0x054C;
 
-/// DualShock 4 / DualSense (HID) : boutons 0 Carré, 1 Croix, 2 Rond, 9 Options, 12 PS ; chapeau 0 = croix ;
-/// axes classés par `mouse::split` (voir ce commentaire : leur ordre n'est pas garanti).
-// ponytail: seul le schéma Sony est mappé ; autres manettes HID en phase 4.
+/// DualShock 4 / DualSense : boutons 1 Croix, 2 Rond, 9 Options, 12 PS, 4 L1, 5 R1 ; croix, stick gauche.
 fn read_sony() -> u16 {
-    let raws = sony_pads();
     let mut bits = 0;
-    for raw in raws {
-        let (Ok(nb), Ok(ns), Ok(na)) = (raw.ButtonCount(), raw.SwitchCount(), raw.AxisCount()) else { continue };
-        let mut b = vec![false; nb as usize];
-        let mut s = vec![Hat::Center; ns as usize];
-        let mut a = vec![0.5; na as usize];
-        if raw.GetCurrentReading(&mut b, &mut s, &mut a).is_err() {
-            sony_invalidate(&raw);
-            continue;
-        }
+    for s in sony_states() {
         for (i, bit) in [(1, A), (2, B), (9, START), (12, GUIDE), (4, L1), (5, R1)] {
-            if b.get(i) == Some(&true) {
+            if s.buttons[i] {
                 bits |= bit;
             }
         }
-        if let Some(h) = s.first() {
-            bits |= hat(*h);
-        }
-        // Stick gauche : jamais a[0]/a[1] en dur (voir `mouse::split`), une gâchette au repos (0) prise pour
-        // un stick dévié au maximum sinon -> navigation figée dans une direction, insensible au vrai stick.
-        let (st, _) = mouse::split(&a);
-        bits |= stick((st[0] - 0.5) * 2.0, (0.5 - st[1]) * 2.0);
+        bits |= hat_bits(s.hat);
+        bits |= stick((s.sticks[0] - 0.5) * 2.0, (0.5 - s.sticks[1]) * 2.0);
     }
     bits
 }
 
-fn hat(h: Hat) -> u16 {
+/// Croix directionnelle 0..7 (haut, puis sens horaire ; 8 = repos) -> bits haut/bas/gauche/droite,
+/// mêmes valeurs que la croix d'XInput (aussi utilisées pour la manette virtuelle).
+pub(crate) fn hat_bits(h: u8) -> u16 {
     match h {
-        Hat::Up => UP,
-        Hat::UpRight => UP | RIGHT,
-        Hat::Right => RIGHT,
-        Hat::DownRight => DOWN | RIGHT,
-        Hat::Down => DOWN,
-        Hat::DownLeft => DOWN | LEFT,
-        Hat::Left => LEFT,
-        Hat::UpLeft => UP | LEFT,
+        0 => UP,
+        1 => UP | RIGHT,
+        2 => RIGHT,
+        3 => DOWN | RIGHT,
+        4 => DOWN,
+        5 => DOWN | LEFT,
+        6 => LEFT,
+        7 => UP | LEFT,
         _ => 0,
     }
+}
+
+/// États de toutes les manettes Sony : lus directement en HID dès qu'une y est ouverte (fiable quel
+/// que soit le mode de rapport où un jeu a laissé la manette, voir `hidpad`), sinon par
+/// Windows.Gaming.Input.
+pub(crate) fn sony_states() -> Vec<hidpad::SonyState> {
+    let hid = hidpad::states();
+    if !hid.is_empty() {
+        return hid;
+    }
+    sony_pads().iter().filter_map(wgi_state).collect()
+}
+
+/// Lecture Windows.Gaming.Input d'une manette Sony, convertie au format de `hidpad`. Axes classés par
+/// `mouse::split` (leur ordre n'est pas garanti : une gâchette au repos prise pour un stick dévié
+/// figeait sinon la navigation dans une direction).
+pub(crate) fn wgi_state(raw: &RawGameController) -> Option<hidpad::SonyState> {
+    let (nb, ns, na) = (raw.ButtonCount().ok()?, raw.SwitchCount().ok()?, raw.AxisCount().ok()?);
+    let mut b = vec![false; nb as usize];
+    let mut s = vec![Hat::Center; ns as usize];
+    let mut a = vec![0.5; na as usize];
+    if raw.GetCurrentReading(&mut b, &mut s, &mut a).is_err() {
+        sony_invalidate(raw);
+        return None;
+    }
+    let mut buttons = [false; 14];
+    for (i, v) in buttons.iter_mut().enumerate() {
+        *v = b.get(i) == Some(&true);
+    }
+    let hat = match s.first().copied().unwrap_or(Hat::Center) {
+        Hat::Up => 0,
+        Hat::UpRight => 1,
+        Hat::Right => 2,
+        Hat::DownRight => 3,
+        Hat::Down => 4,
+        Hat::DownLeft => 5,
+        Hat::Left => 6,
+        Hat::UpLeft => 7,
+        _ => 8,
+    };
+    let (sticks, triggers) = mouse::split(&a);
+    Some(hidpad::SonyState { buttons, hat, sticks, triggers })
 }
 
 struct XInput {
@@ -267,13 +299,14 @@ struct XInput {
 }
 
 impl XInput {
-    fn read(&mut self) -> u16 {
+    /// `skip` : emplacement à ignorer (copie virtuelle d'une manette Sony).
+    fn read(&mut self, skip: Option<u32>) -> u16 {
         // Interroger un emplacement vide est lent : on ne le refait qu'une fois par seconde.
         self.tick = self.tick.wrapping_add(1);
         let retry = self.tick.is_multiple_of(100);
         let mut bits = 0;
         for i in 0..4 {
-            if !self.connected[i] && !retry {
+            if skip == Some(i as u32) || (!self.connected[i] && !retry) {
                 continue;
             }
             let mut st = XINPUT_STATE::default();
@@ -391,6 +424,11 @@ pub fn resync_pads() {
 /// Ajout/Retrait ou `resync_pads()` le restaurera proprement.
 pub(crate) fn sony_invalidate(raw: &RawGameController) {
     SONY_LIST.lock().unwrap_or_else(|e| e.into_inner()).retain(|c| c != raw);
+}
+
+/// Décodage d'un rapport HID Sony (sonde de diagnostic `examples/hid_probe.rs`).
+pub fn probe_parse(product: u16, report: &[u8]) -> Option<String> {
+    hidpad::parse(product, report).map(|s| format!("{s:?}"))
 }
 
 #[cfg(test)]

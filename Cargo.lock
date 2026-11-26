@@ -2305,6 +2305,7 @@ dependencies = [
 name = "input"
 version = "0.1.0"
 dependencies = [
+ "hidapi",
  "vigem-client",
  "windows",
 ]

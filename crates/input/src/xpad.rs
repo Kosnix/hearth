@@ -5,13 +5,20 @@ use std::thread;
 use std::time::Duration;
 
 use vigem_client::{Client, TargetId, XButtons, XGamepad, Xbox360Wired};
-use windows::Gaming::Input::GameControllerSwitchPosition as Hat;
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 static PRESENT: AtomicBool = AtomicBool::new(false);
+/// Emplacement XInput (0..3) occupé par la manette virtuelle, 255 si aucune : seul celui-là est ignoré
+/// par la navigation (avant, toutes les manettes Xbox l'étaient dès qu'une manette Sony était branchée).
+static SLOT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(255);
+
+pub fn virtual_slot() -> Option<u32> {
+    let s = SLOT.load(Ordering::Relaxed);
+    (s < 4).then_some(s as u32)
+}
 
 /// Une manette Sony est branchée (sa version virtuelle Xbox n'est alors pas relue par Hearth : pas de double lecture).
 pub fn present() -> bool {
@@ -40,6 +47,7 @@ pub fn spawn() {
                     if !plugged {
                         plugged = target.plugin().is_ok() && target.wait_ready().is_ok();
                         last = XGamepad { thumb_lx: 1, ..Default::default() };
+                        SLOT.store(target.get_user_index().ok().filter(|&i| i < 4).map_or(255, |i| i as u8), Ordering::Relaxed);
                     }
                     if plugged && (pad.buttons.raw != last.buttons.raw || pad.left_trigger != last.left_trigger || pad.right_trigger != last.right_trigger
                         || (pad.thumb_lx, pad.thumb_ly, pad.thumb_rx, pad.thumb_ry) != (last.thumb_lx, last.thumb_ly, last.thumb_rx, last.thumb_ry))
@@ -50,6 +58,7 @@ pub fn spawn() {
                         } else {
                             let _ = target.unplug();
                             plugged = false;
+                            SLOT.store(255, Ordering::Relaxed);
                         }
                     }
                     thread::sleep(Duration::from_millis(8));
@@ -62,6 +71,7 @@ pub fn spawn() {
                         if plugged {
                             let _ = target.unplug();
                             plugged = false;
+                            SLOT.store(255, Ordering::Relaxed);
                         }
                     }
                     thread::sleep(Duration::from_millis(50));
@@ -75,39 +85,26 @@ fn axis(v: f64) -> i16 {
     ((v - 0.5) * 2.0 * 32767.0).clamp(-32767.0, 32767.0) as i16
 }
 
-/// État de la première manette Sony : boutons 0 Carré, 1 Croix, 2 Rond, 3 Triangle, 4 L1, 5 R1, 6 L2, 7 R2, 8 Create, 9 Options, 10 L3, 11 R3 ;
-/// axes 0/1 stick gauche, 2/3 stick droit, 4/5 gâchettes (ordre du descripteur HID).
+/// État de la manette Sony transmise aux jeux : boutons 0 Carré, 1 Croix, 2 Rond, 3 Triangle, 4 L1, 5 R1,
+/// 6 L2, 7 R2, 8 Create, 9 Options, 10 L3, 11 R3 (voir `hidpad::SonyState`).
 fn read() -> Option<XGamepad> {
+    // Plusieurs manettes Sony branchées et une principale choisie (Réglages > Manettes, identifiée par
+    // Windows.Gaming.Input) : celle-là. Sinon la première, lue en HID direct si possible.
     let raws = crate::sony_pads();
-    // Plusieurs manettes Sony branchées : celle choisie dans Réglages > Manettes (sinon la première trouvée).
-    let raw = match crate::primary_pad() {
-        Some(id) => raws.iter().find(|r| r.NonRoamableId().ok().is_some_and(|n| n == id)).or(raws.first()).cloned(),
-        None => raws.into_iter().next(),
-    }?;
-    let (nb, ns, na) = (raw.ButtonCount().ok()?, raw.SwitchCount().ok()?, raw.AxisCount().ok()?);
-    let mut b = vec![false; nb as usize];
-    let mut s = vec![Hat::Center; ns as usize];
-    let mut a = vec![0.5; na as usize];
-    raw.GetCurrentReading(&mut b, &mut s, &mut a).map_err(|_| crate::sony_invalidate(&raw)).ok()?;
-    let on = |i: usize| b.get(i) == Some(&true);
+    let primary = crate::primary_pad().filter(|_| raws.len() > 1).and_then(|id| raws.iter().find(|r| r.NonRoamableId().ok().is_some_and(|n| n == id)).cloned());
+    let s = match primary {
+        Some(raw) => crate::wgi_state(&raw)?,
+        None => crate::sony_states().into_iter().next()?,
+    };
+    let on = |i: usize| s.buttons[i];
     let mut raw_bits = 0u16;
     for (i, bit) in [(1, 0x1000), (2, 0x2000), (0, 0x4000), (3, 0x8000), (4, 0x0100), (5, 0x0200), (8, 0x0020), (9, 0x0010), (10, 0x0040), (11, 0x0080)] {
         if on(i) {
             raw_bits |= bit;
         }
     }
-    raw_bits |= match s.first().copied().unwrap_or(Hat::Center) {
-        Hat::Up => 0x1,
-        Hat::UpRight => 0x1 | 0x8,
-        Hat::Right => 0x8,
-        Hat::DownRight => 0x2 | 0x8,
-        Hat::Down => 0x2,
-        Hat::DownLeft => 0x2 | 0x4,
-        Hat::Left => 0x4,
-        Hat::UpLeft => 0x1 | 0x4,
-        _ => 0,
-    };
-    let (st, tr) = crate::mouse::split(&a);
+    raw_bits |= crate::hat_bits(s.hat);
+    let (st, tr) = (s.sticks, s.triggers);
     let (lt, rt) = (if on(6) { 255 } else { (tr[0].clamp(0.0, 1.0) * 255.0) as u8 }, if on(7) { 255 } else { (tr[1].clamp(0.0, 1.0) * 255.0) as u8 });
     Some(XGamepad {
         buttons: XButtons { raw: raw_bits },
