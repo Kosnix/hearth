@@ -1,8 +1,11 @@
 # Génère dist\Hearth-Setup.exe : un seul fichier qui embarque hearth.exe et hearth-shell.exe.
 $ErrorActionPreference = 'Stop'
 Set-Location "$PSScriptRoot\.."
-cargo build --release
-cargo build --release -p hearth-setup
+# Via cmd : sous Windows PowerShell 5.1, la progression que cargo écrit sur stderr déclencherait
+# `Stop` et interromprait le script ; on juge l'échec au code de retour.
+function Invoke-Native([string]$cmd) { cmd /c "$cmd 2>&1" | Out-Host; if ($LASTEXITCODE) { throw "$cmd : code $LASTEXITCODE" } }
+Invoke-Native 'cargo build --release'
+Invoke-Native 'cargo build --release -p hearth-setup'
 New-Item -ItemType Directory -Force dist | Out-Null
 Copy-Item target\release\hearth-setup.exe dist\Hearth-Setup.exe -Force
 # Dossier de diffusion (partage réseau) : chaque nouvelle version y est déposée.
