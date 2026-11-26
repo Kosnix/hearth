@@ -297,19 +297,6 @@ fn stick(x: f64, y: f64) -> u16 {
     bits
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stick_thresholds() {
-        assert_eq!(stick(0.0, 0.0), 0);
-        assert_eq!(stick(0.9, 0.0), RIGHT);
-        assert_eq!(stick(-0.9, 0.9), LEFT | UP);
-        assert_eq!(stick(0.3, -0.3), 0);
-    }
-}
-
 /// Manette Sony choisie comme « principale » (Réglages > Manettes) : celle transmise aux jeux quand
 /// plusieurs sont branchées. `None` : la première trouvée, peu importe laquelle.
 static PRIMARY_PAD: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
@@ -404,4 +391,17 @@ pub fn resync_pads() {
 /// Ajout/Retrait ou `resync_pads()` le restaurera proprement.
 pub(crate) fn sony_invalidate(raw: &RawGameController) {
     SONY_LIST.lock().unwrap_or_else(|e| e.into_inner()).retain(|c| c != raw);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stick_thresholds() {
+        assert_eq!(stick(0.0, 0.0), 0);
+        assert_eq!(stick(0.9, 0.0), RIGHT);
+        assert_eq!(stick(-0.9, 0.9), LEFT | UP);
+        assert_eq!(stick(0.3, -0.3), 0);
+    }
 }

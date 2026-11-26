@@ -122,10 +122,17 @@ impl Store for Steam {
                     continue;
                 }
                 seen.push(id);
-                let cur = it["currency"].as_str().unwrap_or("EUR");
+                let name = it["name"].as_str().unwrap_or("");
                 let fin = it["final_price"].as_i64().unwrap_or(0);
+                // type 1 = « package » (édition groupée) : son id n'est pas un appid, image et lien
+                // seraient faux. Le matériel Valve (Steam Deck, Steam Machine…) est listé comme une appli
+                // de type 0 dans les meilleures ventes : on le reconnaît à son nom et à son prix.
+                if it["type"].as_i64().unwrap_or(0) != 0 || (name.starts_with("Steam ") && fin >= 15_000) {
+                    continue;
+                }
+                let cur = it["currency"].as_str().unwrap_or("EUR");
                 let disc = it["discount_percent"].as_i64().unwrap_or(0);
-                out.push(offer(id, it["name"].as_str().unwrap_or(""), fin, disc, cur));
+                out.push(offer(id, name, fin, disc, cur));
                 if out.len() >= limit {
                     return out;
                 }

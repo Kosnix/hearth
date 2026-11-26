@@ -347,8 +347,10 @@ pub fn minimize(h: HWND) {
     }
 }
 
+type WindowHook = Box<dyn Fn(HWND)>;
+
 thread_local! {
-    static ON_WINDOW: RefCell<Option<Box<dyn Fn(HWND)>>> = RefCell::new(None);
+    static ON_WINDOW: RefCell<Option<WindowHook>> = const { RefCell::new(None) };
 }
 
 /// Appelle `f` pour chaque fenêtre principale d'un autre processus qui apparaît ou passe au premier plan.
@@ -373,16 +375,6 @@ unsafe extern "system" fn on_event(_: HWINEVENTHOOK, _: u32, h: HWND, obj: i32, 
             }
         }
     });
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn quoting() {
-        assert_eq!(super::quote("a.exe"), "a.exe");
-        assert_eq!(super::quote(r"C:\Program Files\x.exe"), r#""C:\Program Files\x.exe""#);
-        assert_eq!(super::quote(""), r#""""#);
-    }
 }
 
 /// Nom de l'exécutable (minuscules) du processus qui possède la fenêtre.
@@ -485,5 +477,15 @@ pub fn nudge(h: HWND) {
         let flags = SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE;
         let _ = SetWindowPos(h, None, m.left, m.top, w, hh - 1, flags);
         let _ = SetWindowPos(h, None, m.left, m.top, w, hh, flags);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn quoting() {
+        assert_eq!(super::quote("a.exe"), "a.exe");
+        assert_eq!(super::quote(r"C:\Program Files\x.exe"), r#""C:\Program Files\x.exe""#);
+        assert_eq!(super::quote(""), r#""""#);
     }
 }

@@ -178,7 +178,7 @@ struct Shell {
     offer_filter: RefCell<Option<String>>,
     /// 0 pertinence (ordre renvoyé par les boutiques), 1 nom A→Z, 2 prix croissant, 3 prix décroissant.
     offer_sort: Cell<i32>,
-    featured: RefCell<Option<(Vec<stores::Offer>, Vec<Option<imgload::Buf>>)>>,
+    featured: RefCell<Option<Featured>>,
     store_status: RefCell<Vec<(String, bool, usize)>>,
     catalog_started: Cell<bool>,
     catalog_gen: Cell<u32>,
@@ -1142,9 +1142,7 @@ impl Shell {
             settings::Kb::Cancel => {
                 let back = if self.kb_profile.replace(false) {
                     11
-                } else if self.kb_search.replace(false) {
-                    0
-                } else if self.kb_lib_search.replace(false) {
+                } else if self.kb_search.replace(false) | self.kb_lib_search.replace(false) {
                     0
                 } else if self.kb_identify.replace(false) {
                     6
@@ -1795,6 +1793,14 @@ fn fetch_all(offers: &[stores::Offer]) -> Vec<Option<PathBuf>> {
     out
 }
 
+/// Catalogue « à la une » gardé en mémoire (rouvrir la Boutique ne refait pas la requête) : visuels
+/// déjà reçus et offres sans aucun visuel, pour ne jamais les réafficher en tuile vide.
+struct Featured {
+    offers: Vec<stores::Offer>,
+    art: Vec<Option<imgload::Buf>>,
+    no_art: std::collections::HashSet<usize>,
+}
+
 impl Shell {
     /// Charge le catalogue unifié (« à la une ») ou les résultats d'une recherche, depuis le début
     /// (filtre remis à « Tous », limite remise à une page).
@@ -1813,8 +1819,10 @@ impl Shell {
         *self.offer_filter.borrow_mut() = None;
         self.offer_sort.set(0);
         if query.is_none() {
-            if let Some((offers, paths)) = self.featured.borrow().as_ref() {
-                self.apply_offers(offers, paths);
+            if let Some(f) = self.featured.borrow().as_ref() {
+                self.apply_offers(&f.offers, &f.art);
+                *self.offers_no_art.borrow_mut() = f.no_art.clone();
+                self.reveal_offers();
                 return;
             }
         }
@@ -1868,7 +1876,7 @@ impl Shell {
                                 // Aucune jaquette nulle part (ni la boutique d'origine, ni SteamGridDB) :
                                 // presque toujours un jeu confidentiel/retiré, pas un vrai titre à montrer.
                                 None => {
-                                    let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.offer_no_art(gen, i)));
+                                    let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.offer_no_art(gen, featured, i)));
                                 }
                             }
                         }
@@ -1884,19 +1892,31 @@ impl Shell {
             self.apply_offers(&offers, &paths);
         }
         if featured {
-            *self.featured.borrow_mut() = Some((offers, paths));
+            *self.featured.borrow_mut() = Some(Featured { offers, art: paths, no_art: Default::default() });
         }
+    }
+
+    /// La carte `i` du lot `gen` est-elle celle affichée en ce moment ? Vrai aussi pour un lot « à la une »
+    /// plus ancien rouvert depuis le cache (même liste, même ordre) : sinon une jaquette arrivée après un
+    /// aller-retour par une recherche serait perdue et l'offre resterait cachée.
+    fn offer_slot_live(&self, gen: u32, featured: bool, i: usize) -> bool {
+        if self.catalog_gen.get() == gen {
+            return true;
+        }
+        if !featured || self.catalog_query.borrow().is_some() {
+            return false;
+        }
+        let title = self.featured.borrow().as_ref().and_then(|f| f.offers.get(i).map(|o| o.title.clone()));
+        title.is_some() && self.offers_full.borrow().get(i).map(|(o, _)| o.title.clone()) == title
     }
 
     fn offer_art(&self, gen: u32, featured: bool, i: usize, p: imgload::Buf) {
         if featured {
-            if let Some((_, paths)) = self.featured.borrow_mut().as_mut() {
-                if let Some(slot) = paths.get_mut(i) {
-                    *slot = Some(p.clone());
-                }
+            if let Some(slot) = self.featured.borrow_mut().as_mut().and_then(|f| f.art.get_mut(i)) {
+                *slot = Some(p.clone());
             }
         }
-        if self.catalog_gen.get() != gen {
+        if !self.offer_slot_live(gen, featured, i) {
             return;
         }
         let img = imgload::image(&p);
@@ -1908,8 +1928,13 @@ impl Shell {
 
     /// Aucune jaquette trouvée nulle part pour cette offre (voir `fetch_catalog`) : on la masque plutôt
     /// que de montrer une tuile vide pour un jeu presque toujours confidentiel/retiré.
-    fn offer_no_art(&self, gen: u32, i: usize) {
-        if self.catalog_gen.get() != gen {
+    fn offer_no_art(&self, gen: u32, featured: bool, i: usize) {
+        if featured {
+            if let Some(f) = self.featured.borrow_mut().as_mut() {
+                f.no_art.insert(i);
+            }
+        }
+        if !self.offer_slot_live(gen, featured, i) {
             return;
         }
         self.offers_no_art.borrow_mut().insert(i);
@@ -1923,8 +1948,15 @@ impl Shell {
         let full = self.offers_full.borrow();
         let filter = self.offer_filter.borrow();
         let no_art = self.offers_no_art.borrow();
-        let keep = |i: usize, d: &stores::Offer| filter.as_deref().is_none_or(|f| d.store == f) && !no_art.contains(&i);
-        let mut kept: Vec<&(stores::Offer, Offer)> = full.iter().enumerate().filter(|(i, (d, _))| keep(*i, d)).map(|(_, p)| p).collect();
+        // Une offre n'apparaît qu'une fois sa jaquette reçue : jamais de tuile vide (initiale seule),
+        // ni pendant le chargement ni pour un jeu sans aucun visuel.
+        let has_art = |u: &Offer| u.art.size().width > 0;
+        let keep = |d: &stores::Offer, u: &Offer| filter.as_deref().is_none_or(|f| d.store == f) && has_art(u);
+        let mut kept: Vec<&(stores::Offer, Offer)> = full.iter().filter(|(d, u)| keep(d, u)).collect();
+        if !full.is_empty() {
+            let pending = full.iter().enumerate().any(|(i, (_, u))| !has_art(u) && !no_art.contains(&i));
+            self.ui.set_offers_state(if !kept.is_empty() { "" } else if pending { "loading" } else { "empty" }.into());
+        }
         match self.offer_sort.get() {
             1 => kept.sort_by_key(|(_, a)| a.title.to_lowercase()),
             2 => kept.sort_by_key(|(d, _)| d.cents.unwrap_or(i64::MAX)),
@@ -2350,7 +2382,8 @@ impl Shell {
     pub fn rebuild(&self) {
         let old_sel = self.ui.get_sel().max(0) as usize;
         // Au-delà du dernier jeu : le raccourci Bibliothèque (tuile de droite), pas un jeu réel.
-        let sel_on_library_shortcut = old_sel >= self.tiles.row_count();
+        // (Liste encore vide = tout premier remplissage au démarrage : sélection sur le premier jeu.)
+        let sel_on_library_shortcut = self.tiles.row_count() > 0 && old_sel >= self.tiles.row_count();
         let cur = self.tiles.row_data(old_sel).map(|t| t.gid);
         let cur_lib = self.library.row_data(self.ui.get_lsel().max(0) as usize).map(|t| t.gid);
         let pt = playtime::load();

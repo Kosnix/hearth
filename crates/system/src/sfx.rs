@@ -91,8 +91,7 @@ fn decode(path: &Path) -> Option<Vec<f32>> {
     let mut dec = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).ok()?;
     let mut raw: Vec<f32> = vec![];
     let mut channels = 2usize;
-    loop {
-        let Ok(pkt) = format.next_packet() else { break };
+    while let Ok(pkt) = format.next_packet() {
         if pkt.track_id() != id {
             continue;
         }

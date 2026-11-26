@@ -567,6 +567,7 @@ export component App inherits Window {
     in-out property <int> osel: 0;
     in-out property <int> brow: 0; // 0 recherche, 1 offres, 2 ajouter une boutique, 3 filtre boutique
     in-out property <int> lbrow: 0; // 0 recherche (Bibliothèque), 1 grille
+    property <bool> lib-back: false; // rangée de recherche de la Bibliothèque : bouton retour sélectionné
     in property <string> lib-query;
     // Menu contextuel (options d'un jeu, ajout).
     in property <string> menu-title;
@@ -817,14 +818,16 @@ export component App inherits Window {
                 else if (a == 0 || a == 5) { top = 0; zone = 1; }
                 else if (a == 2) { sel = max(0, sel - 1); }
                 else if (a == 3) { sel = max(0, min(games.length, sel + 1)); }
-                else if (a == 4 && sel == games.length) { tab = 1; lbrow = 0; }
+                else if (a == 4 && sel == games.length) { tab = 1; lbrow = 0; lib-back = false; }
                 else if (a == 4 && games.length > 0) { launch(games[sel].gid); }
             } else if tab == 1 {
                 // Bibliothèque : simple raccourci, pas un onglet — Retour ou Options y ramène
                 // directement à Jeux (sur le raccourci, pour qu'on retrouve le focus d'où on vient).
-                if (a == 5 || a == 7) { tab = 0; sel = games.length; }
+                if (a == 5 || a == 7 || (a == 4 && lbrow == 0 && lib-back)) { lib-back = false; tab = 0; sel = games.length; }
                 else if (lbrow == 0) {
-                    if (a == 1 && library.length > 0) { lbrow = 1; }
+                    if (a == 1 && library.length > 0) { lib-back = false; lbrow = 1; }
+                    else if (a == 2) { lib-back = true; }
+                    else if (a == 3) { lib-back = false; }
                     else if (a == 4) { lib-search-open(); }
                 } else {
                     if (a == 0) { if (lsel < cols) { lbrow = 0; } else { lsel = lsel - cols; } }
@@ -951,17 +954,69 @@ export component App inherits Window {
         source: games[sel].logo;
         image-fit: contain;
     }
+    // Nom en repli, calé en bas de la zone du logo : il reste collé à la ligne d'infos et au bouton
+    // Jouer au lieu de flotter au milieu d'un grand vide.
     if tab == 0 && sel < games.length && games[sel].logo.width == 0: Text {
         opacity: tab-fade;
         animate opacity { duration: 100ms; easing: ease-out; }
         x: 160px;
-        y: 270px;
-        width: 1000px;
+        y: 170px;
+        width: 1200px;
+        height: 330px;
+        vertical-alignment: bottom;
         text: games[sel].name;
         font-size: 72px;
         font-weight: 800;
         color: Theme.text;
         wrap: word-wrap;
+        overflow: elide;
+    }
+    // Raccourci Bibliothèque sélectionné : même en-tête qu'un jeu (titre, infos, bouton) plutôt qu'un vide.
+    if tab == 0 && sel == games.length: Text {
+        opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
+        x: 160px;
+        y: 170px;
+        width: 1200px;
+        height: 330px;
+        vertical-alignment: bottom;
+        text: @tr("Bibliothèque");
+        font-size: 72px;
+        font-weight: 800;
+        color: Theme.text;
+    }
+    if tab == 0 && sel == games.length: Text {
+        opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
+        x: 160px;
+        y: 518px;
+        width: 1200px;
+        text: library.length == 0 ? @tr("Aucun jeu") : (library.length == 1 ? @tr("1 jeu") : @tr("{} jeux", library.length));
+        font-size: 26px;
+        color: Theme.dim;
+        overflow: elide;
+    }
+    if tab == 0 && sel == games.length: Rectangle {
+        opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
+        x: 160px;
+        y: 580px;
+        width: 290px;
+        height: 82px;
+        border-radius: Theme.r-pill;
+        background: Theme.accent;
+        drop-shadow-offset-y: 8px;
+        drop-shadow-blur: 20px;
+        drop-shadow-color: Theme.accent.transparentize(0.4);
+        Text {
+            text: @tr("Ouvrir");
+            font-size: 34px;
+            font-weight: 800;
+            color: Theme.on-accent;
+        }
+        TouchArea {
+            clicked => { root.zone = 0; root.lbrow = 0; root.lib-back = false; root.tab = 1; }
+        }
     }
     if tab == 0 && sel < games.length && (games[sel].played != "" || games[sel].store != ""): Text {
         opacity: tab-fade;
@@ -1062,55 +1117,64 @@ export component App inherits Window {
             width: d == 0 ? 270px : 240px;
             height: d == 0 ? 426px : 382px;
             animate x, y, width, height, opacity { duration: 190ms; easing: ease-out; }
-            if k >= -1 && k <= 9: GameTile {
-                width: parent.width;
-                height: parent.height;
-                tile: {
-                    gid: -1,
-                    store: "",
-                    played: "",
-                    lastp: "",
-                    name: @tr("Bibliothèque"),
-                    initial: "",
-                    hue: Theme.accent,
-                    cover: @image-url(""),
-                    hero: @image-url(""),
-                    logo: @image-url(""),
-                    running: false,
-                    install: false,
-                    sub: "",
-                    dl-pct: -1,
-                };
-                selected: d == 0 && zone == 0;
-                clicked => {
-                    root.sel = games.length;
-                    root.zone = 0;
-                    root.tab = 1;
-                    root.lbrow = 0;
+            // Tuile dessinée exprès (pas une fausse jaquette) : fond sombre du thème, quelle que soit
+            // la couleur d'accent — avec un accent clair, l'ancien dégradé rendait le texte illisible.
+            if k >= -1 && k <= 9: Rectangle {
+                property <bool> on: d == 0 && zone == 0;
+                border-radius: Theme.r-lg;
+                background: @linear-gradient(160deg, Theme.fill2 0%, Theme.panel 100%);
+                border-width: 2px;
+                border-color: Theme.text.transparentize(0.85);
+                drop-shadow-offset-y: 10px;
+                drop-shadow-blur: 22px;
+                drop-shadow-color: on ? Theme.accent.transparentize(0.45) : #00000070;
+                animate drop-shadow-color { duration: 100ms; }
+                Text {
+                    y: parent.height * 0.30;
+                    width: parent.width;
+                    horizontal-alignment: center;
+                    text: "\u{E8F1}";
+                    font-family: Theme.icons;
+                    font-size: parent.height * 0.22;
+                    color: Theme.text;
                 }
-            }
-            // Icône (au lieu de l'initiale d'une jaquette manquante) : même glyphe que dans le mode bureau.
-            if k >= -1 && k <= 9: Text {
-                x: 0px;
-                y: 0px;
-                width: parent.width;
-                height: parent.height;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                text: "\u{E8F1}";
-                font-family: Theme.icons;
-                font-size: parent.height * 0.28;
-                color: #ffffff50;
+                Text {
+                    y: parent.height * 0.62;
+                    width: parent.width;
+                    horizontal-alignment: center;
+                    text: @tr("Bibliothèque");
+                    font-size: 28px;
+                    font-weight: 700;
+                    color: Theme.text;
+                }
+                Text {
+                    y: parent.height * 0.62 + 40px;
+                    width: parent.width;
+                    horizontal-alignment: center;
+                    text: library.length;
+                    font-size: 22px;
+                    color: Theme.dim;
+                }
+                TouchArea {
+                    clicked => {
+                        root.sel = games.length;
+                        root.zone = 0;
+                        root.lbrow = 0;
+                        root.lib-back = false;
+                        root.tab = 1;
+                    }
+                }
             }
         }
     }
+    // Placé au-dessus du dock (et non dedans) : le raccourci Bibliothèque y reste toujours affiché.
     if tab == 0 && games.length == 0: Text {
         opacity: tab-fade;
         animate opacity { duration: 100ms; easing: ease-out; }
         x: 160px;
-        y: 900px;
+        y: 680px;
         width: 1700px;
-        text: @tr("Aucun jeu installé. Installez-en un depuis « Non installés » ou la Boutique, ou ajoutez-en un avec le bouton +.");
+        text: @tr("Aucun jeu installé. Installez-en un depuis la Bibliothèque ou la Boutique, ou ajoutez-en un avec le bouton +.");
         font-size: 36px;
         color: Theme.dim;
         wrap: word-wrap;
@@ -1123,57 +1187,63 @@ export component App inherits Window {
         background: Theme.band;
     }
     // Bouton retour : la Bibliothèque n'étant plus un onglet du bandeau du haut, on en sort par ce
-    // bouton, par B (Retour) ou par Options, pas en remontant vers la barre d'onglets. Dans la rangée
-    // de la barre du haut (même y que l'horloge et les icônes), décalé pour ne pas la chevaucher.
+    // bouton (sous la barre du haut, à gauche de la recherche ; gauche depuis la recherche pour
+    // l'atteindre à la manette), par B (Retour) ou par Options.
     if tab == 1: Rectangle {
-        opacity: tab-fade;
-        animate opacity { duration: 100ms; easing: ease-out; }
-        x: 260px;
-        y: 46px;
-        width: 72px;
-        height: 72px;
-        border-radius: Theme.r-pill;
-        background: Theme.fill2;
-        Text {
-            text: "←";
-            font-size: 34px;
-            font-weight: 800;
-            color: Theme.text;
-        }
-        TouchArea {
-            clicked => { root.tab = 0; root.sel = root.games.length; root.zone = 0; }
-        }
-    }
-    if tab == 1: Rectangle {
+        property <bool> on: zone == 0 && lbrow == 0 && lib-back;
         opacity: tab-fade;
         animate opacity { duration: 100ms; easing: ease-out; }
         x: 80px;
         y: 170px;
-        width: 1100px;
+        width: 92px;
         height: 92px;
         border-radius: Theme.r-pill;
-        background: zone == 0 && lbrow == 0 ? Theme.accent : Theme.glass;
+        background: on ? Theme.accent : Theme.glass;
         drop-shadow-offset-y: 6px;
         drop-shadow-blur: 16px;
-        drop-shadow-color: zone == 0 && lbrow == 0 ? Theme.accent.transparentize(0.5) : #00000060;
+        drop-shadow-color: on ? Theme.accent.transparentize(0.5) : #00000060;
+        animate background { duration: 100ms; }
+        Text {
+            text: "←";
+            font-size: 40px;
+            font-weight: 800;
+            color: on ? Theme.on-accent : Theme.text;
+        }
+        TouchArea {
+            clicked => { root.lib-back = false; root.tab = 0; root.sel = root.games.length; root.zone = 0; }
+        }
+    }
+    if tab == 1: Rectangle {
+        property <bool> on: zone == 0 && lbrow == 0 && !lib-back;
+        opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
+        x: 196px;
+        y: 170px;
+        width: 984px;
+        height: 92px;
+        border-radius: Theme.r-pill;
+        background: on ? Theme.accent : Theme.glass;
+        drop-shadow-offset-y: 6px;
+        drop-shadow-blur: 16px;
+        drop-shadow-color: on ? Theme.accent.transparentize(0.5) : #00000060;
         animate background { duration: 100ms; }
         Text {
             x: 36px;
             text: "\u{E721}";
             font-family: Theme.icons;
             font-size: 34px;
-            color: zone == 0 && lbrow == 0 ? Theme.on-accent : Theme.text;
+            color: parent.on ? Theme.on-accent : Theme.text;
         }
         Text {
             x: 100px;
             width: parent.width - 130px;
             text: lib-query == "" ? @tr("Rechercher un jeu…") : lib-query;
             font-size: 32px;
-            color: zone == 0 && lbrow == 0 ? Theme.on-accent : (lib-query == "" ? Theme.dim : Theme.text);
+            color: parent.on ? Theme.on-accent : (lib-query == "" ? Theme.dim : Theme.text);
             overflow: elide;
         }
         TouchArea {
-            clicked => { root.lbrow = 0; root.lib-search-open(); }
+            clicked => { root.lbrow = 0; root.lib-back = false; root.lib-search-open(); }
         }
     }
     if tab == 1 && library.length == 0: Text {
@@ -1193,7 +1263,8 @@ export component App inherits Window {
         x: 0px;
         y: 290px;
         width: parent.width;
-        height: 1070px;
+        // S'arrête au-dessus des indications de manette du bas (elles passaient sur les jaquettes).
+        height: parent.height - 290px - 130px;
         clip: true;
         // Le défilement anime un seul conteneur (et non des centaines de tuiles).
         Rectangle {
@@ -1204,8 +1275,10 @@ export component App inherits Window {
             animate y { duration: 100ms; easing: ease-out; }
             for t[i] in library: Rectangle {
                 property <int> trow: floor(i / cols);
-                property <bool> on: zone == 0 && i == lsel;
-                x: 40px + mod(i, cols) * 246px - (on ? 12px : 0px);
+                // Seulement quand la grille a le focus : sinon la recherche (ou le bouton retour) et la
+                // première jaquette paraissaient sélectionnées en même temps.
+                property <bool> on: zone == 0 && lbrow == 1 && i == lsel;
+                x: 80px + mod(i, cols) * 243px - (on ? 12px : 0px);
                 y: 20px + trow * 370px - (on ? 18px : 0px);
                 width: on ? 234px : 210px;
                 height: on ? 351px : 315px;
@@ -1219,10 +1292,11 @@ export component App inherits Window {
                     selected: on;
                     clicked => {
                         root.lsel = i;
+                        root.lbrow = 1;
                         root.zone = 0;
                         root.launch(t.gid);
                     }
-                    options => { root.lsel = i; root.game-menu(t.gid); }
+                    options => { root.lsel = i; root.lbrow = 1; root.game-menu(t.gid); }
                 }
             }
         }
@@ -1338,7 +1412,7 @@ export component App inherits Window {
         x: 0px;
         y: 412px;
         width: parent.width;
-        height: 938px;
+        height: parent.height - 412px - 116px;
         clip: true;
         Rectangle {
             x: 0px;
@@ -1349,7 +1423,7 @@ export component App inherits Window {
             for o[i] in offers: Rectangle {
                 property <int> trow: floor(i / cols);
                 property <bool> on: brow == 1 && zone == 0 && i == osel;
-                x: 40px + mod(i, cols) * 246px;
+                x: 80px + mod(i, cols) * 243px;
                 y: 20px + trow * 450px;
                 width: 210px;
                 height: 430px;
@@ -1424,7 +1498,7 @@ export component App inherits Window {
                 property <int> i: offers.length;
                 property <int> trow: floor(i / cols);
                 property <bool> on: brow == 1 && zone == 0 && osel == i;
-                x: 40px + mod(i, cols) * 246px;
+                x: 80px + mod(i, cols) * 243px;
                 y: 20px + trow * 450px;
                 width: 210px;
                 height: 430px;
@@ -1564,8 +1638,6 @@ export component App inherits Window {
             height: 66px;
             border-radius: Theme.r-pill;
             background: tab == tv ? Theme.accent : (zone == 1 && top == i ? Theme.fill : transparent);
-            border-width: zone == 1 && top == i ? 3px : 0px;
-            border-color: Theme.text;
             drop-shadow-offset-y: tab == tv ? 4px : 0px;
             drop-shadow-blur: tab == tv ? 12px : 0px;
             drop-shadow-color: Theme.accent.transparentize(0.5);
@@ -1576,6 +1648,17 @@ export component App inherits Window {
                 font-size: 36px;
                 font-weight: 700;
                 color: tab == tv ? Theme.on-accent : Theme.text;
+            }
+            // Focus manette : anneau autour de la pastille. Une bordure intérieure était invisible sur
+            // l'onglet actif (pastille de la couleur d'accent, souvent claire, comme la bordure).
+            if zone == 1 && top == i: Rectangle {
+                x: -7px;
+                y: -7px;
+                width: parent.width + 14px;
+                height: parent.height + 14px;
+                border-radius: Theme.r-pill;
+                border-width: 3px;
+                border-color: Theme.text;
             }
             TouchArea {
                 clicked => { root.tab = tv; root.top = i; root.zone = 0; }
@@ -1619,14 +1702,14 @@ export component App inherits Window {
         }
     }
 
-    // --- Pictogrammes de la manette ---
+    // --- Pictogrammes de la manette : même place et même ordre que dans tous les panneaux ---
     HorizontalLayout {
-        x: 40px;
-        y: parent.height - 76px;
-        spacing: 56px;
+        x: 80px;
+        y: parent.height - 100px;
+        spacing: 48px;
         Hint { btn: 0; label: @tr("Valider"); }
-        Hint { btn: 3; label: @tr("Options"); }
         Hint { btn: 1; label: @tr("Retour"); }
+        Hint { btn: 3; label: @tr("Options"); }
         Hint { btn: 2; label: @tr("Menu"); }
     }
 
@@ -2241,15 +2324,15 @@ export component App inherits Window {
             x: 80px;
             y: 250px;
             width: 440px;
-            height: cats.length * 76px + 16px;
+            height: cats.length * 70px + 16px;
             border-radius: Theme.r-lg;
             background: Theme.card;
         }
         for c[i] in cats: Rectangle {
             x: 88px;
-            y: 258px + i * 76px;
+            y: 258px + i * 70px;
             width: 424px;
-            height: 68px;
+            height: 62px;
             border-radius: Theme.r-md;
             background: i != cat ? transparent : sfocus == 0 ? Theme.accent : Theme.fill;
             animate background { duration: 100ms; }
@@ -2277,16 +2360,17 @@ export component App inherits Window {
         }
         // Panneau de détail (façon iOS Réglages) : carte élevée, lignes séparées par un filet fin.
         Rectangle {
+            // Aligné sur le haut du panneau des catégories (était décalé de 50 px plus bas).
             x: 580px;
-            y: 300px;
+            y: 250px;
             width: parent.width - 580px - 80px;
-            height: min(rows.length, 8) * 104px + 24px;
+            height: min(rows.length, 9) * 104px + 24px;
             clip: true;
             border-radius: Theme.r-lg;
             background: Theme.card;
             for r[i] in rows: Rectangle {
                 x: 12px;
-                y: 12px + (i - max(0, srow - 7)) * 104px;
+                y: 12px + (i - max(0, srow - 8)) * 104px;
                 width: parent.width - 24px;
                 height: 96px;
                 border-radius: Theme.r-md;
@@ -2323,7 +2407,7 @@ export component App inherits Window {
         }
         Text {
             x: 580px;
-            y: 300px + min(rows.length, 8) * 104px + 56px;
+            y: 250px + min(rows.length, 9) * 104px + 56px;
             text: shint;
             font-size: 24px;
             color: Theme.text;
