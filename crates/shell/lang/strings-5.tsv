@@ -68,3 +68,16 @@ Aucun jeu installé. Installez-en un depuis la Bibliothèque ou la Boutique, ou 
 Filtres|Filters|筛选|फ़िल्टर|Filtros|عوامل التصفية|ফিল্টার|Filtros|Фильтры|فلٹرز
 Effacer la recherche|Clear search|清除搜索|खोज साफ़ करें|Borrar la búsqueda|مسح البحث|অনুসন্ধান মুছুন|Limpar a pesquisa|Очистить поиск|تلاش صاف کریں
 Cachés|Hidden|已隐藏|छिपे हुए|Ocultos|المخفية|লুকানো|Ocultos|Скрытые|چھپے ہوئے
+Nouveau|New|新|नया|Nuevo|جديد|নতুন|Novo|Новое|نیا
+Caché|Hidden|已隐藏|छिपा हुआ|Oculto|مخفي|লুকানো|Oculto|Скрыта|چھپا ہوا
+Aucun jeu caché.|No hidden games.|没有隐藏的游戏。|कोई छिपा हुआ गेम नहीं।|No hay juegos ocultos.|لا توجد ألعاب مخفية.|কোনো লুকানো গেম নেই।|Nenhum jogo oculto.|Нет скрытых игр.|کوئی چھپا ہوا گیم نہیں۔
+Muet|Muted|静音|म्यूट|Silencio|كتم الصوت|নিঃশব্দ|Mudo|Без звука|خاموش
+Hors ligne|Offline|离线|ऑफ़लाइन|Sin conexión|غير متصل|অফলাইন|Offline|Не в сети|آف لائن
+Saisir|Type|输入|लिखें|Escribir|كتابة|লিখুন|Digitar|Ввод|لکھیں
+Connexion perdue|Connection lost|连接已断开|कनेक्शन टूट गया|Conexión perdida|انقطع الاتصال|সংযোগ বিচ্ছিন্ন|Conexão perdida|Соединение потеряно|کنکشن ختم ہو گیا
+Connexion rétablie|Connection restored|连接已恢复|कनेक्शन बहाल|Conexión restablecida|تمت استعادة الاتصال|সংযোগ পুনরুদ্ধার হয়েছে|Conexão restabelecida|Соединение восстановлено|کنکشن بحال ہو گیا
+Manette|Controller|手柄|कंट्रोलर|Mando|يد التحكم|কন্ট্রোলার|Controle|Геймпад|کنٹرولر
+Batterie faible|Low battery|电量低|बैटरी कम|Batería baja|البطارية منخفضة|ব্যাটারি কম|Bateria fraca|Низкий заряд|بیٹری کم
+à l'instant|just now|刚刚|अभी|ahora mismo|الآن|এইমাত্র|agora|только что|ابھی
+il y a {n} min|{n} min ago|{n} 分钟前|{n} मिनट पहले|hace {n} min|منذ {n} د|{n} মিনিট আগে|há {n} min|{n} мин назад|{n} منٹ پہلے
+il y a {n} h|{n} h ago|{n} 小时前|{n} घंटे पहले|hace {n} h|منذ {n} س|{n} ঘণ্টা আগে|há {n} h|{n} ч назад|{n} گھنٹے پہلے

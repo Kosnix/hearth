@@ -80,6 +80,14 @@ const MAP: [(u16, Nav); 13] = [
     (Y, Nav::Alt),
 ];
 
+/// L'événement en cours de traitement vient d'une direction maintenue (répétition), pas d'une pression :
+/// lu par le rappel de `spawn`, sur le fil de la manette, au moment de l'appel.
+static REPEATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn repeating() -> bool {
+    REPEATING.load(Ordering::Relaxed)
+}
+
 static FAST_REPEAT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 /// Accélération de la répétition après 1,2 s de maintien (longues listes). À couper là où chaque pas
@@ -117,6 +125,7 @@ pub fn spawn(on_nav: impl Fn(Nav) + Send + Sync + 'static) {
         let mut prev = 0u16;
         let mut next_repeat = Instant::now();
         let mut hold_start = Instant::now();
+        let mut next_vol = Instant::now();
         loop {
             while let Some(nav) = poll_hotkey() {
                 on_nav(nav);
@@ -151,14 +160,25 @@ pub fn spawn(on_nav: impl Fn(Nav) + Send + Sync + 'static) {
                 next_repeat = now + REPEAT_DELAY;
                 hold_start = now;
             } else if cur & DIRS != 0 && now >= next_repeat && !stuck {
+                REPEATING.store(true, Ordering::Relaxed);
                 for (bit, nav) in &MAP[..4] {
                     if cur & bit != 0 {
                         on_nav(*nav);
                     }
                 }
+                REPEATING.store(false, Ordering::Relaxed);
                 // Maintenu : la répétition accélère après 1,2 s (défilement rapide des longues listes).
                 let fast = FAST_REPEAT.load(Ordering::Relaxed) && now.duration_since(hold_start) > Duration::from_millis(1200);
                 next_repeat = now + if fast { REPEAT_FAST } else { REPEAT_RATE };
+            }
+            // L2/R2 maintenus : le volume continue de varier (un pas toutes les 150 ms).
+            if pressed & (L2 | R2) != 0 {
+                next_vol = now + Duration::from_millis(350);
+            } else if cur & (L2 | R2) != 0 && now >= next_vol {
+                REPEATING.store(true, Ordering::Relaxed);
+                on_nav(if cur & R2 != 0 { Nav::VolUp } else { Nav::VolDown });
+                REPEATING.store(false, Ordering::Relaxed);
+                next_vol = now + Duration::from_millis(150);
             }
             prev = cur;
             thread::sleep(POLL);

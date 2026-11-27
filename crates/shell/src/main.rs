@@ -93,6 +93,10 @@ struct Shell {
     pad: PadOverlay,
     pad_acc: Cell<bool>,
     status_n: Cell<u32>,
+    /// Dernier état réseau relevé (i32::MIN : aucun encore) et alerte batterie déjà donnée (`status_alerts`).
+    last_net: Cell<i32>,
+    pad_low_warned: Cell<bool>,
+    net_pending: Cell<bool>,
     desktop: RefCell<Option<DesktopWindow>>,
     desk_games: Rc<VecModel<DeskGame>>,
     desk_rows: Rc<VecModel<SettingRow>>,
@@ -297,6 +301,9 @@ fn main() -> Result<(), slint::PlatformError> {
         pad,
         pad_acc: Cell::new(false),
         status_n: Cell::new(0),
+        last_net: Cell::new(i32::MIN),
+        pad_low_warned: Cell::new(false),
+        net_pending: Cell::new(false),
         desktop: RefCell::new(None),
         desk_games: Rc::new(VecModel::default()),
         desk_rows: Rc::new(VecModel::default()),
@@ -534,6 +541,10 @@ fn main() -> Result<(), slint::PlatformError> {
     shell.ui.on_lib_filters(move || s.open_lib_filters());
     shell.ui.set_lib_filter_label(tr("Filtres").into());
     let s = shell.clone();
+    shell.ui.on_store_search_clear(move || s.store_search_clear());
+    let s = shell.clone();
+    shell.ui.on_offer_step(move |d| s.offer_step(d));
+    let s = shell.clone();
     shell.ui.on_show_offer(move |i| s.show_offer(i as usize));
     let s = shell.clone();
     shell.guide.on_action(move |item, delta| s.guide_action(item, delta));
@@ -661,10 +672,16 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     if !desktop_only {
     input::spawn(|nav| {
+        // Lu ici, sur le fil de la manette, au moment de l'événement (plus tard il aurait changé).
+        let repeat = input::repeating();
         let _ = slint::invoke_from_event_loop(move || {
             SHELL.with(|s| {
                 if let Some(s) = s.borrow().as_ref() {
+                    s.ui.set_repeating(repeat);
+                    s.guide.set_repeating(repeat);
                     s.on_nav(nav);
+                    s.ui.set_repeating(false);
+                    s.guide.set_repeating(false);
                 }
             });
         });
@@ -1258,6 +1275,11 @@ impl Shell {
                     *self.lib_query.borrow_mut() = text.trim().to_string();
                     self.ui.set_lib_query(text.into());
                     self.rebuild();
+                    // Recherche validée : le focus passe directement sur le premier résultat.
+                    if self.library.row_count() > 0 {
+                        self.ui.set_lsel(0);
+                        self.ui.set_lbrow(1);
+                    }
                 } else {
                     self.ui.set_zone(self.home_zone());
                     self.connect(ssid, Some(text));
@@ -1317,13 +1339,47 @@ impl Shell {
                 ui.set_st_vol(vol);
                 ui.set_st_pad(pad);
                 ui.set_st_pad_charging(charging);
+                with_shell(|s| s.status_alerts(net, pad, charging));
             });
         });
     }
 
+    /// Notifications d'état : connexion perdue / rétablie, batterie de la manette faible (une fois par
+    /// décharge, réarmée en charge ou au-dessus de 25 %). Rien au premier relevé (état de départ).
+    fn status_alerts(&self, net: i32, pad: i32, charging: bool) {
+        // Réseau : le changement doit tenir sur deux relevés de suite (10 s) avant d'être signalé — une
+        // lecture ratée isolée de l'état de connexion ne doit pas produire « perdue » puis « rétablie ».
+        let off = (net < 0) as i32;
+        let confirmed = self.last_net.get();
+        if confirmed == i32::MIN {
+            self.last_net.set(off);
+        } else if off == confirmed {
+            self.net_pending.set(false);
+        } else if !self.net_pending.replace(true) {
+            // Premier relevé différent : on attend le suivant.
+        } else {
+            self.net_pending.set(false);
+            self.last_net.set(off);
+            if net < 0 {
+                self.push_notif(&tr("Réseau"), &tr("Connexion perdue"));
+            } else {
+                self.push_notif(&tr("Réseau"), &tr("Connexion rétablie"));
+            }
+        }
+        let low = (0..=15).contains(&pad) && !charging;
+        if low && !self.pad_low_warned.get() {
+            self.pad_low_warned.set(true);
+            self.push_notif(&tr("Manette"), &format!("{} ({pad} %)", tr("Batterie faible")));
+        } else if charging || pad > 25 {
+            self.pad_low_warned.set(false);
+        }
+    }
+
     fn set_clock(&self) {
         let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
-        self.ui.set_clock(format!("{:02}:{:02}", t.wHour, t.wMinute).into());
+        let c: slint::SharedString = format!("{:02}:{:02}", t.wHour, t.wMinute).into();
+        self.ui.set_clock(c.clone());
+        self.guide.set_clock(c);
     }
 
     /// Oublie un appareil Bluetooth (après confirmation, voir `Act::ConfirmBtUnpair`).
@@ -1403,6 +1459,7 @@ impl Shell {
         self.guide.set_session(started.map(|t| session_label(t.elapsed().as_secs())).unwrap_or_default().into());
         self.guide.set_art(self.tile_for(tile).map(|t| t.cover).unwrap_or_default());
         self.guide.set_closing(closing);
+        self.guide.set_pad(self.ui.get_st_pad());
         self.guide.set_sel(0);
         self.guide.set_volume(system::audio::volume().map_or(-1, |v| v as i32));
         if let Some(h) = wm::find_window(GUIDE_TITLE) {
@@ -1514,6 +1571,9 @@ impl Shell {
             self.refresh_status();
         }
         self.set_clock();
+        if self.ui.get_zone() == 8 {
+            self.notif_times();
+        }
         self.maybe_prompt_update();
         self.maybe_prompt_hearth_update();
         // Musique d'ambiance : seulement quand la console est devant (pas pendant un jeu).
@@ -1629,8 +1689,8 @@ impl Shell {
 
     /// `pinned` : ne se supprime pas (seule ou via « tout effacer ») — voir `notif_action`.
     pub(crate) fn push_notif_ex(&self, title: &str, text: &str, pinned: bool) {
-        let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
-        self.notifs.insert(0, Notif { title: title.into(), text: text.into(), time: format!("{:02}:{:02}", t.wHour, t.wMinute).into(), unread: true, pinned });
+        let stamp = unix_now() as i32;
+        self.notifs.insert(0, Notif { title: title.into(), text: text.into(), time: notif_age(0).into(), unread: true, pinned, stamp });
         if self.notifs.row_count() > 30 {
             self.notifs.remove(30);
         }
@@ -1666,7 +1726,23 @@ impl Shell {
         self.ui.set_unread(self.notifs.iter().filter(|n| n.unread).count() as i32);
     }
 
+    /// Heures relatives des notifications (« il y a 5 min »), recalculées à l'ouverture du centre et
+    /// chaque seconde tant qu'il reste ouvert.
+    fn notif_times(&self) {
+        let now = unix_now();
+        for i in 0..self.notifs.row_count() {
+            if let Some(mut n) = self.notifs.row_data(i) {
+                let age = notif_age(now.saturating_sub(n.stamp as u64));
+                if n.time.as_str() != age {
+                    n.time = age.into();
+                    self.notifs.set_row_data(i, n);
+                }
+            }
+        }
+    }
+
     fn notifs_opened(&self) {
+        self.notif_times();
         for i in 0..self.notifs.row_count() {
             if let Some(mut n) = self.notifs.row_data(i) {
                 n.unread = false;
@@ -2059,7 +2135,20 @@ impl Shell {
     /// Bouton « Filtres » de la Bibliothèque : tous les jeux, seulement ceux à installer, ou les cachés.
     fn open_lib_filters(&self) {
         let cur = self.lib_filter.get();
-        let mut v: Vec<(String, menus::Act)> = LIB_FILTERS.iter().enumerate().map(|(i, l)| (if cur == i as u8 { format!("✓ {}", tr(l)) } else { tr(l) }, menus::Act::LibFilter(i as u8))).collect();
+        // Nombre de jeux par filtre (mêmes critères que `rebuild`, recherche non comprise).
+        let n = {
+            let games = self.games.borrow();
+            let lib: Vec<&Game> = games.iter().filter(|g| (g.install || g.hidden) && self.dl_pct_of(g) < 0).collect();
+            [lib.len(), lib.iter().filter(|g| g.install).count(), lib.iter().filter(|g| g.hidden).count()]
+        };
+        let mut v: Vec<(String, menus::Act)> = LIB_FILTERS
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                let label = format!("{} ({})", tr(l), n[i]);
+                (if cur == i as u8 { format!("✓ {label}") } else { label }, menus::Act::LibFilter(i as u8))
+            })
+            .collect();
         v.push((tr("Fermer"), menus::Act::Cancel));
         self.menu_show(tr("Filtres"), v);
     }
@@ -2068,6 +2157,7 @@ impl Shell {
         self.lib_filter.set(f);
         let label = if f == 0 { tr("Filtres") } else { tr(LIB_FILTERS[f as usize]) };
         self.ui.set_lib_filter_label(label.into());
+        self.ui.set_lib_filter(f as i32);
         self.ui.set_lsel(0);
         self.rebuild();
         self.open_lib_filters();
@@ -2082,6 +2172,23 @@ impl Shell {
         self.ui.set_lib_query("".into());
         self.ui.set_lsel(0);
         self.rebuild();
+    }
+
+    /// Triangle / Y dans la Boutique : efface la recherche et revient à la sélection « À la une ».
+    fn store_search_clear(&self) {
+        self.ui.set_search_query("".into());
+        self.ui.set_osel(0);
+        self.load_catalog(None);
+    }
+
+    /// L1/R1 dans la fiche d'un jeu de la boutique : offre voisine dans la grille.
+    fn offer_step(&self, d: i32) {
+        let i = self.ui.get_osel() + d;
+        if i < 0 || i as usize >= self.offer_data.borrow().len() {
+            return;
+        }
+        self.ui.set_osel(i);
+        self.show_offer(i as usize);
     }
 
     fn set_offer_store_filter(&self, f: Option<String>) {
@@ -2532,6 +2639,7 @@ impl Shell {
             logo,
             running,
             install: g.install,
+            hidden: g.hidden,
             sub: if g.install { "".into() } else { playtime::label_in(pt, &playtime_key(g)).into() },
             store: if g.store.is_empty() { tr("Local") } else { g.store.clone() }.into(),
             played: playtime::played_in(pt, &playtime_key(g)).into(),
@@ -2577,6 +2685,7 @@ impl Shell {
         let all_tab = false;
         let query = self.lib_query.borrow().to_lowercase();
         let (mut a, mut b): (Vec<(u64, Tile)>, Vec<Tile>) = (vec![], vec![]);
+        let mut lib_total = 0;
         for (i, g) in self.games.borrow().iter().enumerate() {
             let t = self.make_tile(i, g, running.contains(&i), &pt);
             let downloading = t.dl_pct >= 0;
@@ -2589,6 +2698,9 @@ impl Shell {
                 2 => g.hidden,
                 _ => true,
             };
+            if (g.install || g.hidden) && !downloading {
+                lib_total += 1;
+            }
             if (g.install || g.hidden || all_tab) && filter_ok && !downloading && (query.is_empty() || t.name.to_lowercase().contains(&query)) {
                 b.push(t.clone());
             }
@@ -2608,6 +2720,7 @@ impl Shell {
         let lsel = cur_lib.and_then(|g| b.iter().position(|t| t.gid == g)).unwrap_or((self.ui.get_lsel().max(0) as usize).min(b.len().saturating_sub(1)));
         self.tiles.set_vec(a);
         self.library.set_vec(b);
+        self.ui.set_lib_total(lib_total);
         self.desktop_refresh_games();
         self.lib_last.set((-1, 0));
         self.ui.set_sel(sel as i32);
@@ -2945,5 +3058,19 @@ fn timed_ms(what: &str, ms: f64) {
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(games_file().with_file_name("perf.log")) {
             let _ = writeln!(f, "{what} {ms:.0} ms");
         }
+    }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// Âge d'une notification : « à l'instant », « il y a 5 min », « il y a 2 h », « il y a 3 j ».
+fn notif_age(secs: u64) -> String {
+    match secs {
+        s if s < 60 => tr("à l'instant"),
+        s if s < 3600 => tr("il y a {n} min").replace("{n}", &(s / 60).to_string()),
+        s if s < 86_400 => tr("il y a {n} h").replace("{n}", &(s / 3600).to_string()),
+        s => tr("il y a {n} j").replace("{n}", &(s / 86_400).to_string()),
     }
 }

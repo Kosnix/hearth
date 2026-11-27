@@ -16,6 +16,7 @@ export struct Tile {
     logo: image,
     running: bool,
     install: bool,
+    hidden: bool,
     sub: string,
     /// En téléchargement (SteamCMD) : 0..100, -1 sinon. Montré dans Jeux (pas Bibliothèque) avec un
     /// anneau de progression façon iOS, le temps du téléchargement.
@@ -54,6 +55,8 @@ export struct Notif {
     text: string,
     time: string,
     unread: bool,
+    /// Heure d'arrivée (secondes Unix), pour l'heure relative (« il y a 5 min ») recalculée côté Rust.
+    stamp: int,
     /// Ne se supprime pas (seule ou avec « tout effacer ») : son geste de suppression installe la
     /// mise à jour à la place, tant qu'elle n'est pas faite.
     pinned: bool,
@@ -137,7 +140,7 @@ component PadGlyph inherits Rectangle {
     // vrai clavier, rectangle arrondi + nom de la touche) plutôt qu'un rond de manette qui ne
     // ressemblerait à rien de ce qu'il y a sur le clavier.
     property <bool> kb: Pad.kind == 2;
-    property <string> kb-label: btn == 0 ? "Entrée" : btn == 1 ? "Échap" : btn == 2 ? "Origine" : btn == 3 ? "Menu" : "";
+    property <string> kb-label: btn == 0 ? "Entrée" : btn == 1 ? "Échap" : btn == 2 ? "Origine" : btn == 3 ? "Menu" : btn == 4 ? "Suppr" : "";
     width: kb ? max(48px, kblbl.preferred-width + 24px) : 48px;
     height: 48px;
     // Cercle fin blanc (manette) ou capsule de touche (clavier), symbole/texte à l'intérieur.
@@ -190,7 +193,7 @@ component PadGlyph inherits Rectangle {
         font-size: 22px;
         color: #ffffffd0;
     }
-    if btn == 4 && ps: Path {
+    if btn == 4 && ps && !kb: Path {
         width: 48px;
         height: 48px;
         viewbox-width: 48;
@@ -200,7 +203,7 @@ component PadGlyph inherits Rectangle {
         stroke-width: 3px;
         stroke-line-join: round;
     }
-    if btn == 4 && !ps: Text {
+    if btn == 4 && !ps && !kb: Text {
         text: "Y";
         font-size: 24px;
         font-weight: 600;
@@ -385,6 +388,36 @@ component GameTile inherits Rectangle {
             font-size: 16px;
             font-weight: 700;
             color: #ffffff;
+        }
+    }
+    // Jeu installé jamais lancé : étiquette « Nouveau » (dock de l'accueil).
+    if !compact && !tile.install && !tile.running && tile.dl-pct < 0 && tile.lastp == "—": Rectangle {
+        x: 12px;
+        y: 12px;
+        width: newl.preferred-width + 22px;
+        height: 32px;
+        border-radius: 16px;
+        background: Theme.accent;
+        newl := Text {
+            text: @tr("Nouveau");
+            font-size: 17px;
+            font-weight: 800;
+            color: Theme.on-accent;
+        }
+    }
+    // Jeu caché (Bibliothèque, filtres « Tous » ou « Cachés ») : il n'apparaît plus dans Jeux.
+    if compact && tile.hidden: Rectangle {
+        x: 10px;
+        y: parent.height - 38px;
+        width: hidl.preferred-width + 20px;
+        height: 28px;
+        border-radius: Theme.r-md;
+        background: #000000b8;
+        hidl := Text {
+            text: @tr("Caché");
+            font-size: 16px;
+            font-weight: 700;
+            color: #ffffffc0;
         }
     }
     // Jeu lancé : étiquette « Reprendre » en bas de la jaquette (A la ramène au premier plan).
@@ -589,8 +622,14 @@ export component App inherits Window {
     // Rangée du haut de la Bibliothèque : 0 bouton retour, 1 recherche, 2 filtres.
     in-out property <int> lib-col: 1;
     in property <string> lib-filter-label;
+    in property <int> lib-filter: 0; // 0 tous, 1 à installer, 2 cachés
+    in property <int> lib-total: 0; // jeux de la Bibliothèque, sans filtre ni recherche
     callback lib-search-clear();
     callback lib-filters();
+    callback store-search-clear();
+    callback offer-step(int); // fiche d'un jeu de la boutique : offre précédente (-1) / suivante (+1)
+    // Direction répétée (bouton maintenu) : les listes ne bouclent alors pas d'un bout à l'autre.
+    in property <bool> repeating: false;
     // Lancement depuis le dock : la jaquette grandit jusqu'au plein écran (0 = à sa place, 1 = plein écran),
     // puis se rétracte au retour. Avancée image par image côté Rust (`Shell::zoom_to`) : un `animate`
     // sur une affectation faite depuis Rust n'était pas joué (saut direct à la valeur finale).
@@ -733,11 +772,31 @@ export component App inherits Window {
     forward-focus: keys;
 
     // a : 0 haut, 1 bas, 2 gauche, 3 droite, 4 valider, 5 retour, 6 guide, 7 menu, 10 L1/LB, 11 R1/RB (cf. input::Nav)
+    // Pas dans une liste de n éléments : boucle d'un bout à l'autre sur une pression, s'arrête au bout
+    // quand le bouton est maintenu (sinon on dépasse la fin sans s'en rendre compte).
+    pure function step(cur: int, n: int, d: int) -> int {
+        if (n <= 0) { return 0; }
+        if (repeating) { return max(0, min(n - 1, cur + d)); }
+        return mod(cur + d + n, n);
+    }
+
     public function nav(a: int) {
         if (zone == 13) {
             oobe-key(a);
         } else if (a == 6) {
             zone = 0;
+        } else if ((a == 10 || a == 11) && zone == 0 && tab == 1 && library.length > 0) {
+            // Bibliothèque : L1/R1 font défiler la grille par pages de 3 rangées.
+            lbrow = 1;
+            lsel = max(0, min(library.length - 1, lsel + (a == 11 ? 3 : -3) * cols));
+        } else if ((a == 10 || a == 11) && zone == 3) {
+            // Réglages : catégorie précédente / suivante, d'où que l'on soit.
+            cat = max(0, min(cats.length - 1, cat + (a == 11 ? 1 : -1)));
+            srow = 0;
+            sfocus = 0;
+            open-cat(cat);
+        } else if ((a == 10 || a == 11) && zone == 7) {
+            offer-step(a == 11 ? 1 : -1);
         } else if ((a == 10 || a == 11) && (zone == 0 || zone == 1)) {
             // Changement rapide d'onglet (Jeux/Boutique) sans passer par la barre du haut : la
             // Bibliothèque n'en fait plus partie (raccourci dans le bandeau de jaquettes de Jeux).
@@ -761,8 +820,8 @@ export component App inherits Window {
             else if (a == 7) { profile-menu(pfsel); }
             else if (a == 5) { zone = 1; }
         } else if (zone == 10) {
-            if (a == 0) { dlbtn = false; dlsel = max(0, dlsel - 1); }
-            else if (a == 1) { dlbtn = false; dlsel = max(0, min(dl-rows.length - 1, dlsel + 1)); }
+            if (a == 0) { dlbtn = false; dlsel = step(dlsel, dl-rows.length, -1); }
+            else if (a == 1) { dlbtn = false; dlsel = step(dlsel, dl-rows.length, 1); }
             else if (a == 3) { if (dl-rows.length > 0 && dl-rows[dlsel].cancel) { dlbtn = true; } }
             else if (a == 2) { dlbtn = false; }
             else if (a == 7) { if (dl-rows.length > 0 && dl-rows[dlsel].cancel) { dl-cancel(dlsel); } }
@@ -772,13 +831,13 @@ export component App inherits Window {
             }
             else if (a == 5) { if (dlbtn) { dlbtn = false; } else { zone = 1; } }
         } else if (zone == 9) {
-            if (a == 0) { msel = max(0, msel - 1); }
-            else if (a == 1) { msel = max(0, min(menu-items.length - 1, msel + 1)); }
+            if (a == 0) { msel = step(msel, menu-items.length, -1); }
+            else if (a == 1) { msel = step(msel, menu-items.length, 1); }
             else if (a == 4) { menu-pick(msel); }
-            else if (a == 5) { zone = menu-return; }
+            else if (a == 5 || a == 7) { zone = menu-return; }
         } else if (zone == 14) {
-            if (a == 2) { viewsel = max(0, viewsel - 1); }
-            else if (a == 3) { viewsel = min(view-count - 1, viewsel + 1); }
+            if (a == 2) { viewsel = step(viewsel, view-count, -1); }
+            else if (a == 3 || a == 4) { viewsel = step(viewsel, view-count, 1); }
             else if (a == 5) { zone = 7; }
         } else if (zone == 7) {
             if (a == 0) { dsel = max(0, dsel - 1); }
@@ -787,13 +846,13 @@ export component App inherits Window {
             else if (a == 5) { zone = 0; }
             else if (a == 7) { viewsel = 0; zone = 14; }
         } else if (zone == 6) {
-            if (a == 0) { psel = max(0, psel - 1); }
-            else if (a == 1) { psel = max(0, min(pick-items.length - 1, psel + 1)); }
+            if (a == 0) { psel = step(psel, pick-items.length, -1); }
+            else if (a == 1) { psel = step(psel, pick-items.length, 1); }
             else if (a == 4) { pick(psel); }
             else if (a == 5) { pick-back(); }
         } else if (zone == 8) {
-            if (a == 0) { nsel = max(0, nsel - 1); }
-            else if (a == 1) { nsel = max(0, min(notifs.length - 1, nsel + 1)); }
+            if (a == 0) { nsel = step(nsel, notifs.length, -1); }
+            else if (a == 1) { nsel = step(nsel, notifs.length, 1); }
             // Une notification épinglée n'est pas supprimée par l'action (elle installe la mise à jour) :
             // la sélection ne doit alors pas être décalée comme si un élément avait disparu.
             else if (a == 4 && notifs.length > 0 && notifs[nsel].pinned) { notif-action(nsel); }
@@ -804,12 +863,15 @@ export component App inherits Window {
             if (a == 5) { qr-cancel(); zone = qr-return; }
             else if (a == 4) { if (qr-action != "") { qr-act(); } else { qr-cancel(); zone = qr-return; } }
         } else if (zone == 4) {
+            // Gauche/droite bouclent sur la rangée ; Triangle/Y efface, Options valide (comme sur console).
             if (a == 0) { kby = max(0, kby - 1); }
             else if (a == 1) { kby = min(4, kby + 1); }
-            else if (a == 2) { kbx = max(0, kbx - 1); }
-            else if (a == 3) { kbx = min(kby == 4 ? 5 : 9, kbx + 1); }
+            else if (a == 2) { kbx = step(kbx, kby == 4 ? 6 : 10, -1); }
+            else if (a == 3) { kbx = step(kbx, kby == 4 ? 6 : 10, 1); }
             else if (a == 4) { kb-press(kbx, kby); }
             else if (a == 5) { kb-press(-1, -1); }
+            else if (a == 14) { kb-press(3, 4); }
+            else if (a == 7) { kb-press(4, 4); }
             if (kby == 4 && kbx > 5) { kbx = 5; }
         } else if (zone == 3) {
             if (sfocus == 0) {
@@ -818,16 +880,16 @@ export component App inherits Window {
                 else if ((a == 3 || a == 4) && rows.length > 0) { sfocus = 1; }
                 else if (a == 5) { zone = 1; }
             } else {
-                if (a == 0) { srow = max(0, srow - 1); }
-                else if (a == 1) { srow = max(0, min(rows.length - 1, srow + 1)); }
+                if (a == 0) { srow = step(srow, rows.length, -1); }
+                else if (a == 1) { srow = step(srow, rows.length, 1); }
                 else if (a == 2) { if (rows[srow].adjustable) { setting(cat, srow, -1); } else { sfocus = 0; } }
                 else if (a == 3) { if (rows[srow].adjustable) { setting(cat, srow, 1); } }
                 else if (a == 4) { setting(cat, srow, 0); }
                 else if (a == 5) { sfocus = 0; }
             }
         } else if (zone == 2) {
-            if (a == 0) { pw = max(0, pw - 1); }
-            else if (a == 1) { pw = min(4, pw + 1); }
+            if (a == 0) { pw = step(pw, 5, -1); }
+            else if (a == 1) { pw = step(pw, 5, 1); }
             else if (a == 5 || (a == 4 && pw == 4)) { zone = 1; }
             else if (a == 4 && pw == 3) { desktop(); }
             else if (a == 4) { power(pw); }
@@ -847,6 +909,8 @@ export component App inherits Window {
         } else {
             if (tab == 0) {
                 if (a == 7) { if (sel < games.length && games.length > 0) { game-menu(games[sel].gid); } }
+                // Retour : d'abord vers le premier jeu du dock, puis vers la barre du haut.
+                else if (a == 5 && sel > 0) { sel = 0; }
                 else if (a == 0 || a == 5) { top = 0; zone = 1; }
                 else if (a == 2) { sel = max(0, sel - 1); }
                 else if (a == 3) { sel = max(0, min(games.length, sel + 1)); }
@@ -878,6 +942,8 @@ export component App inherits Window {
                 // mises en avant (brow==2) garde ses deux niveaux (elle-même imbriquée dans
                 // l'aperçu de la page, brow==0).
                 if (a == 7) { add-menu(); }
+                // Triangle / Y : efface la recherche de la Boutique (retour à « À la une »).
+                else if (a == 14 && search-query != "") { store-search-clear(); }
                 else if (a == 5 && (brow == 2 || brow == 3)) { brow = 0; }
                 else if (a == 0 && (brow == 2 || brow == 3)) { brow = 0; }
                 else if ((a == 0 && brow == 0) || a == 5) { top = 1; zone = 1; }
@@ -1027,7 +1093,7 @@ export component App inherits Window {
         x: 160px;
         y: 600px;
         width: 1200px;
-        text: library.length == 0 ? @tr("Aucun jeu") : (library.length == 1 ? @tr("1 jeu") : @tr("{} jeux", library.length));
+        text: lib-total == 0 ? @tr("Aucun jeu") : (lib-total == 1 ? @tr("1 jeu") : @tr("{} jeux", lib-total));
         font-size: 26px;
         color: Theme.dim;
         overflow: elide;
@@ -1041,7 +1107,7 @@ export component App inherits Window {
         y: 600px;
         width: 1200px;
         // Boutique · temps de jeu · dernière partie (« — » tant que le jeu n'a jamais été lancé : rien d'affiché).
-        text: (games[sel].store != "" ? games[sel].store + (games[sel].played != "" ? "  ·  " : "") : "") + games[sel].played
+        text: (games[sel].running ? @tr("En cours") + "  ·  " : "") + (games[sel].store != "" ? games[sel].store + (games[sel].played != "" ? "  ·  " : "") : "") + games[sel].played
             + (games[sel].lastp != "" && games[sel].lastp != "—" ? "  ·  " + @tr("dernière partie") + " " + games[sel].lastp : "");
         font-size: 26px;
         color: Theme.dim;
@@ -1127,7 +1193,7 @@ export component App inherits Window {
                     y: parent.height * 0.62 + 40px;
                     width: parent.width;
                     horizontal-alignment: center;
-                    text: library.length;
+                    text: lib-total;
                     font-size: 22px;
                     color: Theme.dim;
                 }
@@ -1248,13 +1314,25 @@ export component App inherits Window {
             clicked => { root.lbrow = 0; root.lib-col = 2; root.lib-filters(); }
         }
     }
+    // Nombre de résultats quand une recherche ou un filtre restreint la liste.
+    if tab == 1 && library.length > 0 && (lib-query != "" || lib-filter != 0): Text {
+        opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
+        x: 1220px + max(300px, lib-filter-measure.preferred-width + 80px) + 32px;
+        y: 170px;
+        height: 92px;
+        vertical-alignment: center;
+        text: library.length == 1 ? @tr("1 jeu") : @tr("{} jeux", library.length);
+        font-size: 28px;
+        color: Theme.dim;
+    }
     if tab == 1 && library.length == 0: Text {
         opacity: tab-fade;
         animate opacity { duration: 100ms; easing: ease-out; }
         x: 160px;
         y: 400px;
         width: 1800px;
-        text: lib-query == "" && lib-filter-label == @tr("Filtres") ? @tr("Aucun jeu à installer. Connectez vos boutiques pour retrouver vos achats.") : @tr("Aucun résultat.");
+        text: lib-query == "" && lib-filter == 0 ? @tr("Aucun jeu à installer. Connectez vos boutiques pour retrouver vos achats.") : (lib-query == "" && lib-filter == 2 ? @tr("Aucun jeu caché.") : @tr("Aucun résultat."));
         font-size: 36px;
         color: Theme.dim;
         wrap: word-wrap;
@@ -1412,6 +1490,12 @@ export component App inherits Window {
     }
     // Largeur du titre de la Boutique (pour placer le compteur juste après).
     property <length> offers-title-width: offers-title-measure.preferred-width;
+    lib-filter-measure := Text {
+        visible: false;
+        text: lib-filter-label;
+        font-size: 28px;
+        font-weight: 600;
+    }
     offers-title-measure := Text {
         visible: false;
         text: offers-title;
@@ -1569,13 +1653,23 @@ export component App inherits Window {
         height: 78px;
         spacing: 34px;
         Rectangle {
-            width: 40px;
+            width: 40px + (st-net < 0 ? offl.preferred-width + 12px : 0px);
             Text {
+                x: 0px;
                 text: st-net == 0 ? "\u{E839}" : "\u{E701}";
                 font-family: Theme.icons;
                 font-size: 34px;
                 vertical-alignment: center;
                 color: st-net < 0 ? Theme.danger : Theme.text;
+            }
+            // Hors ligne : écrit en toutes lettres (l'icône rouge seule passait inaperçue).
+            offl := Text {
+                x: 52px;
+                visible: st-net < 0;
+                text: @tr("Hors ligne");
+                font-size: 24px;
+                vertical-alignment: center;
+                color: Theme.danger;
             }
         }
         Rectangle {
@@ -1724,6 +1818,20 @@ export component App inherits Window {
         }
     }
 
+    // Nom du bouton de la barre du haut qui a le focus (les icônes seules ne disent pas tout), centré
+    // sous lui. Géométrie de la rangée ci-dessus : 5 icônes de 72 px espacées de 18 px, une cale de
+    // 12 px puis l'avatar (66 px), le tout calé à 70 px du bord droit.
+    if zone == 1 && top >= 2: Text {
+        property <length> row-x: parent.width - 70px - (5 * 72px + 12px + 66px + 6 * 18px);
+        property <length> cx: top == 7 ? row-x + 5 * 90px + 30px + 33px : row-x + (top - 2) * 90px + 36px;
+        x: min(parent.width - 24px - self.width, cx - self.width / 2);
+        y: 128px;
+        text: [@tr("Ajouter"), @tr("Téléchargements"), @tr("Notifications"), @tr("Réglages"), @tr("Alimentation"), user][top - 2];
+        font-size: 22px;
+        font-weight: 600;
+        color: Theme.text;
+    }
+
     // --- Pictogrammes de la manette : même place et même ordre que dans tous les panneaux ---
     HorizontalLayout {
         x: 80px;
@@ -1734,6 +1842,7 @@ export component App inherits Window {
         Hint { btn: 3; label: @tr("Options"); }
         Hint { btn: 2; label: @tr("Menu"); }
         if tab == 1 && zone == 0 && lib-query != "": Hint { btn: 4; label: @tr("Effacer la recherche"); }
+        if tab == 2 && zone == 0 && search-query != "": Hint { btn: 4; label: @tr("Effacer la recherche"); }
     }
 
     // --- Volume réglé par L2/R2 depuis l'accueil : pastille éphémère sous la barre du haut ---
@@ -1772,7 +1881,7 @@ export component App inherits Window {
         Text {
             x: 436px;
             vertical-alignment: center;
-            text: vol-osd + "%";
+            text: vol-osd == 0 ? @tr("Muet") : vol-osd + "%";
             font-size: 26px;
             color: Theme.text;
         }
@@ -2828,6 +2937,15 @@ export component App inherits Window {
             color: Theme.dim;
             overflow: elide;
         }
+        // Clic sur la bannière : ouvre le centre de notifications.
+        if toast-on: TouchArea {
+            clicked => {
+                root.top = 4;
+                root.nsel = 0;
+                root.notifs-opened();
+                root.zone = 8;
+            }
+        }
     }
 
     // Centre de notifications.
@@ -2919,8 +3037,8 @@ export component App inherits Window {
                 x: 48px;
                 y: parent.height - 100px;
                 spacing: 36px;
-                Hint { btn: 0; label: (nsel >= 0 && nsel < notifs.length && notifs[nsel].pinned) ? @tr("Installer") : @tr("Effacer"); }
-                Hint { btn: 3; label: @tr("Tout effacer"); }
+                if notifs.length > 0: Hint { btn: 0; label: (nsel >= 0 && nsel < notifs.length && notifs[nsel].pinned) ? @tr("Installer") : @tr("Effacer"); }
+                if notifs.length > 0: Hint { btn: 3; label: @tr("Tout effacer"); }
                 Hint { btn: 1; label: @tr("Retour"); }
             }
         }
@@ -3157,6 +3275,16 @@ export component App inherits Window {
                 }
             }
         }
+        // À la manette seulement : au clavier physique, on tape directement (Entrée valide).
+        if Pad.kind != 2: HorizontalLayout {
+            x: 80px;
+            y: parent.height - 100px;
+            spacing: 48px;
+            Hint { btn: 0; label: @tr("Saisir"); }
+            Hint { btn: 4; label: @tr("Effacer"); }
+            Hint { btn: 3; label: @tr("Valider"); }
+            Hint { btn: 1; label: @tr("Annuler"); }
+        }
     }
 
 }
@@ -3233,6 +3361,9 @@ export component GuideMenu inherits Window {
     in property <int> brightness: -1;
     in property <int> wifi: -1; // -1 indisponible, 0 coupé, 1 actif
     in property <[string]> notes;
+    in property <bool> repeating: false;
+    in property <string> clock; // heure, en haut à droite
+    in property <int> pad: -1; // batterie de la manette (%), -1 inconnue
     in-out property <int> sel: 0;
     // item (0 reprendre, 1 accueil, 2 fermer, 3 volume, 4 luminosité, 5 wifi ; -1 = fermer le menu),
     // delta : 0 valider, -1/+1 gauche/droite
@@ -3245,12 +3376,13 @@ export component GuideMenu inherits Window {
     forward-focus: keys;
 
     public function nav(a: int) {
-        if (a == 0) { sel = max(0, sel - 1); }
-        else if (a == 1) { sel = min(6, sel + 1); }
+        // Haut/bas bouclent (sauf bouton maintenu) ; Options ferme le menu, comme Retour.
+        if (a == 0) { sel = repeating ? max(0, sel - 1) : mod(sel + 6, 7); }
+        else if (a == 1) { sel = repeating ? min(6, sel + 1) : mod(sel + 1, 7); }
         else if (a == 2) { action(sel, -1); }
         else if (a == 3) { action(sel, 1); }
         else if (a == 4) { action(sel, 0); }
-        else if (a == 5 || a == 6) { action(-1, 0); }
+        else if (a == 5 || a == 6 || a == 7) { action(-1, 0); }
     }
 
     keys := NavKeys {
@@ -3293,6 +3425,30 @@ export component GuideMenu inherits Window {
         text: session == "" ? @tr("En cours") : @tr("En cours") + "  ·  " + session;
         font-size: 20px;
         color: Theme.dim;
+    }
+    // Heure et batterie de la manette, à droite de la même ligne (en jeu, la barre d'état n'est pas visible).
+    HorizontalLayout {
+        x: parent.width - 28px - self.preferred-width;
+        y: 96px;
+        spacing: 8px;
+        if pad >= 0 && pad <= 100: Text {
+            text: "\u{E7FC}";
+            font-family: Theme.icons;
+            font-size: 20px;
+            vertical-alignment: center;
+            color: pad <= 15 ? Theme.danger : Theme.dim;
+        }
+        if pad >= 0 && pad <= 100: Text {
+            text: pad + " %   ";
+            font-size: 20px;
+            color: pad <= 15 ? Theme.danger : Theme.dim;
+        }
+        Text {
+            text: clock;
+            font-size: 20px;
+            font-weight: 700;
+            color: Theme.text;
+        }
     }
     VerticalLayout {
         x: 28px;
