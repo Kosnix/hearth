@@ -127,6 +127,14 @@ struct Shell {
     /// Animation de `zoom-t` en cours : (début, valeur de départ, valeur d'arrivée).
     zoom_anim: Cell<Option<(std::time::Instant, f32, f32)>>,
     zoom_anim_timer: slint::Timer,
+    /// Dernière action manette/clavier et niveau du voile d'inactivité de l'accueil (voir `idle_tick`).
+    last_activity: Cell<std::time::Instant>,
+    dim: Cell<f32>,
+    /// Dernier son de « limite » (bord d'une liste), pour ne pas le répéter en rafale en maintenant.
+    last_bump: Cell<Option<std::time::Instant>>,
+    vol_osd_gen: Cell<u32>,
+    /// Filtre de la Bibliothèque : 0 tous, 1 à installer, 2 cachés.
+    lib_filter: Cell<u8>,
     anim_n: Cell<u32>,
     ext_game: RefCell<Option<ExtGame>>,
     ext_pending: Cell<Option<(usize, std::time::Instant)>>,
@@ -318,6 +326,11 @@ fn main() -> Result<(), slint::PlatformError> {
         zoom_timer: slint::Timer::default(),
         zoom_anim: Cell::new(None),
         zoom_anim_timer: slint::Timer::default(),
+        last_activity: Cell::new(std::time::Instant::now()),
+        dim: Cell::new(0.0),
+        last_bump: Cell::new(None),
+        vol_osd_gen: Cell::new(0),
+        lib_filter: Cell::new(0),
         anim_n: Cell::new(0),
         ext_game: RefCell::new(None),
         ext_pending: Cell::new(None),
@@ -515,6 +528,11 @@ fn main() -> Result<(), slint::PlatformError> {
     shell.ui.on_search_open(move || s.search_open());
     let s = shell.clone();
     shell.ui.on_lib_search_open(move || s.lib_search_open());
+    let s = shell.clone();
+    shell.ui.on_lib_search_clear(move || s.lib_search_clear());
+    let s = shell.clone();
+    shell.ui.on_lib_filters(move || s.open_lib_filters());
+    shell.ui.set_lib_filter_label(tr("Filtres").into());
     let s = shell.clone();
     shell.ui.on_show_offer(move |i| s.show_offer(i as usize));
     let s = shell.clone();
@@ -922,6 +940,9 @@ impl Shell {
         if wm::find_window(GUIDE_TITLE).is_some_and(wm::is_visible) {
             if nav == Nav::Guide {
                 self.guide_action(-1, 0);
+            } else if matches!(nav, Nav::VolDown | Nav::VolUp) {
+                // L2/R2 dans le guide : la jauge de volume, comme sur l'accueil.
+                self.guide_action(3, if nav == Nav::VolUp { 1 } else { -1 });
             } else {
                 self.guide.invoke_nav(nav as i32);
             }
@@ -1378,6 +1399,8 @@ impl Shell {
         self.guide_tile.set(tile);
         let closing = self.running.borrow().iter().any(|r| r.tile == tile && r.closing) || self.ext_game.borrow().as_ref().is_some_and(|e| e.tile == tile && e.closing);
         self.guide.set_game(name.as_str().into());
+        let started = self.running.borrow().iter().find(|r| r.tile == tile).map(|r| r.started).or_else(|| self.ext_game.borrow().as_ref().filter(|e| e.tile == tile).map(|e| e.started));
+        self.guide.set_session(started.map(|t| session_label(t.elapsed().as_secs())).unwrap_or_default().into());
         self.guide.set_art(self.tile_for(tile).map(|t| t.cover).unwrap_or_default());
         self.guide.set_closing(closing);
         self.guide.set_sel(0);
@@ -1627,7 +1650,10 @@ impl Shell {
         self.ui.set_toast_on(true);
         let gen = self.toast_gen.get() + 1;
         self.toast_gen.set(gen);
-        slint::Timer::single_shot(Duration::from_secs(5), move || {
+        // Bannière courte pour les notifications ordinaires (elles restent dans le centre de
+        // notifications) ; plus longue pour celles qui attendent une action (mise à jour de Hearth).
+        let secs = if pinned { 6 } else { 3 };
+        slint::Timer::single_shot(Duration::from_secs(secs), move || {
             with_shell(|s| {
                 if s.toast_gen.get() == gen {
                     s.ui.set_toast_on(false);
@@ -1792,6 +1818,9 @@ impl Shell {
                 self.ui.set_lsel(0);
                 self.rebuild();
             }
+            // Dock de l'accueil : pas d'accélération de la répétition (chaque pas y est une grande jaquette).
+            input::set_fast_repeat(!(tab == 0 && self.ui.get_zone() == 0));
+            self.idle_tick();
         }
         {
             timed("sync_library_art", || self.sync_library_art());
@@ -2025,6 +2054,34 @@ impl Shell {
         }
         v.push((tr("Fermer"), menus::Act::Cancel));
         self.menu_show(tr("Filtres"), v);
+    }
+
+    /// Bouton « Filtres » de la Bibliothèque : tous les jeux, seulement ceux à installer, ou les cachés.
+    fn open_lib_filters(&self) {
+        let cur = self.lib_filter.get();
+        let mut v: Vec<(String, menus::Act)> = LIB_FILTERS.iter().enumerate().map(|(i, l)| (if cur == i as u8 { format!("✓ {}", tr(l)) } else { tr(l) }, menus::Act::LibFilter(i as u8))).collect();
+        v.push((tr("Fermer"), menus::Act::Cancel));
+        self.menu_show(tr("Filtres"), v);
+    }
+
+    pub(crate) fn set_lib_filter(&self, f: u8) {
+        self.lib_filter.set(f);
+        let label = if f == 0 { tr("Filtres") } else { tr(LIB_FILTERS[f as usize]) };
+        self.ui.set_lib_filter_label(label.into());
+        self.ui.set_lsel(0);
+        self.rebuild();
+        self.open_lib_filters();
+    }
+
+    /// Triangle / Y dans la Bibliothèque : efface la recherche.
+    fn lib_search_clear(&self) {
+        if self.lib_query.borrow().is_empty() {
+            return;
+        }
+        self.lib_query.borrow_mut().clear();
+        self.ui.set_lib_query("".into());
+        self.ui.set_lsel(0);
+        self.rebuild();
     }
 
     fn set_offer_store_filter(&self, f: Option<String>) {
@@ -2381,6 +2438,16 @@ impl Shell {
     }
 }
 
+const LIB_FILTERS: [&str; 3] = ["Tous", "À installer", "Cachés"];
+
+/// Durée de la partie en cours pour le guide : « 12 min », « 1 h 05 ».
+fn session_label(secs: u64) -> String {
+    match secs / 60 {
+        m if m < 60 => format!("{} min", m.max(1)),
+        m => format!("{} h {:02}", m / 60, m % 60),
+    }
+}
+
 /// Clé de temps de jeu : identifiant du jeu, sinon son nom.
 fn playtime_key(g: &Game) -> String {
     if g.id.is_empty() {
@@ -2517,7 +2584,12 @@ impl Shell {
             // Un jeu caché n'est retiré que de Jeux : il reste dans Bibliothèque, seul endroit
             // d'où le réafficher (sinon aucun des deux onglets ne le montre plus). Un jeu en cours de
             // téléchargement (SteamCMD) passe dans Jeux avec son anneau de progression, pas Bibliothèque.
-            if (g.install || g.hidden || all_tab) && !downloading && (query.is_empty() || t.name.to_lowercase().contains(&query)) {
+            let filter_ok = match self.lib_filter.get() {
+                1 => g.install,
+                2 => g.hidden,
+                _ => true,
+            };
+            if (g.install || g.hidden || all_tab) && filter_ok && !downloading && (query.is_empty() || t.name.to_lowercase().contains(&query)) {
                 b.push(t.clone());
             }
             // Un jeu caché dont on relance le téléchargement (mise à jour…) doit quand même montrer
@@ -2590,16 +2662,67 @@ impl Shell {
 }
 
 impl Shell {
-    fn ui_state(&self) -> [i32; 18] {
+    fn ui_state(&self) -> [i32; 21] {
         let u = &self.ui;
         [
             u.get_zone(), u.get_tab(), u.get_top(), u.get_sel(), u.get_lsel(), u.get_osel(), u.get_psel(), u.get_msel(), u.get_nsel(),
             u.get_dsel(), u.get_dlsel(), u.get_srow(), u.get_cat(), u.get_brow(), u.get_kbx(), u.get_kby(), u.get_pw(), u.get_sfocus(),
+            u.get_lbrow(), u.get_lib_col(), u.get_obsel(),
         ]
+    }
+
+    /// L2/R2 (ou Page préc./suiv.) sur l'accueil : volume par pas de 5 %, pastille éphémère.
+    fn volume_step(&self, delta: i32) {
+        let Some(v) = system::audio::volume() else { return };
+        let v = (v as i32 + delta).clamp(0, 100);
+        system::audio::set_volume(v as u32);
+        let v = system::audio::volume().map_or(v, |x| x as i32);
+        self.ui.set_st_vol(v);
+        self.ui.set_vol_osd(v);
+        if i18n::sfx() {
+            system::sfx::play(system::sfx::Sfx::Move);
+        }
+        let gen = self.vol_osd_gen.get() + 1;
+        self.vol_osd_gen.set(gen);
+        slint::Timer::single_shot(Duration::from_millis(1500), move || {
+            with_shell(|s| {
+                if s.vol_osd_gen.get() == gen {
+                    s.ui.set_vol_osd(-1);
+                }
+            })
+        });
+    }
+
+    /// Accueil sans action depuis 5 min (console devant, aucun jeu, aucun panneau) : l'écran s'assombrit
+    /// doucement (~1,5 s) ; `nav_with_sound` le rallume au premier bouton. Appelé à 25 Hz (`animate`).
+    fn idle_tick(&self) {
+        let idle = self.last_activity.get().elapsed() > Duration::from_secs(300)
+            && self.fg_main.get()
+            && self.ui.get_zone() <= 1
+            && self.running.borrow().is_empty()
+            && self.ext_game.borrow().is_none()
+            && self.splash_start.get().is_none();
+        let d = self.dim.get();
+        let next = if idle { (d + 0.02).min(0.7) } else { 0.0 };
+        if next != d {
+            self.dim.set(next);
+            self.ui.set_dim(next);
+        }
     }
 
     /// Navigation (manette ou clavier) avec son : déplacement, validation, retour, ouverture d'un menu.
     fn nav_with_sound(&self, a: i32) {
+        self.last_activity.set(std::time::Instant::now());
+        // Écran assombri : le premier bouton ne fait que le rallumer (pas d'action à l'aveugle).
+        if self.dim.get() > 0.0 {
+            self.dim.set(0.0);
+            self.ui.set_dim(0.0);
+            return;
+        }
+        if a == Nav::VolDown as i32 || a == Nav::VolUp as i32 {
+            self.volume_step(if a == Nav::VolUp as i32 { 5 } else { -5 });
+            return;
+        }
         let before = self.ui_state();
         timed("invoke_nav", || self.ui.invoke_nav(a));
         if !i18n::sfx() || a == 6 {
@@ -2628,6 +2751,11 @@ impl Shell {
             }
         } else if a == 4 {
             Some(if before[0] == 4 { Sfx::Key } else { Sfx::Select })
+        } else if (0..=3).contains(&a) && before[0] <= 1 && self.last_bump.get().is_none_or(|t| t.elapsed() > Duration::from_millis(400)) {
+            // Direction sans effet sur l'accueil ou la barre du haut : bord de la liste atteint. Au plus
+            // un son toutes les 400 ms (un stick maintenu contre le bord répète la direction en continu).
+            self.last_bump.set(Some(std::time::Instant::now()));
+            Some(Sfx::Error)
         } else {
             None
         };

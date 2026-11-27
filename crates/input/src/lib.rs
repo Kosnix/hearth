@@ -38,6 +38,11 @@ pub enum Nav {
     /// L1/LB, R1/RB : changement rapide de section (Jeux/Bibliothèque/Boutique) sans passer par la barre du haut.
     TabPrev,
     TabNext,
+    /// L2/LT, R2/RT : volume moins / plus (géré par le shell, pas par l'UI).
+    VolDown,
+    VolUp,
+    /// Triangle / Y : action secondaire de l'écran (ex. effacer la recherche de la Bibliothèque).
+    Alt,
 }
 
 // Masques au format XInput (wButtons).
@@ -52,9 +57,14 @@ const B: u16 = 0x2000;
 // Mêmes valeurs que les bits LB/RB d'XInput (wButtons) : pas de conversion nécessaire pour la manette Xbox.
 const L1: u16 = 0x0100;
 const R1: u16 = 0x0200;
+const Y: u16 = 0x8000;
+// Gâchettes : pas de bit dans wButtons ; bits des clics de stick, que la navigation n'utilise pas
+// (jamais relus tels quels depuis XInput, voir le masque de `XInput::read`).
+const L2: u16 = 0x0040;
+const R2: u16 = 0x0080;
 const DIRS: u16 = UP | DOWN | LEFT | RIGHT;
 
-const MAP: [(u16, Nav); 10] = [
+const MAP: [(u16, Nav); 13] = [
     (UP, Nav::Up),
     (DOWN, Nav::Down),
     (LEFT, Nav::Left),
@@ -65,7 +75,18 @@ const MAP: [(u16, Nav); 10] = [
     (START, Nav::Menu),
     (L1, Nav::TabPrev),
     (R1, Nav::TabNext),
+    (L2, Nav::VolDown),
+    (R2, Nav::VolUp),
+    (Y, Nav::Alt),
 ];
+
+static FAST_REPEAT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Accélération de la répétition après 1,2 s de maintien (longues listes). À couper là où chaque pas
+/// est grand (dock de jaquettes de l'accueil) : on y dépassait facilement le jeu visé.
+pub fn set_fast_repeat(on: bool) {
+    FAST_REPEAT.store(on, Ordering::Relaxed);
+}
 
 const POLL: Duration = Duration::from_millis(10);
 const REPEAT_DELAY: Duration = Duration::from_millis(260);
@@ -136,7 +157,8 @@ pub fn spawn(on_nav: impl Fn(Nav) + Send + Sync + 'static) {
                     }
                 }
                 // Maintenu : la répétition accélère après 1,2 s (défilement rapide des longues listes).
-                next_repeat = now + if now.duration_since(hold_start) > Duration::from_millis(1200) { REPEAT_FAST } else { REPEAT_RATE };
+                let fast = FAST_REPEAT.load(Ordering::Relaxed) && now.duration_since(hold_start) > Duration::from_millis(1200);
+                next_repeat = now + if fast { REPEAT_FAST } else { REPEAT_RATE };
             }
             prev = cur;
             thread::sleep(POLL);
@@ -207,12 +229,19 @@ fn read_wgi() -> u16 {
             (GamepadButtons::Menu, START),
             (GamepadButtons::LeftShoulder, L1),
             (GamepadButtons::RightShoulder, R1),
+            (GamepadButtons::Y, Y),
         ] {
             if b.0 & flag.0 != 0 {
                 bits |= bit;
             }
         }
         bits |= stick(r.LeftThumbstickX, r.LeftThumbstickY);
+        if r.LeftTrigger > 0.5 {
+            bits |= L2;
+        }
+        if r.RightTrigger > 0.5 {
+            bits |= R2;
+        }
     }
     bits
 }
@@ -223,7 +252,7 @@ const SONY: u16 = 0x054C;
 fn read_sony() -> u16 {
     let mut bits = 0;
     for s in sony_states() {
-        for (i, bit) in [(1, A), (2, B), (9, START), (12, GUIDE), (4, L1), (5, R1)] {
+        for (i, bit) in [(1, A), (2, B), (9, START), (12, GUIDE), (4, L1), (5, R1), (3, Y), (6, L2), (7, R2)] {
             if s.buttons[i] {
                 bits |= bit;
             }
@@ -313,7 +342,13 @@ impl XInput {
             self.connected[i] = unsafe { (self.get_state)(i as u32, &mut st) } == 0;
             if self.connected[i] {
                 let g = st.Gamepad;
-                bits |= g.wButtons.0 & (DIRS | START | GUIDE | A | B | L1 | R1);
+                bits |= g.wButtons.0 & (DIRS | START | GUIDE | A | B | L1 | R1 | Y);
+                if g.bLeftTrigger > 128 {
+                    bits |= L2;
+                }
+                if g.bRightTrigger > 128 {
+                    bits |= R2;
+                }
                 bits |= stick(g.sThumbLX as f64 / 32767.0, g.sThumbLY as f64 / 32767.0);
             }
         }

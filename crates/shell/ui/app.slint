@@ -543,6 +543,10 @@ component NavKeys inherits FocusScope {
         }
         if (e.text == Key.Return || e.text == " ") { root.nav(4); return accept; }
         if (e.text == Key.Backspace) { root.nav(5); return accept; }
+        // Équivalents clavier de L2/R2 (volume) et de Triangle/Y (action secondaire).
+        if (e.text == Key.PageDown) { root.nav(12); return accept; }
+        if (e.text == Key.PageUp) { root.nav(13); return accept; }
+        if (e.text == Key.Delete) { root.nav(14); return accept; }
         reject
     }
 }
@@ -582,13 +586,20 @@ export component App inherits Window {
     in-out property <int> osel: 0;
     in-out property <int> brow: 0; // 0 recherche, 1 offres, 2 ajouter une boutique, 3 filtre boutique
     in-out property <int> lbrow: 0; // 0 recherche (Bibliothèque), 1 grille
-    property <bool> lib-back: false; // rangée de recherche de la Bibliothèque : bouton retour sélectionné
+    // Rangée du haut de la Bibliothèque : 0 bouton retour, 1 recherche, 2 filtres.
+    in-out property <int> lib-col: 1;
+    in property <string> lib-filter-label;
+    callback lib-search-clear();
+    callback lib-filters();
     // Lancement depuis le dock : la jaquette grandit jusqu'au plein écran (0 = à sa place, 1 = plein écran),
     // puis se rétracte au retour. Avancée image par image côté Rust (`Shell::zoom_to`) : un `animate`
     // sur une affectation faite depuis Rust n'était pas joué (saut direct à la valeur finale).
     in property <image> zoom-cover;
     in property <image> zoom-hero;
     in property <float> zoom-t: 0;
+    // Volume affiché après L2/R2 (-1 : masqué) et voile d'inactivité (0 : aucun, jusqu'à ~0,7).
+    in property <int> vol-osd: -1;
+    in property <float> dim: 0;
     in property <string> lib-query;
     // Menu contextuel (options d'un jeu, ajout).
     in property <string> menu-title;
@@ -839,16 +850,20 @@ export component App inherits Window {
                 else if (a == 0 || a == 5) { top = 0; zone = 1; }
                 else if (a == 2) { sel = max(0, sel - 1); }
                 else if (a == 3) { sel = max(0, min(games.length, sel + 1)); }
-                else if (a == 4 && sel == games.length) { tab = 1; lbrow = 0; lib-back = false; }
+                else if (a == 4 && sel == games.length) { tab = 1; lbrow = 0; lib-col = 1; }
                 else if (a == 4 && games.length > 0) { launch(games[sel].gid); }
             } else if tab == 1 {
                 // Bibliothèque : simple raccourci, pas un onglet — Retour ou Options y ramène
                 // directement à Jeux (sur le raccourci, pour qu'on retrouve le focus d'où on vient).
-                if (a == 5 || a == 7 || (a == 4 && lbrow == 0 && lib-back)) { lib-back = false; tab = 0; sel = games.length; }
+                if (a == 5 || a == 7 || (a == 4 && lbrow == 0 && lib-col == 0)) { lib-col = 1; tab = 0; sel = games.length; }
+                // Triangle / Y : efface la recherche en cours, d'où que l'on soit dans la Bibliothèque.
+                else if (a == 14 && lib-query != "") { lib-search-clear(); }
                 else if (lbrow == 0) {
-                    if (a == 1 && library.length > 0) { lib-back = false; lbrow = 1; }
-                    else if (a == 2) { lib-back = true; }
-                    else if (a == 3) { lib-back = false; }
+                    // Rangée du haut : 0 retour, 1 recherche, 2 filtres.
+                    if (a == 1 && library.length > 0) { lib-col = 1; lbrow = 1; }
+                    else if (a == 2) { lib-col = max(0, lib-col - 1); }
+                    else if (a == 3) { lib-col = min(2, lib-col + 1); }
+                    else if (a == 4 && lib-col == 2) { lib-filters(); }
                     else if (a == 4) { lib-search-open(); }
                 } else {
                     if (a == 0) { if (lsel < cols) { lbrow = 0; } else { lsel = lsel - cols; } }
@@ -1025,7 +1040,9 @@ export component App inherits Window {
         x: 160px;
         y: 600px;
         width: 1200px;
-        text: (games[sel].store != "" ? games[sel].store + (games[sel].played != "" ? "  ·  " : "") : "") + games[sel].played;
+        // Boutique · temps de jeu · dernière partie (« — » tant que le jeu n'a jamais été lancé : rien d'affiché).
+        text: (games[sel].store != "" ? games[sel].store + (games[sel].played != "" ? "  ·  " : "") : "") + games[sel].played
+            + (games[sel].lastp != "" && games[sel].lastp != "—" ? "  ·  " + @tr("dernière partie") + " " + games[sel].lastp : "");
         font-size: 26px;
         color: Theme.dim;
         overflow: elide;
@@ -1119,7 +1136,7 @@ export component App inherits Window {
                         root.sel = games.length;
                         root.zone = 0;
                         root.lbrow = 0;
-                        root.lib-back = false;
+                        root.lib-col = 1;
                         root.tab = 1;
                     }
                 }
@@ -1149,7 +1166,7 @@ export component App inherits Window {
     // bouton (sous la barre du haut, à gauche de la recherche ; gauche depuis la recherche pour
     // l'atteindre à la manette), par B (Retour) ou par Options.
     if tab == 1: Rectangle {
-        property <bool> on: zone == 0 && lbrow == 0 && lib-back;
+        property <bool> on: zone == 0 && lbrow == 0 && lib-col == 0;
         opacity: tab-fade;
         animate opacity { duration: 100ms; easing: ease-out; }
         x: 80px;
@@ -1169,11 +1186,11 @@ export component App inherits Window {
             color: on ? Theme.on-accent : Theme.text;
         }
         TouchArea {
-            clicked => { root.lib-back = false; root.tab = 0; root.sel = root.games.length; root.zone = 0; }
+            clicked => { root.lib-col = 1; root.tab = 0; root.sel = root.games.length; root.zone = 0; }
         }
     }
     if tab == 1: Rectangle {
-        property <bool> on: zone == 0 && lbrow == 0 && !lib-back;
+        property <bool> on: zone == 0 && lbrow == 0 && lib-col == 1;
         opacity: tab-fade;
         animate opacity { duration: 100ms; easing: ease-out; }
         x: 196px;
@@ -1202,7 +1219,33 @@ export component App inherits Window {
             overflow: elide;
         }
         TouchArea {
-            clicked => { root.lbrow = 0; root.lib-back = false; root.lib-search-open(); }
+            clicked => { root.lbrow = 0; root.lib-col = 1; root.lib-search-open(); }
+        }
+    }
+    // Filtres de la Bibliothèque (tous, à installer, cachés) : à droite de la recherche, même style
+    // que le bouton « Ajouter une boutique » de la Boutique.
+    if tab == 1: Rectangle {
+        property <bool> on: zone == 0 && lbrow == 0 && lib-col == 2;
+        opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
+        x: 1220px;
+        y: 170px;
+        width: max(300px, flt.preferred-width + 80px);
+        height: 92px;
+        border-radius: Theme.r-pill;
+        background: on ? Theme.accent : Theme.glass;
+        drop-shadow-offset-y: 6px;
+        drop-shadow-blur: 16px;
+        drop-shadow-color: on ? Theme.accent.transparentize(0.5) : #00000060;
+        animate background { duration: 100ms; }
+        flt := Text {
+            text: lib-filter-label;
+            font-size: 28px;
+            font-weight: 600;
+            color: parent.on ? Theme.on-accent : Theme.text;
+        }
+        TouchArea {
+            clicked => { root.lbrow = 0; root.lib-col = 2; root.lib-filters(); }
         }
     }
     if tab == 1 && library.length == 0: Text {
@@ -1211,7 +1254,7 @@ export component App inherits Window {
         x: 160px;
         y: 400px;
         width: 1800px;
-        text: lib-query == "" ? @tr("Aucun jeu à installer. Connectez vos boutiques pour retrouver vos achats.") : @tr("Aucun résultat.");
+        text: lib-query == "" && lib-filter-label == @tr("Filtres") ? @tr("Aucun jeu à installer. Connectez vos boutiques pour retrouver vos achats.") : @tr("Aucun résultat.");
         font-size: 36px;
         color: Theme.dim;
         wrap: word-wrap;
@@ -1354,6 +1397,26 @@ export component App inherits Window {
         font-size: 34px;
         font-weight: 600;
         color: Theme.text;
+    }
+    // Nombre d'offres affichées, à la suite du titre (« À la une · 18 jeux »).
+    if tab == 2 && offers.length > 0: Text {
+        opacity: tab-fade;
+        animate opacity { duration: 100ms; easing: ease-out; }
+        x: 80px + offers-title-width + 16px;
+        y: 352px;
+        height: 45px;
+        vertical-alignment: center;
+        text: "·  " + (offers.length == 1 ? @tr("1 jeu") : @tr("{} jeux", offers.length));
+        font-size: 28px;
+        color: Theme.dim;
+    }
+    // Largeur du titre de la Boutique (pour placer le compteur juste après).
+    property <length> offers-title-width: offers-title-measure.preferred-width;
+    offers-title-measure := Text {
+        visible: false;
+        text: offers-title;
+        font-size: 34px;
+        font-weight: 600;
     }
     if tab == 2 && offers-state != "": Text {
         opacity: tab-fade;
@@ -1670,6 +1733,49 @@ export component App inherits Window {
         Hint { btn: 1; label: @tr("Retour"); }
         Hint { btn: 3; label: @tr("Options"); }
         Hint { btn: 2; label: @tr("Menu"); }
+        if tab == 1 && zone == 0 && lib-query != "": Hint { btn: 4; label: @tr("Effacer la recherche"); }
+    }
+
+    // --- Volume réglé par L2/R2 depuis l'accueil : pastille éphémère sous la barre du haut ---
+    if vol-osd >= 0: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: 150px;
+        width: 520px;
+        height: 76px;
+        border-radius: Theme.r-pill;
+        background: Theme.panel;
+        drop-shadow-offset-y: 6px;
+        drop-shadow-blur: 18px;
+        drop-shadow-color: #00000080;
+        Text {
+            x: 30px;
+            vertical-alignment: center;
+            text: vol-osd == 0 ? "\u{E74F}" : "\u{E767}";
+            font-family: Theme.icons;
+            font-size: 30px;
+            color: Theme.text;
+        }
+        Rectangle {
+            x: 84px;
+            width: 330px;
+            height: 10px;
+            border-radius: 5px;
+            background: Theme.fill2;
+            Rectangle {
+                x: 0px;
+                width: parent.width * vol-osd / 100;
+                height: parent.height;
+                border-radius: 5px;
+                background: Theme.accent;
+            }
+        }
+        Text {
+            x: 436px;
+            vertical-alignment: center;
+            text: vol-osd + "%";
+            font-size: 26px;
+            color: Theme.text;
+        }
     }
 
     // --- Jaquette qui grandit au lancement (et se rétracte au retour) : part exactement de la tuile
@@ -1698,6 +1804,13 @@ export component App inherits Window {
             opacity: max(0, min(1, (e - 0.3) / 0.5));
         }
         TouchArea { }
+    }
+
+    // --- Accueil inactif depuis quelques minutes : écran assombri (réglé côté Rust, voir
+    // `Shell::idle_tick`), dissipé au premier bouton, qui ne fait rien d'autre. ---
+    if dim > 0: Rectangle {
+        background: #000000;
+        opacity: dim;
     }
 
     // --- Fiche d'un jeu de la boutique : description, captures, prix par boutique ---
@@ -3115,6 +3228,7 @@ export component GuideMenu inherits Window {
     in property <string> game;
     in property <image> art;
     in property <bool> closing;
+    in property <string> session; // durée de la partie en cours, ex. « 1 h 05 »
     in property <int> volume: -1; // %, -1 = indisponible
     in property <int> brightness: -1;
     in property <int> wifi: -1; // -1 indisponible, 0 coupé, 1 actif
@@ -3175,7 +3289,8 @@ export component GuideMenu inherits Window {
     Text {
         x: 140px;
         y: 96px;
-        text: @tr("En cours");
+        // « En cours · 1 h 05 » : depuis combien de temps on joue (durée calculée côté Rust).
+        text: session == "" ? @tr("En cours") : @tr("En cours") + "  ·  " + session;
         font-size: 20px;
         color: Theme.dim;
     }

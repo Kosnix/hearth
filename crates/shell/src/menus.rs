@@ -31,6 +31,7 @@ pub enum Act {
     ConfirmBtUnpair,
     OfferStore(Option<String>),
     OfferSort(i32),
+    LibFilter(u8),
     Cancel,
 }
 
@@ -163,6 +164,7 @@ impl Shell {
             }
             Act::OfferStore(f) => self.set_offer_store_filter(f),
             Act::OfferSort(s) => self.set_offer_sort(s),
+            Act::LibFilter(f) => self.set_lib_filter(f),
             Act::ConfirmBtUnpair => {
                 self.ui.set_zone(back);
                 if let Some((id, name)) = self.bt_unpair_id.borrow_mut().take() {
