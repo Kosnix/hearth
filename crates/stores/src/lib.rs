@@ -15,7 +15,7 @@ pub mod steamcmd;
 pub mod account;
 pub mod qr;
 
-pub use art::{asset, asset_dir, clear_art, ensure_art, ensure_art_for, fetch_first, purge_offers, save_art, search_sgdb};
+pub use art::{asset, asset_dir, clear_art, ensure_art_for, fetch_first, purge_offers, save_art, search_sgdb};
 
 /// Façon de lancer un jeu.
 #[derive(Clone, Debug)]
@@ -247,6 +247,15 @@ pub fn resolve_art(title: &str) -> Option<Art> {
     let pick = offers.iter().find(|o| norm(&o.title) == n).or_else(|| offers.iter().find(|o| norm(&o.title).starts_with(&n) || n.starts_with(&norm(&o.title))))?;
     let id = pick.url.trim_end_matches('/').rsplit('/').next()?.to_string();
     Some(steam::art(&id))
+}
+
+/// Écrit `path` via un fichier temporaire puis un renommage (atomique sur NTFS) : une coupure pendant
+/// l'écriture laisse l'ancien contenu intact au lieu d'un fichier tronqué (connexions, bibliothèque perdues).
+pub fn write_atomic(path: &std::path::Path, data: &[u8]) {
+    let tmp = path.with_extension("tmp");
+    if std::fs::write(&tmp, data).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
 }
 
 /// Dossier de données de Hearth (`%LOCALAPPDATA%\Hearth`).

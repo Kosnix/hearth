@@ -146,6 +146,7 @@ impl Shell {
         *self.pick_mode.borrow_mut() = crate::addflow::PickMode::Sounds(music);
         let title = tr(if music { "Packs de musique" } else { "Packs de sons" });
         if self.sound_catalog.borrow().is_empty() {
+            self.sound_list.borrow_mut().clear();
             self.pick_set(title.clone(), tr("Chargement du catalogue…"), vec![PickItem { label: tr("Chargement du catalogue…").into(), sub: "".into(), glyph: "\u{E721}".into(), art: Default::default() }]);
             self.ui.set_zone(6);
             std::thread::spawn(move || {
@@ -167,6 +168,7 @@ impl Shell {
         let list: Vec<Pack> = self.sound_catalog.borrow().iter().filter(|p| p.music == music).cloned().collect();
         let title = tr(if music { "Packs de musique" } else { "Packs de sons" });
         if list.is_empty() {
+            self.sound_list.borrow_mut().clear();
             self.pick_set(title, tr("Catalogue indisponible"), vec![PickItem { label: tr("Catalogue indisponible").into(), sub: "".into(), glyph: "\u{E783}".into(), art: Default::default() }]);
             return;
         }
@@ -190,6 +192,11 @@ impl Shell {
 
     /// Un pack est choisi : téléchargement si besoin, puis application.
     pub fn sound_pick(&self, i: usize, music: bool) {
+        // Ligne d'attente (« Chargement du catalogue… », « Catalogue indisponible ») : rien à choisir —
+        // elle prenait sinon la place de « Aucune musique » et coupait la musique.
+        if self.sound_list.borrow().is_empty() {
+            return;
+        }
         let idx = if music {
             if i == 0 {
                 i18n::set_pref(key(true), "|");

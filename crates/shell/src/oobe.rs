@@ -97,12 +97,29 @@ impl Shell {
             return;
         }
         let saved = std::fs::read_to_string(step_file()).ok().and_then(|s| s.trim().parse::<i32>().ok()).unwrap_or(0);
-        let titles: Vec<SharedString> = STEPS.iter().map(|s| tr(s.title).into()).collect();
-        self.ui.set_oobe_titles(Rc::new(VecModel::from(titles)).into());
+        self.oobe_titles();
         self.ui.set_oobe_count(STEPS.len() as i32);
         self.ui.set_oobe_on(true);
         self.ui.set_oobe_rows(self.oobe_rows.clone().into());
         self.oobe_enter(saved.clamp(0, STEPS.len() as i32 - 1));
+    }
+
+    fn oobe_titles(&self) {
+        let titles: Vec<SharedString> = STEPS.iter().map(|s| tr(s.title).into()).collect();
+        self.ui.set_oobe_titles(Rc::new(VecModel::from(titles)).into());
+    }
+
+    /// Langue changée pendant l'assistant (étape Langue) : liste des étapes et textes de l'étape
+    /// courante retraduits tout de suite.
+    pub fn oobe_relang(&self) {
+        if !self.oobe_active() {
+            return;
+        }
+        self.oobe_titles();
+        let sel = self.ui.get_oobe_sel();
+        self.oobe_enter(self.oobe_step.get());
+        self.ui.set_oobe_sel(sel);
+        self.oobe_sync();
     }
 
     /// Étape manette : toute manette (DualSense, Xbox…) détectée à proximité en mode appairage est connectée automatiquement.
@@ -120,7 +137,9 @@ impl Shell {
             if system::radio_ext::bluetooth_on() == Some(false) {
                 system::radio_ext::set_bluetooth(true);
             }
-            static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+            // Tentatives par manette : un échec (manette pas encore tout à fait en mode appairage…) est
+            // retenté aux passages suivants, 3 fois au plus (pas de rafale de notifications).
+            static TRIES: std::sync::Mutex<Vec<(String, u8, bool)>> = std::sync::Mutex::new(Vec::new());
             while SCAN.load(Ordering::Relaxed) {
                 // Chaque manette est appairée dès sa découverte (DeviceWatcher), pas à la fin d'un
                 // cycle de recherche complet.
@@ -128,17 +147,23 @@ impl Shell {
                     if !SCAN.load(Ordering::Relaxed) {
                         return;
                     }
-                    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
-                    if seen.contains(&d.id) {
-                        return;
+                    let mut tries = TRIES.lock().unwrap_or_else(|e| e.into_inner());
+                    match tries.iter_mut().find(|t| t.0 == d.id) {
+                        Some(t) if t.2 || t.1 >= 3 => return,
+                        Some(t) => t.1 += 1,
+                        None => tries.push((d.id.clone(), 1, false)),
                     }
-                    seen.push(d.id.clone());
-                    drop(seen);
+                    drop(tries);
                     let _ = slint::invoke_from_event_loop({
                         let n = d.name.clone();
                         move || with_shell(|s| s.push_notif("Bluetooth", &format!("{} {n}…", tr("Appairage de"))))
                     });
                     let r = system::bluetooth::pair(&d.id);
+                    if r.is_ok() {
+                        if let Some(t) = TRIES.lock().unwrap_or_else(|e| e.into_inner()).iter_mut().find(|t| t.0 == d.id) {
+                            t.2 = true;
+                        }
+                    }
                     let name = d.name;
                     let _ = slint::invoke_from_event_loop(move || {
                         with_shell(|s| {
@@ -216,7 +241,8 @@ impl Shell {
             Kind::Profile => {
                 let p = self.profile_current();
                 rows.push(row("Nom du profil", p.name, false));
-                rows.push(row("Photo de profil", format!("{} {}", tr("Avatar"), p.avatar + 1), false));
+                let pic = if p.photo { tr("Photo") } else { format!("{} {}", tr("Avatar"), p.avatar + 1) };
+                rows.push(row("Photo de profil", pic, false));
                 content = 2;
             }
             Kind::System => {

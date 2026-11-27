@@ -26,6 +26,28 @@ fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// Écart heure locale − UTC, en secondes (fuseaux de −12 h à +12 h).
+fn local_offset() -> i64 {
+    use windows::Win32::System::SystemInformation::{GetLocalTime, GetSystemTime};
+    let (l, u) = unsafe { (GetLocalTime(), GetSystemTime()) };
+    let mins = |h: u16, m: u16| h as i64 * 60 + m as i64;
+    let mut d = mins(l.wHour, l.wMinute) - mins(u.wHour, u.wMinute);
+    if d > 720 {
+        d -= 1440;
+    } else if d < -720 {
+        d += 1440;
+    }
+    d * 60
+}
+
+/// Jours de calendrier (heure locale) écoulés depuis `last` : une partie d'hier soir à 23 h est
+/// « hier » le lendemain matin, pas « aujourd'hui » (24 h ne sont pas encore passées).
+fn days_since(last: u64) -> u64 {
+    let off = local_offset();
+    let day = |t: u64| (t as i64 + off).div_euclid(86_400);
+    (day(now()) - day(last)).max(0) as u64
+}
+
 /// Ajoute une session de jeu terminée.
 pub fn record(key: &str, secs: u64) {
     let mut m = load();
@@ -44,7 +66,7 @@ pub fn label_in(map: &HashMap<String, Entry>, key: &str) -> String {
         return String::new();
     }
     let played = if e.secs >= 3600 { format!("{} h", e.secs / 3600) } else { format!("{} min", (e.secs / 60).max(1)) };
-    let days = now().saturating_sub(e.last) / 86_400;
+    let days = days_since(e.last);
     let when = match days {
         0 => tr("aujourd'hui"),
         1 => tr("hier"),
@@ -54,7 +76,6 @@ pub fn label_in(map: &HashMap<String, Entry>, key: &str) -> String {
 }
 
 /// Date de dernière partie (0 = jamais), pour trier la bibliothèque.
-#[allow(dead_code)]
 pub fn last(key: &str, map: &HashMap<String, Entry>) -> u64 {
     map.get(key).map_or(0, |e| e.last)
 }
@@ -71,7 +92,7 @@ pub fn played_in(map: &HashMap<String, Entry>, key: &str) -> String {
 /// « aujourd'hui », « hier », « il y a 3 j ».
 pub fn last_in(map: &HashMap<String, Entry>, key: &str) -> String {
     let Some(e) = map.get(key).filter(|e| e.last > 0) else { return "—".into() };
-    match now().saturating_sub(e.last) / 86_400 {
+    match days_since(e.last) {
         0 => tr("aujourd'hui"),
         1 => tr("hier"),
         n => tr("il y a {n} j").replace("{n}", &n.to_string()),

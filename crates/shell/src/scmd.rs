@@ -299,7 +299,7 @@ impl Shell {
                 Ok(()) => self.push_notif(&tr("Téléchargements"), &format!("{name} : {}", tr("installé"))),
                 Err(e) => {
                     self.push_notif(&tr("Téléchargements"), &format!("{name} : {} ({e})", tr("échec")));
-                    if e.contains("connexion requise") || e.contains("mot de passe") {
+                    if !appid.starts_with("epic:") && (e.contains("connexion requise") || e.contains("mot de passe")) {
                         self.scmd_begin(Some(format!("steam-{appid}")));
                     }
                 }
@@ -483,7 +483,7 @@ impl Shell {
     /// Les jeux installés par SteamCMD utilisent l'API Steam : ils plantent si le client n'est pas lancé et connecté.
     /// Renvoie vrai si on peut lancer tout de suite ; sinon prépare Steam (démarrage, superposition désactivée une fois)
     /// et relance le jeu quand il est prêt.
-    pub fn steam_ready(&self, i: usize, g: &crate::Game) -> bool {
+    pub fn steam_ready(&self, g: &crate::Game) -> bool {
         if let (Some(id), Some(dir)) = (g.id.strip_prefix("steam-"), std::path::Path::new(&g.exe).parent()) {
             let f = dir.join("steam_appid.txt");
             if !f.exists() {
@@ -503,6 +503,7 @@ impl Shell {
         }
         // Pas de notification : l'écran de lancement du jeu est déjà affiché, Steam démarre derrière.
         self.steam_keep(180);
+        let id = g.id.clone();
         std::thread::spawn(move || {
             // Une fois : on coupe la superposition Steam (elle s'ouvre avec le bouton guide en même temps que le menu de Hearth).
             let patched = !overlay_done && stores::steam_disable_overlay();
@@ -520,12 +521,10 @@ impl Shell {
                         PREPARED.store(true, Ordering::Relaxed);
                     }
                     if patched {
-                        i18n::set_pref("steam_overlay_off", "1");
-                        i18n::set_pref("steam_input_off", "1");
                         i18n::set_pref("steam_cfg_v2", "1");
                     }
                     if ok {
-                        s.launch(i);
+                        s.resume_launch(&id);
                     } else {
                         // Connexion requise : l'écran de lancement s'efface (la jaquette se rétracte) et
                         // laisse la fenêtre de Steam visible pour se connecter.
@@ -585,13 +584,16 @@ impl Shell {
         let name = self.dl.borrow().iter().find(|d| d.appid == a).map(|d| d.name.clone()).unwrap_or_default();
         self.menu_show(
             format!("{} : {name} ?", tr("Annuler le téléchargement")),
-            vec![(tr("Oui, annuler"), crate::menus::Act::CancelDl(i)), (tr("Non, continuer"), crate::menus::Act::Cancel)],
+            vec![(tr("Oui, annuler"), crate::menus::Act::CancelDlId(a)), (tr("Non, continuer"), crate::menus::Act::Cancel)],
         );
     }
 
     /// Annule réellement (après confirmation) : arrête le processus s'il est actif, ou retire l'élément de la file.
-    pub fn dl_cancel(&self, i: usize) {
-        let Some(RowAct::Item(a)) = self.dl_acts.borrow().get(i).cloned() else { return };
+    pub fn dl_cancel_id(&self, a: &str) {
+        // Terminé entre-temps (la question est restée affichée) : plus rien à annuler.
+        if !self.dl.borrow().iter().any(|d| d.appid == a && matches!(d.state, DlState::Active | DlState::Queued)) {
+            return;
+        }
         let active = self.dl.borrow().iter().any(|d| d.appid == a && d.state == DlState::Active);
         self.dl.borrow_mut().retain(|d| d.appid != a);
         if active {

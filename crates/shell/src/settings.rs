@@ -130,8 +130,6 @@ pub enum Outcome {
     OpenBluetooth,
     InstallClient(String),
     Admin,
-    #[allow(dead_code)]
-    SteamCmd,
     Sgdb,
     Login(String),
     Logout(String),
@@ -198,9 +196,17 @@ fn minutes(m: Option<u32>) -> String {
     }
 }
 
+/// Choix suivant/précédent. Valeur réglée ailleurs (Windows) absente de la liste : on part du choix
+/// juste au-dessus ou juste en dessous d'elle, pas du début de la liste.
 fn cycle(choices: &[u32], cur: Option<u32>, delta: i32) -> u32 {
-    let i = cur.and_then(|c| choices.iter().position(|&x| x == c)).unwrap_or(0);
-    choices[step(i, choices.len(), delta.signum())]
+    let Some(c) = cur else { return choices[0] };
+    if let Some(i) = choices.iter().position(|&x| x == c) {
+        return choices[step(i, choices.len(), delta.signum())];
+    }
+    // « 0 » (jamais) est rangé en tête mais vaut l'infini : comparaison sur les seules durées.
+    let timed: Vec<u32> = choices.iter().copied().filter(|&x| x > 0).collect();
+    let pick = if c == 0 || delta > 0 { timed.iter().copied().find(|&x| x > c) } else { timed.iter().rev().copied().find(|&x| x < c) };
+    pick.unwrap_or(if delta > 0 { 0 } else { timed[0] })
 }
 
 impl State {
@@ -298,6 +304,7 @@ impl Settings {
                 row("Volume des effets", format!("{} %", i18n::sfx_vol()), true),
                 row("Volume de la musique", format!("{} %", i18n::music_vol()), true),
                 row("Musique d'ambiance", onoff(Some(i18n::music())), false),
+                row("Effets sonores", onoff(Some(i18n::sfx())), false),
                 row("Pack de sons", crate::sounds::label(false), false),
                 row("Pack de musique", crate::sounds::label(true), false),
             ],
@@ -307,14 +314,14 @@ impl Settings {
                     vec![row("Garder ce réglage", format!("{secs} s"), false), row("Annuler", String::new(), false)]
                 }
                 None => {
-                    if let Some(c) = display::current_mode() {
+                    if let Some(c) = display::current_mode().filter(|_| hint.is_empty()) {
                         hint = format!("{} {} × {} @ {} Hz", tr("Mode actuel :"), c.w, c.h, c.hz);
                     }
                     vec![
                         row("Résolution", s.res.get(s.ri).map_or("—".into(), |r| format!("{} × {}", r.0, r.1)), s.res.len() > 1),
                         row("Fréquence", s.hzs.get(s.hi).map_or("—".into(), |z| format!("{z} Hz")), s.hzs.len() > 1),
                         row("Appliquer", String::new(), false),
-                        row("Fond animé", onoff(Some(i18n::anim())), false),
+                        row("Animations", onoff(Some(i18n::anim())), false),
                     ]
                 }
             },
@@ -376,7 +383,7 @@ impl Settings {
             5 => vec![row("Langue", i18n::LANGS[i18n::lang()].1.into(), true), row("Disposition du clavier", crate::keyboard::layout().name.into(), true)],
             6 => vec![row("Windows Update", if s.loading { tr("Recherche en cours…") } else if s.data.update.is_empty() { tr("Rechercher des mises à jour") } else { s.data.update.clone() }, false)],
             7 if s.loading => vec![row("Lecture…", String::new(), false)],
-            7 => s.data.drives.iter().map(|d| row(&d.name, format!("{} {} {} {}", gb(d.free), tr("libres sur"), gb(d.total), if d.removable { "(USB)" } else { "" }), false)).collect(),
+            7 => s.data.drives.iter().map(|d| row(&d.name, format!("{} {} {}{}", gb(d.free), tr("libres sur"), gb(d.total), if d.removable { " (USB)" } else { "" }), false)).collect(),
             8 if s.loading => vec![row("Détection du matériel…", String::new(), false)],
             8 => {
                 let mut v: Vec<SettingRow> = s.data.gpus.iter().map(|g| row(&g.name, format!("{} {} {}", g.vendor, tr("pilote"), g.version), false)).collect();
@@ -440,8 +447,9 @@ impl Settings {
                 set_pad_order(&ids);
             }
             (4, r, 0) if r as usize == s.data.pads.len().max(1) => out = Outcome::OpenBluetooth,
-            (0, 5, 0) => out = Outcome::SoundPicker(false),
-            (0, 6, 0) => out = Outcome::SoundPicker(true),
+            (0, 5, 0) => i18n::set_sfx(!i18n::sfx()),
+            (0, 6, 0) => out = Outcome::SoundPicker(false),
+            (0, 7, 0) => out = Outcome::SoundPicker(true),
             (13, 0, d) if d != 0 => {
                 theme::set_preset(theme::preset() as i32 + d);
                 out = Outcome::ThemeChanged;
@@ -470,7 +478,9 @@ impl Settings {
                 (1, d) if d != 0 => s.hi = step(s.hi, s.hzs.len(), d),
                 (2, 0) => {
                     if let (Some(prev), Some(new)) = (display::current_mode(), s.chosen()) {
-                        if prev != new && display::set_mode(new) {
+                        if prev == new {
+                            s.message = tr("Déjà le mode actuel");
+                        } else if display::set_mode(new) {
                             s.revert = Some((prev, CONFIRM_SECS));
                             out = Outcome::DisplayChanged;
                         }
@@ -504,16 +514,19 @@ impl Settings {
                     out = Outcome::Toggle { wifi: false, on: !on };
                 }
             }
-            (3, r, 0) if r >= 1 && !s.loading && !s.scanning => {
+            (3, r, 0) if r >= 1 && !s.loading => {
                 let r = r as usize - 1;
                 let paired = s.data.bt_paired.len();
                 if r < paired {
                     let d = &s.data.bt_paired[r];
                     out = Outcome::BtUnpair(d.id.clone(), d.name.clone());
                 } else if r == paired {
-                    s.scanning = true;
-                    out = Outcome::BtScan;
+                    if !s.scanning {
+                        s.scanning = true;
+                        out = Outcome::BtScan;
+                    }
                 } else if let Some(d) = s.bt_found.get(r - paired - 1) {
+                    // Appareil trouvé pendant la recherche : elle est arrêtée d'abord (voir BtPair).
                     out = Outcome::BtPair(d.id.clone(), d.name.clone());
                 }
             }
@@ -534,32 +547,32 @@ impl Settings {
                 s.loading = true;
                 out = Outcome::CheckUpdates(true);
             }
+            // `powercfg` (2 à 3 processus) hors du fil de l'interface : la valeur choisie s'affiche tout de
+            // suite, celle réellement retenue par Windows la remplace dès qu'elle est relue.
             (9, 0, d) if d != 0 && s.data.plans.len() > 1 => {
                 let i = s.data.plans.iter().position(|p| p.active).unwrap_or(0);
                 let n = step(i, s.data.plans.len(), d);
-                system::power::set_plan(&s.data.plans[n].guid);
+                let guid = s.data.plans[n].guid.clone();
                 for (k, p) in s.data.plans.iter_mut().enumerate() {
                     p.active = k == n;
                 }
-                s.data.sleep_min = system::power::timeout(true);
-                s.data.screen_min = system::power::timeout(false);
+                power_bg(move || system::power::set_plan(&guid));
             }
             (9, 1, d) if d != 0 => {
                 let m = cycle(&SLEEP_CHOICES, s.data.sleep_min, d);
-                system::power::set_timeout(true, m);
-                s.data.sleep_min = system::power::timeout(true).or(Some(m));
+                s.data.sleep_min = Some(m);
+                power_bg(move || system::power::set_timeout(true, m));
             }
             (9, 2, d) if d != 0 => {
                 let m = cycle(&SCREEN_CHOICES, s.data.screen_min, d);
-                system::power::set_timeout(false, m);
-                s.data.screen_min = system::power::timeout(false).or(Some(m));
+                s.data.screen_min = Some(m);
+                power_bg(move || system::power::set_timeout(false, m));
             }
             (10, 0, 0) => i18n::set_toasts(!i18n::toasts()),
             (12, r, 0) if !s.loading => {
                 out = match account_rows(&s.data.accounts).into_iter().nth(r as usize).map(|(_, _, a)| a) {
                     Some(Act::Install(n)) => Outcome::InstallClient(n),
                     Some(Act::Admin) => Outcome::Admin,
-                    Some(Act::SteamCmd) => Outcome::SteamCmd,
                     Some(Act::Sgdb) => Outcome::Sgdb,
                     Some(Act::Login(n)) => Outcome::Login(n),
                     Some(Act::Logout(n)) => Outcome::Logout(n),
@@ -687,6 +700,26 @@ impl Settings {
     }
 }
 
+/// Applique un réglage d'alimentation en arrière-plan puis relit les délais réellement en place.
+fn power_bg(apply: impl FnOnce() + Send + 'static) {
+    std::thread::spawn(move || {
+        apply();
+        let (sleep, screen) = (system::power::timeout(true), system::power::timeout(false));
+        let _ = slint::invoke_from_event_loop(move || {
+            crate::with_shell(|sh| {
+                {
+                    let mut s = sh.settings.state.borrow_mut();
+                    s.data.sleep_min = sleep.or(s.data.sleep_min);
+                    s.data.screen_min = screen.or(s.data.screen_min);
+                }
+                if sh.ui.get_cat() == 9 {
+                    sh.open_cat_keep(9);
+                }
+            })
+        });
+    });
+}
+
 fn gb(bytes: u64) -> String {
     format!("{} {}", bytes / 1_000_000_000, tr("Go"))
 }
@@ -695,8 +728,6 @@ fn gb(bytes: u64) -> String {
 enum Act {
     Install(String),
     Admin,
-    #[allow(dead_code)]
-    SteamCmd,
     Sgdb,
     Login(String),
     Logout(String),

@@ -111,6 +111,11 @@ impl Shell {
             self.ui.set_zone(1);
             return;
         }
+        // Hearth redémarre pour changer de profil : un jeu en cours continuerait, mais sans guide ni temps de jeu.
+        if !self.running.borrow().is_empty() || self.ext_game.borrow().is_some() || self.ext_pending.get().is_some() {
+            self.push_notif(&tr("Profils"), &tr("Fermez le jeu en cours avant de changer de profil"));
+            return;
+        }
         let mut s = s;
         s.current = s.profiles[i].id.clone();
         save(&s);

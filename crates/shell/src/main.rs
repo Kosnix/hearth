@@ -511,14 +511,8 @@ fn main() -> Result<(), slint::PlatformError> {
     shell.ui.on_qr_act(move || s.login_code());
     let s = shell.clone();
     shell.ui.on_qr_cancel(move || s.login_cancel());
-    shell.ui.on_power(|a| match a {
-        0 => unsafe {
-            let _ = windows::Win32::System::Power::SetSuspendState(false, false, false);
-        },
-        1 => drop(Command::new("shutdown").args(["/r", "/t", "0"]).spawn()),
-        2 => drop(Command::new("shutdown").args(["/s", "/t", "0"]).spawn()),
-        _ => {}
-    });
+    let s = shell.clone();
+    shell.ui.on_power(move |a| s.power_ask(a));
     shell.ui.on_desktop(|| {
         wm::cursor::restore();
         std::process::exit(EXIT_DESKTOP)
@@ -591,9 +585,8 @@ fn main() -> Result<(), slint::PlatformError> {
     poll.start(slint::TimerMode::Repeated, Duration::from_secs(20), move || s.poll_installed());
 
     let s = shell.clone();
-    let phase = Cell::new(0.0f32);
     let anim = slint::Timer::default();
-    anim.start(slint::TimerMode::Repeated, Duration::from_millis(100), move || timed("animate", || s.animate(&phase)));
+    anim.start(slint::TimerMode::Repeated, Duration::from_millis(100), move || timed("animate", || s.animate()));
 
     // Souris masquée en dehors de Hearth (jeux, autres fenêtres) ; visible dès qu'elle bouge.
     let cursor_timer = slint::Timer::default();
@@ -726,6 +719,8 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
     std::thread::spawn(stores::purge_offers);
+    std::thread::spawn(cleanup_obsolete);
+    cleanup_obsolete_prefs();
     shell.start_art();
     shell.refresh_owned();
     // Diagnostic de latence (HEARTH_PERF) : délai entre l'ordre de navigation et l'image suivante réellement rendue.
@@ -796,11 +791,11 @@ impl Shell {
         }
         // Jeux Steam : client lancé et connecté, superposition Steam coupée (une fois), fenêtre Steam réduite.
         let steam_uri = g.uri.is_some() && g.store == "Steam";
-        if (self.is_scmd_game(&g.exe) || steam_uri) && !self.steam_ready(i, &g) {
+        if (self.is_scmd_game(&g.exe) || steam_uri) && !self.steam_ready(&g) {
             return;
         }
         // Epic, GOG Galaxy : lanceur démarré réduit d'abord s'il ne tourne pas (le jeu repart ensuite seul).
-        if !self.launcher_ready(i, &g) {
+        if !self.launcher_ready(&g) {
             return;
         }
         if let Some(uri) = &g.uri {
@@ -844,6 +839,33 @@ impl Shell {
         }
     }
 
+    /// Veille / redémarrer / éteindre (panneau Alimentation) : confirmation seulement si un
+    /// téléchargement ou un jeu est en cours (il serait interrompu).
+    fn power_ask(&self, a: i32) {
+        let dl = self.dl.borrow().iter().any(|d| matches!(d.state, scmd::DlState::Active | scmd::DlState::Queued)) || self.hearth_dl.borrow().is_some();
+        let game = !self.running.borrow().is_empty() || self.ext_game.borrow().is_some();
+        if !dl && !game {
+            power_do(a);
+            return;
+        }
+        let what = tr(if dl { "Un téléchargement est en cours" } else { "Un jeu est en cours" });
+        let label = tr(match a {
+            0 => "Mettre en veille quand même",
+            1 => "Redémarrer quand même",
+            _ => "Éteindre quand même",
+        });
+        self.menu_show(format!("{what}."), vec![(label, menus::Act::Power(a)), (tr("Annuler"), menus::Act::Cancel)]);
+    }
+
+    /// Lanceur ou Steam prêt (préparation en arrière-plan) : relance le jeu, retrouvé par son identifiant
+    /// (la liste a pu être relue entre-temps), sauf si le lancement a été annulé ou abandonné depuis.
+    pub(crate) fn resume_launch(&self, id: &str) {
+        let Some(i) = self.games.borrow().iter().position(|g| g.id == id) else { return };
+        if self.splash_tile.get() == Some(i) && (self.splash_start.get().is_some() || self.zoom.get() == 1) {
+            self.launch(i);
+        }
+    }
+
     /// Bandeau d'aide du mode souris (`kbd` faux) ou clavier visuel, en bas de l'écran, sans prendre le focus.
     fn pad_show(&self, kbd: bool) {
         self.pad.set_kbd(kbd);
@@ -872,6 +894,9 @@ impl Shell {
     /// Active ou quitte le mode souris (menu guide ; la manette le fait aussi avec L3 + R3).
     fn pad_toggle(&self) {
         let on = !input::mouse_active();
+        if on && !input::sony_connected() {
+            return;
+        }
         input::set_mouse_active(on);
         self.pad_sync();
     }
@@ -1075,7 +1100,10 @@ impl Shell {
                 self.ui.set_zone(4);
             }
             settings::Outcome::Connect(ssid) => self.connect(ssid, None),
-            settings::Outcome::LangChanged => self.refresh_lang(),
+            settings::Outcome::LangChanged => {
+                self.refresh_lang();
+                self.rebuild();
+            }
             settings::Outcome::Oobe => self.oobe_restart(),
             settings::Outcome::Desktop => self.desktop_open(),
             settings::Outcome::OpenBluetooth => {
@@ -1107,7 +1135,6 @@ impl Shell {
                     });
                 });
             }
-            settings::Outcome::SteamCmd => self.scmd_begin(None),
             settings::Outcome::Sgdb => {
                 self.kb_sgdb.set(true);
                 self.settings.kb_open_text(&i18n::pref("steamgriddb_key").unwrap_or_default());
@@ -1144,7 +1171,10 @@ impl Shell {
             }
             settings::Outcome::BtPair(id, name) => {
                 self.push_notif("Bluetooth", &format!("{} {name}…", tr("Appairage de")));
+                system::bluetooth::scan_stop();
                 std::thread::spawn(move || {
+                    // Laisse la recherche se terminer (pas de 100 ms) avant d'appairer.
+                    std::thread::sleep(Duration::from_millis(250));
                     let r = system::bluetooth::pair(&id);
                     let fresh = settings::fetch(3);
                     let _ = slint::invoke_from_event_loop(move || {
@@ -1288,6 +1318,14 @@ impl Shell {
         }
     }
 
+    /// Clavier virtuel quitté sans passer par Annuler (bouton guide / Origine) : la saisie en cours est
+    /// annulée proprement, sinon son drapeau resterait levé et la saisie suivante partirait au mauvais endroit.
+    fn kb_abort(&self) {
+        if self.ui.get_zone() == 4 {
+            self.kb_apply(settings::Kb::Cancel);
+        }
+    }
+
     fn connect(&self, ssid: String, password: Option<String>) {
         self.settings.set_message(format!("{} {ssid}…", tr("Connexion à")));
         self.open_cat_keep(2);
@@ -1404,6 +1442,7 @@ impl Shell {
         // ou L3+R3 encore réservé au jeu qu'on vient de quitter empêchait de rebasculer). Une manette Sony
         // relue de force, au cas où le jeu aurait changé son mode de rapport HID (Steam Input…) sans que
         // Windows.Gaming.Input ne s'en rende compte tout seul.
+        self.kb_abort();
         input::set_chord(true);
         input::resync_pads();
         if input::mouse_active() {
@@ -1460,6 +1499,7 @@ impl Shell {
         self.guide.set_art(self.tile_for(tile).map(|t| t.cover).unwrap_or_default());
         self.guide.set_closing(closing);
         self.guide.set_pad(self.ui.get_st_pad());
+        self.guide.set_mouse_ok(input::sony_connected());
         self.guide.set_sel(0);
         self.guide.set_volume(system::audio::volume().map_or(-1, |v| v as i32));
         if let Some(h) = wm::find_window(GUIDE_TITLE) {
@@ -1534,7 +1574,7 @@ impl Shell {
                     wm::focus(h);
                 }
             }
-            (3, d) if d != 0 => {
+            (3, d) if d != 0 && self.guide.get_volume() >= 0 => {
                 let v = (self.guide.get_volume() + d * 5).clamp(0, 100);
                 system::audio::set_volume(v as u32);
                 self.guide.set_volume(system::audio::volume().map_or(-1, |v| v as i32));
@@ -1548,7 +1588,8 @@ impl Shell {
                 self.hide_guide();
                 self.pad_toggle();
             }
-            (5, _) if self.guide.get_wifi() >= 0 => {
+            // A seulement : gauche/droite en passant sur la ligne coupait le Wi-Fi par mégarde.
+            (5, 0) if self.guide.get_wifi() >= 0 => {
                 let on = self.guide.get_wifi() == 0;
                 self.guide.set_wifi(on as i32);
                 std::thread::spawn(move || system::radio::set_wifi(on));
@@ -1691,6 +1732,10 @@ impl Shell {
     pub(crate) fn push_notif_ex(&self, title: &str, text: &str, pinned: bool) {
         let stamp = unix_now() as i32;
         self.notifs.insert(0, Notif { title: title.into(), text: text.into(), time: notif_age(0).into(), unread: true, pinned, stamp });
+        // Centre ouvert : la sélection suit la notification qu'elle désignait (la nouvelle arrive au-dessus).
+        if self.ui.get_zone() == 8 && self.notifs.row_count() > 1 {
+            self.ui.set_nsel((self.ui.get_nsel() + 1).min(29));
+        }
         if self.notifs.row_count() > 30 {
             self.notifs.remove(30);
         }
@@ -1853,15 +1898,25 @@ impl Shell {
         if self.ui.get_zone() == 3 {
             self.open_cat_keep(self.ui.get_cat());
         }
+        // Textes posés depuis Rust (les @tr de Slint suivent seuls) : libellé du filtre de la
+        // Bibliothèque, titre de la Boutique, mention « Local » des tuiles, étapes de l'assistant.
+        let f = self.lib_filter.get();
+        self.ui.set_lib_filter_label(if f == 0 { tr("Filtres") } else { tr(LIB_FILTERS[f as usize]) }.into());
+        let title = match self.catalog_query.borrow().as_ref() {
+            Some(q) => format!("{} « {q} »", tr("Résultats pour")),
+            None => tr("À la une"),
+        };
+        self.ui.set_offers_title(title.into());
+        self.oobe_relang();
     }
 
-    /// Fond animé (arrêté quand la console n'est pas devant : économise le CPU en jeu) et pictogrammes.
-    fn animate(&self, phase: &Cell<f32>) {
+    /// Tâches périodiques de l'interface (pictogrammes manette/clavier, jaquettes, onglets, mise en veille).
+    fn animate(&self) {
         static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
         if FIRST.swap(false, std::sync::atomic::Ordering::Relaxed) {
             mark("first_animate");
         }
-        // Tick à 25 Hz pour un mouvement fluide ; les vérifications coûteuses (fenêtres, manette) une fois sur deux.
+        // Tick à 10 Hz ; les vérifications coûteuses (fenêtres, manette) une fois sur deux.
         let n = self.anim_n.get().wrapping_add(1);
         self.anim_n.set(n);
         if n.is_multiple_of(2) {
@@ -1898,13 +1953,7 @@ impl Shell {
             input::set_fast_repeat(!(tab == 0 && self.ui.get_zone() == 0));
             self.idle_tick();
         }
-        {
-            timed("sync_library_art", || self.sync_library_art());
-        }
-        if i18n::anim() && self.ui.get_zone() < 3 && self.fg_main.get() {
-            phase.set((phase.get() + 0.2) % 3600.0);
-            self.ui.set_phase(phase.get());
-        }
+        timed("sync_library_art", || self.sync_library_art());
     }
 }
 
@@ -2459,7 +2508,6 @@ impl Shell {
         // plein écran que la dernière de l'animation (héros s'il existe, sinon jaquette), qui s'efface ensuite.
         let zoomed = self.zoom.get() == 2;
         self.splash.set_launch_zoom(if !zoomed { Default::default() } else if t.hero.size().width > 0 { t.hero.clone() } else { t.cover.clone() });
-        self.splash.set_launch_name(t.name.clone());
         self.splash.set_launch_cover(t.cover);
         // Ordre : le logo du jeu si on l'a ; sinon un héros assez grand pour ne pas être flou une fois agrandi ;
         // sinon rien (la roue de chargement, seule, au centre, avec le nom).
@@ -2468,7 +2516,6 @@ impl Shell {
         self.splash.set_launch_art(if t.hero.size().width >= screen_w { t.hero } else { Default::default() });
         self.splash.set_launch_status(format!("{} {}", tr("Démarrage de"), t.name).into());
         self.splash.set_launch_hue(t.hue);
-        self.splash.set_launch_initial(t.initial);
         self.splash.set_launch_t(0.0);
         self.splash.set_launch_spin(0.0);
         if let Some(h) = wm::find_window(SPLASH_TITLE) {
@@ -2632,7 +2679,7 @@ impl Shell {
         Tile {
             gid: gid as i32,
             name: g.name.as_str().into(),
-            initial: g.name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default().into(),
+            initial: g.name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().to_string()).unwrap_or_default().into(),
             hue: hue_of(&g.name),
             cover,
             hero,
@@ -2738,20 +2785,49 @@ impl Shell {
             }
         }
         self.append_owned(&mut new);
+        self.replace_games(new);
+        self.prune_updates();
+        self.rebuild();
+        self.refresh_store_status();
+    }
+
+    /// Remplace la liste des jeux en recalant tous les repères par position (jeux en cours, jeu de
+    /// boutique suivi ou en attente, écran de lancement, guide) sur le même jeu dans la nouvelle liste.
+    fn replace_games(&self, new: Vec<Game>) {
+        let old = self.games.borrow().clone();
+        let remap = |t: usize| old.get(t).and_then(|g| new.iter().position(|n| n.id == g.id));
         for r in self.running.borrow_mut().iter_mut() {
-            if let Some(p) = old.get(r.tile).and_then(|g| new.iter().position(|n| n.id == g.id)) {
+            if let Some(p) = remap(r.tile) {
                 r.tile = p;
             }
         }
         if let Some(e) = self.ext_game.borrow_mut().as_mut() {
-            if let Some(p) = old.get(e.tile).and_then(|g| new.iter().position(|n| n.id == g.id)) {
+            if let Some(p) = remap(e.tile) {
                 e.tile = p;
             }
         }
+        if let Some((t, t0)) = self.ext_pending.get() {
+            self.ext_pending.set(remap(t).map(|p| (p, t0)));
+        }
+        if let Some(t) = self.splash_tile.get() {
+            self.splash_tile.set(remap(t));
+        }
+        if let Some(p) = remap(self.guide_tile.get()) {
+            self.guide_tile.set(p);
+        }
         *self.games.borrow_mut() = new;
-        self.prune_updates();
-        self.rebuild();
-        self.refresh_store_status();
+    }
+
+    /// Premier vrai jeu ajouté : les jeux de démonstration (affichés seulement quand la liste est vide)
+    /// disparaissent tout de suite, sauf celui qui tournerait encore.
+    pub(crate) fn drop_demos(&self) {
+        let running: Vec<usize> = self.running.borrow().iter().map(|r| r.tile).collect();
+        let games = self.games.borrow().clone();
+        if !games.iter().any(|g| g.id.starts_with("demo-")) {
+            return;
+        }
+        let kept: Vec<Game> = games.into_iter().enumerate().filter(|(i, g)| !g.id.starts_with("demo-") || running.contains(i)).map(|(_, g)| g).collect();
+        self.replace_games(kept);
     }
 
     /// Toutes les 20 s : un jeu installé ou désinstallé par un client de boutique apparaît / disparaît seul.
@@ -2807,8 +2883,16 @@ impl Shell {
     }
 
     /// Accueil sans action depuis 5 min (console devant, aucun jeu, aucun panneau) : l'écran s'assombrit
-    /// doucement (~1,5 s) ; `nav_with_sound` le rallume au premier bouton. Appelé à 25 Hz (`animate`).
+    /// doucement (~1,5 s) ; `nav_with_sound` le rallume au premier bouton, un mouvement de souris aussi.
+    /// Appelé toutes les 200 ms (`animate`, une fois sur deux).
     fn idle_tick(&self) {
+        thread_local! {
+            static CURSOR: Cell<(i32, i32)> = const { Cell::new((0, 0)) };
+        }
+        let mut p = windows::Win32::Foundation::POINT::default();
+        if unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut p) }.is_ok() && CURSOR.with(|c| c.replace((p.x, p.y))) != (p.x, p.y) {
+            self.last_activity.set(std::time::Instant::now());
+        }
         let idle = self.last_activity.get().elapsed() > Duration::from_secs(300)
             && self.fg_main.get()
             && self.ui.get_zone() <= 1
@@ -2816,7 +2900,7 @@ impl Shell {
             && self.ext_game.borrow().is_none()
             && self.splash_start.get().is_none();
         let d = self.dim.get();
-        let next = if idle { (d + 0.02).min(0.7) } else { 0.0 };
+        let next = if idle { (d + 0.1).min(0.7) } else { 0.0 };
         if next != d {
             self.dim.set(next);
             self.ui.set_dim(next);
@@ -2835,6 +2919,9 @@ impl Shell {
         if a == Nav::VolDown as i32 || a == Nav::VolUp as i32 {
             self.volume_step(if a == Nav::VolUp as i32 { 5 } else { -5 });
             return;
+        }
+        if a == Nav::Guide as i32 {
+            self.kb_abort();
         }
         let before = self.ui_state();
         timed("invoke_nav", || self.ui.invoke_nav(a));
@@ -3058,6 +3145,46 @@ fn timed_ms(what: &str, ms: f64) {
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(games_file().with_file_name("perf.log")) {
             let _ = writeln!(f, "{what} {ms:.0} ms");
         }
+    }
+}
+
+/// Restes d'anciennes versions dans `%LOCALAPPDATA%\Hearth`, que plus aucun code ne lit ni n'écrit
+/// (journaux de diagnostic, anciens sons générés, marqueur d'un assistant administrateur périmé), et
+/// clés de `settings.json` abandonnées. Liste fermée : rien d'autre n'est touché.
+fn cleanup_obsolete() {
+    let base = stores::base_dir();
+    let mut files: Vec<String> = ["guide.txt", "nav.log", "tick.log", "zone.log", "hotkey-got.log", "scale-debug.log", "helper-v2.done", "lang.log"].iter().map(|s| s.to_string()).collect();
+    files.extend((0..8).map(|i| format!("hotkey-{i}.log")));
+    for f in files {
+        let _ = std::fs::remove_file(base.join(f));
+    }
+    let _ = std::fs::remove_dir_all(base.join("sfx"));
+}
+
+/// Clés abandonnées de `settings.json` (sur le fil de l'interface, comme toutes ses écritures).
+fn cleanup_obsolete_prefs() {
+    let path = stores::base_dir().join("settings.json");
+    if let Some(mut v) = std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(s.trim_start_matches('\u{feff}')).ok()) {
+        if let Some(m) = v.as_object_mut() {
+            let n = m.len();
+            for k in ["helper_ver", "vigem_tried", "steam_overlay_off", "steam_input_off"] {
+                m.remove(k);
+            }
+            if m.len() != n {
+                prefs::write_atomic(&path, &v.to_string());
+            }
+        }
+    }
+}
+
+pub(crate) fn power_do(a: i32) {
+    match a {
+        0 => unsafe {
+            let _ = windows::Win32::System::Power::SetSuspendState(false, false, false);
+        },
+        1 => drop(Command::new("shutdown").args(["/r", "/t", "0"]).spawn()),
+        2 => drop(Command::new("shutdown").args(["/s", "/t", "0"]).spawn()),
+        _ => {}
     }
 }
 

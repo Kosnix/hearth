@@ -64,7 +64,10 @@ impl Shell {
                         }
                     }
                 });
-                Shell::schedule_next_hearth_check();
+                // Une seule chaîne de vérifications : une recherche manuelle n'en relance pas une autre.
+                if !manual {
+                    Shell::schedule_next_hearth_check();
+                }
             });
         });
     }

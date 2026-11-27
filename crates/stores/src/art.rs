@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::{gog, http, Game};
+use crate::{gog, http};
 
 fn assets_dir() -> PathBuf {
     PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("Hearth").join("assets")
@@ -131,12 +131,7 @@ fn shrink(data: Vec<u8>, ext: &'static str, (w, h): (u32, u32)) -> (Vec<u8>, &'s
     }
 }
 
-/// Télécharge les visuels manquants du jeu. Renvoie vrai si au moins un fichier a été ajouté (bloquant).
-pub fn ensure_art(game: &Game, sgdb_key: Option<&str>) -> bool {
-    ensure_art_for(&game.id, &game.title, &game.art, sgdb_key)
-}
-
-/// Idem pour un identifiant et des URLs quelconques (jeux possédés non installés).
+/// Télécharge les visuels manquants d'un jeu (installé ou seulement possédé). Renvoie vrai si au moins un fichier a été ajouté (bloquant).
 /// Avec une clé SteamGridDB, ses visuels remplacent une fois ceux de la boutique (qui restent en repli) ; marqueur `.sgdb` par jeu.
 pub fn ensure_art_for(id: &str, title: &str, art: &crate::Art, sgdb_key: Option<&str>) -> bool {
     let key = sgdb_key.filter(|k| !k.trim().is_empty());

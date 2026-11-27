@@ -5,7 +5,7 @@ Shell console de jeu pour Windows (Rust + windows-rs + Slint). Cahier des charge
 ## Façon de travailler
 - Répondre en français, de façon directe. Code léger, peu commenté mais clair ; pas d'abstraction spéculative.
 - Avant chaque phase : proposer un court plan technique et **attendre la validation**. Passer à la phase suivante seulement après compilation + test sur la machine.
-- Tenir `PHASES.md` (tableau + journal) et `README.md` à jour ; commits réguliers, poussés sur GitHub (`Kosnix/hearth`, privé).
+- Tenir `PHASES.md` (tableau + journal) et `README.md` à jour ; commits réguliers, poussés sur GitHub (`Kosnix/hearth`, public : les consoles vérifient les mises à jour sans connexion).
 - x86_64 uniquement pour l'instant (garder le code compatible ARM64).
 - **Travailler en autonomie** : compiler, déployer et tester soi-même sur cette machine (`tools/dev.ps1` : `Deploy`, `Press`, `Fg`, `Shot`, puis lire la capture). L'utilisateur ne tape rien sur ce PC et ne veut pas du terminal : pour lui poser une question, mettre la fenêtre Claude au premier plan (`Ask`) et attendre sa réponse. Il teste à la manette (DualSense) seulement quand c'est indispensable.
 - État courant et prochaines étapes : `docs/reprise.md`.
@@ -29,7 +29,7 @@ Hearth est installé comme shell de ce compte (`hearth.exe install`) : pas d'exp
 - Un jeu qui change la résolution (SDL/OpenGL `--fullscreen`) n'est pas signalé « D3D plein écran » : détecté via `EnumDisplaySettings` courant ≠ registre (`wm::exclusive_fullscreen`).
 - L'overlay du guide ne doit jamais prendre le focus (WS_EX_NOACTIVATE, affichage par `SetWindowPos` + `SWP_NOACTIVATE`) : sinon le jeu plein écran se réduit et clignote.
 - `games.json` peut contenir un BOM (PowerShell/Notepad) : il est retiré avant `serde_json`.
-- Slint : avec le design actuel, le rendu femtovg (GPU) ne se redessine plus après la première image sur l'Optiplex ; le shell force `SLINT_BACKEND=winit-software`. Les `@tr` ont pour contexte le nom du composant (voir `docs/reprise.md`).
+- Slint : avec le design actuel, le rendu femtovg (GPU) ne se redessine plus après la première image sur l'Optiplex ; le shell utilise Skia (`winit-skia`) par défaut, rendu logiciel via `HEARTH_BACKEND=winit-software` (imposé par le superviseur juste après un plantage). Les `@tr` ont pour contexte le nom du composant (voir `docs/reprise.md`).
 - Slint : un `animate` sur une propriété affectée depuis Rust (ou par une fonction appelée depuis Rust) n'a pas été joué (saut direct à la valeur finale) ; animations pilotées côté Rust par un `Timer` (ex. `Shell::zoom_to`). `HEARTH_ZOOM_MS` ralentit l'agrandissement de jaquette pour le vérifier en captures.
 - Winit initialise COM en STA : ne rien appeler de COM multithread sur le thread UI avant la création de la fenêtre (`RPC_E_CHANGED_MODE`, panique → `panic.log`).
 - Raccourcis de test = Ctrl+Alt+Maj+F1..F8 ; `Dev` lance le binaire de `targetelease` (voir `docs/reprise.md` : anciens processus administrateur).

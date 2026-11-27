@@ -167,11 +167,25 @@ impl Drop for Session {
     }
 }
 
+/// Argument de ligne de commande selon les règles de Windows (CommandLineToArgvW) : les `\` qui
+/// précèdent un `"` (ou le guillemet final) sont doublés, sinon `"C:\Jeux\X\"` perdait son guillemet.
 fn quote(s: &str) -> String {
     if !s.is_empty() && !s.contains([' ', '\t', '"']) {
         return s.to_string();
     }
-    format!("\"{}\"", s.replace('"', "\\\""))
+    let mut out = String::from("\"");
+    // `slashes` : nombre de `\` consécutifs déjà écrits juste avant la position courante.
+    let mut slashes = 0;
+    for c in s.chars() {
+        if c == '"' {
+            out.push_str(&"\\".repeat(slashes + 1));
+        }
+        slashes = if c == '\\' { slashes + 1 } else { 0 };
+        out.push(c);
+    }
+    out.push_str(&"\\".repeat(slashes));
+    out.push('"');
+    out
 }
 
 /// Processus propriétaire d'une fenêtre (0 si inconnu).
@@ -558,5 +572,8 @@ mod tests {
         assert_eq!(super::quote("a.exe"), "a.exe");
         assert_eq!(super::quote(r"C:\Program Files\x.exe"), r#""C:\Program Files\x.exe""#);
         assert_eq!(super::quote(""), r#""""#);
+        assert_eq!(super::quote(r"C:\Jeux X\"), r#""C:\Jeux X\\""#);
+        assert_eq!(super::quote(r#"a "b""#), r#""a \"b\"""#);
+        assert_eq!(super::quote(r#"a\"b"#), r#""a\\\"b""#);
     }
 }

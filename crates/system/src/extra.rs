@@ -98,10 +98,24 @@ pub mod bluetooth {
                 watchers.push(w);
             }
         }
-        std::thread::sleep(std::time::Duration::from_secs(secs));
+        // Par pas de 100 ms : `scan_stop` (appairage demandé pendant la recherche) l'interrompt.
+        SCAN_STOP.store(false, std::sync::atomic::Ordering::Relaxed);
+        for _ in 0..secs * 10 {
+            if SCAN_STOP.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
         for w in &watchers {
             let _ = w.Stop();
         }
+    }
+
+    static SCAN_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    /// Arrête la recherche en cours (`scan`) : on n'appaire pas pendant qu'elle tourne encore.
+    pub fn scan_stop() {
+        SCAN_STOP.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Manettes (DualSense, DualShock, Xbox…) à proximité et non appairées, en direct (voir `scan`).
@@ -247,8 +261,6 @@ pub mod about {
 }
 
 pub mod install {
-    use std::os::windows::process::CommandExt;
-
     /// Identifiant winget du client d'une boutique.
     pub fn client_id(store: &str) -> Option<&'static str> {
         match store {
@@ -274,19 +286,4 @@ pub mod install {
         }
     }
 
-    /// Installation directe (sans assistant) : Windows demande alors une confirmation à chaque fois.
-    #[allow(dead_code)]
-    pub fn winget_direct(id: &str) -> Result<(), String> {
-        let out = std::process::Command::new("winget")
-            .args(["install", "-e", "--id", id, "--silent", "--accept-package-agreements", "--accept-source-agreements"])
-            .creation_flags(0x0800_0000)
-            .output()
-            .map_err(|e| e.to_string())?;
-        if out.status.success() {
-            Ok(())
-        } else {
-            let text = String::from_utf8_lossy(&out.stdout);
-            Err(text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("échec").trim().to_string())
-        }
-    }
 }

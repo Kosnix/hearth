@@ -516,11 +516,43 @@ mod netsh {
         }
     }
 
+    /// Sécurité annoncée par le réseau (`show networks`) au format des profils WLAN :
+    /// (authentification, chiffrement). WPA2-AES par défaut, si le réseau n'est pas trouvé.
+    fn security_of(ssid: &str) -> (&'static str, &'static str) {
+        let out = run("show networks");
+        let mut cur = false;
+        let (mut auth, mut enc) = (String::new(), String::new());
+        for l in out.lines() {
+            let t = l.trim();
+            if t.starts_with("SSID") && !t.starts_with("BSSID") {
+                cur = value(t) == Some(ssid);
+            } else if cur {
+                let low = t.to_lowercase();
+                if low.starts_with("authentification") || low.starts_with("authentication") {
+                    auth = value(t).unwrap_or("").to_lowercase();
+                } else if low.starts_with("chiffrement") || low.starts_with("encryption") {
+                    enc = value(t).unwrap_or("").to_lowercase();
+                }
+            }
+        }
+        let a = if auth.contains("wpa3") {
+            "WPA3SAE"
+        } else if auth.contains("wpa2") || auth.is_empty() {
+            "WPA2PSK"
+        } else if auth.contains("wpa") {
+            "WPAPSK"
+        } else {
+            "WPA2PSK"
+        };
+        (a, if enc.contains("tkip") { "TKIP" } else { "AES" })
+    }
+
     pub fn connect(ssid: &str, password: Option<&str>) -> bool {
         clean_stale_wlan_profiles();
         if let Some(pw) = password {
+            let (auth, enc) = security_of(ssid);
             let xml = format!(
-                "<?xml version=\"1.0\"?><WLANProfile xmlns=\"http://www.microsoft.com/networking/WLAN/profile/v1\"><name>{n}</name><SSIDConfig><SSID><name>{n}</name></SSID></SSIDConfig><connectionType>ESS</connectionType><connectionMode>auto</connectionMode><MSM><security><authEncryption><authentication>WPA2PSK</authentication><encryption>AES</encryption><useOneX>false</useOneX></authEncryption><sharedKey><keyType>passPhrase</keyType><protected>false</protected><keyMaterial>{k}</keyMaterial></sharedKey></security></MSM></WLANProfile>",
+                "<?xml version=\"1.0\"?><WLANProfile xmlns=\"http://www.microsoft.com/networking/WLAN/profile/v1\"><name>{n}</name><SSIDConfig><SSID><name>{n}</name></SSID></SSIDConfig><connectionType>ESS</connectionType><connectionMode>auto</connectionMode><MSM><security><authEncryption><authentication>{auth}</authentication><encryption>{enc}</encryption><useOneX>false</useOneX></authEncryption><sharedKey><keyType>passPhrase</keyType><protected>false</protected><keyMaterial>{k}</keyMaterial></sharedKey></security></MSM></WLANProfile>",
                 n = escape(ssid),
                 k = escape(pw)
             );

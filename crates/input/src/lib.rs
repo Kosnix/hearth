@@ -43,6 +43,8 @@ pub enum Nav {
     VolUp,
     /// Triangle / Y : action secondaire de l'écran (ex. effacer la recherche de la Bibliothèque).
     Alt,
+    /// Carré / X : effacer (clavier virtuel).
+    Erase,
 }
 
 // Masques au format XInput (wButtons).
@@ -58,13 +60,14 @@ const B: u16 = 0x2000;
 const L1: u16 = 0x0100;
 const R1: u16 = 0x0200;
 const Y: u16 = 0x8000;
+const X: u16 = 0x4000;
 // Gâchettes : pas de bit dans wButtons ; bits des clics de stick, que la navigation n'utilise pas
 // (jamais relus tels quels depuis XInput, voir le masque de `XInput::read`).
 const L2: u16 = 0x0040;
 const R2: u16 = 0x0080;
 const DIRS: u16 = UP | DOWN | LEFT | RIGHT;
 
-const MAP: [(u16, Nav); 13] = [
+const MAP: [(u16, Nav); 14] = [
     (UP, Nav::Up),
     (DOWN, Nav::Down),
     (LEFT, Nav::Left),
@@ -78,6 +81,7 @@ const MAP: [(u16, Nav); 13] = [
     (L2, Nav::VolDown),
     (R2, Nav::VolUp),
     (Y, Nav::Alt),
+    (X, Nav::Erase),
 ];
 
 /// L'événement en cours de traitement vient d'une direction maintenue (répétition), pas d'une pression :
@@ -204,11 +208,8 @@ fn register_hotkeys() {
     let shift = if std::env::var_os("HEARTH_DEV_TOPMOST").is_some() { 12 } else { 0 };
     let mods = MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT;
     for (i, (vk, _)) in HOTKEYS.iter().enumerate() {
-        // Rattachés à la file de messages de ce thread (pas de fenêtre).
-        if let Err(e) = unsafe { RegisterHotKey(None, i as i32 + 1, mods, vk.0 as u32 + shift) } {
-            let dir = std::env::var("LOCALAPPDATA").unwrap_or_default();
-            let _ = std::fs::write(format!("{dir}\\Hearth\\hotkey-{i}.log"), format!("{e}"));
-        }
+        // Échec (raccourci déjà pris par une autre instance) : sans conséquence hors des tests.
+        let _ = unsafe { RegisterHotKey(None, i as i32 + 1, mods, vk.0 as u32 + shift) };
     }
 }
 
@@ -250,6 +251,7 @@ fn read_wgi() -> u16 {
             (GamepadButtons::LeftShoulder, L1),
             (GamepadButtons::RightShoulder, R1),
             (GamepadButtons::Y, Y),
+            (GamepadButtons::X, X),
         ] {
             if b.0 & flag.0 != 0 {
                 bits |= bit;
@@ -272,7 +274,7 @@ const SONY: u16 = 0x054C;
 fn read_sony() -> u16 {
     let mut bits = 0;
     for s in sony_states() {
-        for (i, bit) in [(1, A), (2, B), (9, START), (12, GUIDE), (4, L1), (5, R1), (3, Y), (6, L2), (7, R2)] {
+        for (i, bit) in [(1, A), (2, B), (9, START), (12, GUIDE), (4, L1), (5, R1), (3, Y), (0, X), (6, L2), (7, R2)] {
             if s.buttons[i] {
                 bits |= bit;
             }
@@ -362,7 +364,7 @@ impl XInput {
             self.connected[i] = unsafe { (self.get_state)(i as u32, &mut st) } == 0;
             if self.connected[i] {
                 let g = st.Gamepad;
-                bits |= g.wButtons.0 & (DIRS | START | GUIDE | A | B | L1 | R1 | Y);
+                bits |= g.wButtons.0 & (DIRS | START | GUIDE | A | B | L1 | R1 | Y | X);
                 if g.bLeftTrigger > 128 {
                     bits |= L2;
                 }
@@ -376,13 +378,19 @@ impl XInput {
     }
 }
 
+/// Direction du stick : seul l'axe dominant compte (un stick poussé un peu en biais déclenchait sinon
+/// deux directions à la fois, ex. monter à la barre du haut et changer d'icône d'un seul geste).
 fn stick(x: f64, y: f64) -> u16 {
-    let mut bits = 0;
-    if y > STICK { bits |= UP }
-    if y < -STICK { bits |= DOWN }
-    if x < -STICK { bits |= LEFT }
-    if x > STICK { bits |= RIGHT }
-    bits
+    if x.abs().max(y.abs()) <= STICK {
+        return 0;
+    }
+    if y.abs() >= x.abs() {
+        if y > 0.0 { UP } else { DOWN }
+    } else if x > 0.0 {
+        RIGHT
+    } else {
+        LEFT
+    }
 }
 
 /// Manette Sony choisie comme « principale » (Réglages > Manettes) : celle transmise aux jeux quand
@@ -399,6 +407,11 @@ pub(crate) fn primary_pad() -> Option<String> {
 
 /// Dernière manette utilisée (pour afficher les bons pictogrammes) : 0 Xbox/générique, 1 PlayStation.
 static LAST_PAD: AtomicU8 = AtomicU8::new(0);
+
+/// Une manette Sony est-elle branchée ? (le mode souris ne lit qu'elles)
+pub fn sony_connected() -> bool {
+    !hidpad::states().is_empty() || !sony_pads().is_empty()
+}
 
 pub fn last_pad() -> u8 {
     LAST_PAD.load(Ordering::Relaxed)
@@ -494,7 +507,8 @@ mod tests {
     fn stick_thresholds() {
         assert_eq!(stick(0.0, 0.0), 0);
         assert_eq!(stick(0.9, 0.0), RIGHT);
-        assert_eq!(stick(-0.9, 0.9), LEFT | UP);
+        assert_eq!(stick(-0.9, 0.6), LEFT);
+        assert_eq!(stick(0.55, -0.8), DOWN);
         assert_eq!(stick(0.3, -0.3), 0);
     }
 }

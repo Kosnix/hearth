@@ -90,8 +90,7 @@ fn system_lang() -> String {
 
 pub fn set(i: usize, save: bool) {
     LANG.store(i, Ordering::Relaxed);
-    let r = slint::select_bundled_translation(LANGS[i].0);
-    let _ = std::fs::write(file().with_file_name("lang.log"), format!("{r:?}"));
+    let _ = slint::select_bundled_translation(LANGS[i].0);
     if save {
         persist();
     }
@@ -151,6 +150,11 @@ pub fn music() -> bool {
     MUSIC.load(Ordering::Relaxed)
 }
 
+
+pub fn set_sfx(on: bool) {
+    SFX.store(on, Ordering::Relaxed);
+    set_pref("sfx", if on { "1" } else { "0" });
+}
 
 pub fn set_music(on: bool) {
     MUSIC.store(on, Ordering::Relaxed);

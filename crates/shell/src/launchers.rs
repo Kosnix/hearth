@@ -54,7 +54,7 @@ impl Launcher {
 impl Shell {
     /// Vrai si le jeu peut partir tout de suite. Sinon démarre son lanceur réduit, attend qu'il soit
     /// prêt (en arrière-plan) puis relance le jeu ; l'appelant abandonne ce lancement-ci.
-    pub fn launcher_ready(&self, i: usize, g: &Game) -> bool {
+    pub fn launcher_ready(&self, g: &Game) -> bool {
         let Some(l) = needed(g) else { return true };
         if l.running() {
             return true;
@@ -71,6 +71,7 @@ impl Shell {
             return true;
         }
         let procs = l.procs;
+        let id = g.id.clone();
         std::thread::spawn(move || {
             // Prêt = processus présent puis quelques secondes pour sa connexion. Ses fenêtres (Epic en
             // ouvre une malgré `-silent` au tout premier démarrage) sont réduites au passage.
@@ -89,7 +90,7 @@ impl Shell {
             let _ = slint::invoke_from_event_loop(move || {
                 with_shell(|s| {
                     s.launcher_wait.set(false);
-                    s.launch(i);
+                    s.resume_launch(&id);
                 })
             });
         });

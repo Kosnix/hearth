@@ -58,12 +58,6 @@ impl Policy {
             self.hidden.set(want_hidden);
         }
     }
-
-    pub fn show(&self) {
-        if self.hidden.replace(false) {
-            restore();
-        }
-    }
 }
 
 impl Default for Policy {

@@ -25,7 +25,7 @@ impl Shell {
         let games = self.games.borrow();
         let manual: Vec<&Game> = games.iter().filter(|g| g.store.is_empty() && !g.id.starts_with("demo-")).collect();
         if let Ok(s) = serde_json::to_string_pretty(&manual) {
-            let _ = std::fs::write(crate::games_file(), s);
+            crate::prefs::write_atomic(&crate::games_file(), &s);
         }
     }
 
@@ -156,19 +156,20 @@ impl Shell {
         std::thread::spawn(move || {
             let mut results = addgame::identify(&title);
             results.truncate(8);
-            let paths = fetch_all(&results);
-            let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.identify_ready(gen, title, results, paths)));
+            // Décodées ici, pas sur le fil de l'interface (8 images : il se figeait un instant).
+            let arts: Vec<Option<crate::imgload::Buf>> = fetch_all(&results).into_iter().map(|p| p.and_then(|p| crate::imgload::decode(&p, 300, 450))).collect();
+            let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.identify_ready(gen, title, results, arts)));
         });
     }
 
-    fn identify_ready(&self, gen: u32, title: String, results: Vec<stores::Offer>, paths: Vec<Option<PathBuf>>) {
+    fn identify_ready(&self, gen: u32, title: String, results: Vec<stores::Offer>, arts: Vec<Option<crate::imgload::Buf>>) {
         if self.pick_gen.get() != gen {
             return;
         }
         let mut items = vec![item(&tr("Saisir un autre nom…"), &format!("{} {title}", tr("Recherche actuelle :")), "\u{E70F}")];
-        for (o, p) in results.iter().zip(&paths) {
+        for (o, a) in results.iter().zip(&arts) {
             let mut it = item(&o.title, &format!("{} · {}", o.store, o.price), "\u{E7FC}");
-            it.art = p.as_ref().and_then(|p| slint::Image::load_from_path(p).ok()).unwrap_or_default();
+            it.art = a.as_ref().map(crate::imgload::image).unwrap_or_default();
             items.push(it);
         }
         items.push(item(&format!("{} « {title} » {}", tr("Utiliser"), tr("sans visuels")), "", "\u{E8FB}"));
@@ -223,6 +224,7 @@ impl Shell {
         let id = format!("custom-{:08x}", name_hash(&exe.to_string_lossy()));
         let exists = self.games.borrow().iter().any(|g| g.id == id);
         if !exists {
+            self.drop_demos();
             let game = Game { name: name.clone(), id: id.clone(), exe: exe.to_string_lossy().into_owned(), ..Default::default() };
             self.games.borrow_mut().push(game);
             self.save_games();

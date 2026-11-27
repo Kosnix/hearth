@@ -285,10 +285,8 @@ impl Shell {
     /// Copie les lignes des Réglages vers la fenêtre bureau (appelé aussi à chaque rafraîchissement d'une catégorie).
     pub fn desktop_sync_rows_with(&self, hint: &str) {
         let Some(w) = self.desktop.borrow().as_ref().map(|w| w.as_weak()) else { return };
-        let rows: Vec<SettingRow> = (0..self.settings.rows.row_count()).filter_map(|i| self.settings.rows.row_data(i)).map(|mut r| {
-            r.label = tr(r.label.as_str()).into();
-            r
-        }).collect();
+        // Libellés déjà traduits par les Réglages (`row`).
+        let rows: Vec<SettingRow> = (0..self.settings.rows.row_count()).filter_map(|i| self.settings.rows.row_data(i)).collect();
         self.desk_rows.set_vec(rows);
         if let Some(w) = w.upgrade() {
             w.set_shint(hint.into());
@@ -323,6 +321,7 @@ impl Shell {
             if self.games.borrow().iter().any(|g| g.id == id) {
                 continue;
             }
+            self.drop_demos();
             self.games.borrow_mut().push(Game { name: f.title.clone(), id: id.clone(), exe: f.exe.to_string_lossy().into_owned(), args: f.args, ..Default::default() });
             added.push((id, f.title));
         }
@@ -364,6 +363,7 @@ impl Shell {
         let id = format!("custom-{:08x}", crate::name_hash(&exe.to_string_lossy()));
         let exists = self.games.borrow().iter().any(|g| g.id == id);
         if !exists {
+            self.drop_demos();
             self.games.borrow_mut().push(Game { name: name.clone(), id: id.clone(), exe: exe.to_string_lossy().into_owned(), ..Default::default() });
             self.save_games();
         } else {

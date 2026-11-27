@@ -48,9 +48,10 @@ fn supervise() {
     let mut crashes: Vec<Instant> = Vec::new();
     loop {
         apply_staged();
-        // Après un plantage, on retente avec le rendu logiciel (au cas où le rendu GPU Skia serait en cause).
+        // Après un plantage récent (dans la minute), on retente avec le rendu logiciel (au cas où le rendu
+        // GPU Skia serait en cause) ; au-delà, retour au rendu normal (profil changé, retour du bureau…).
         let mut cmd = Command::new(&shell);
-        if !crashes.is_empty() {
+        if crashes.iter().any(|t| t.elapsed() < CRASH_WINDOW) {
             cmd.env("HEARTH_BACKEND", "winit-software");
         }
         let code = cmd.status().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
@@ -157,24 +158,6 @@ fn install() -> Result<String, String> {
     Ok(format!("Installé dans {}. Actif à la prochaine ouverture de session.", dst.display()))
 }
 
-/// Pilote ViGEmBus (manette Xbox virtuelle pour la DualSense) : installé avec Hearth s'il manque, une validation administrateur.
-#[allow(dead_code)]
-fn install_gamepad_driver() {
-    // Si l'assistant administrateur existe déjà, la console installe le pilote sans invite (au démarrage du shell).
-    let present = Command::new("sc").args(["query", "ViGEmBus"]).output().is_ok_and(|o| o.status.success())
-        || Command::new("schtasks").args(["/query", "/tn", ELEVATED_TASK]).output().is_ok_and(|o| o.status.success());
-    if present {
-        return;
-    }
-    let _ = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            "Start-Process winget -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList 'install','-e','--id','ViGEm.ViGEmBus','--silent','--accept-package-agreements','--accept-source-agreements'",
-        ])
-        .creation_flags(NO_WINDOW)
-        .status();
-}
 
 const ELEVATED_TASK: &str = "HearthElevated";
 /// Seuls ces paquets winget peuvent être installés par l'assistant administrateur.
@@ -303,6 +286,11 @@ fn data_dir() -> PathBuf {
 
 fn log(msg: &str) {
     let _ = fs::create_dir_all(data_dir());
+    // Au-delà de 512 Ko, l'ancien journal devient supervisor.old.log (un seul gardé) : pas de croissance sans fin.
+    let path = data_dir().join("supervisor.log");
+    if fs::metadata(&path).is_ok_and(|m| m.len() > 512 * 1024) {
+        let _ = fs::rename(&path, data_dir().join("supervisor.old.log"));
+    }
     if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(data_dir().join("supervisor.log")) {
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let _ = writeln!(f, "{t} {msg}");

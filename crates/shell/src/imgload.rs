@@ -6,7 +6,14 @@ use std::path::Path;
 pub type Buf = slint::SharedPixelBuffer<slint::Rgba8Pixel>;
 
 /// Décode `path` en l'inscrivant dans `max_w` × `max_h` (jamais agrandi).
+/// Fichier refusé avant décodage s'il est démesuré (plus de 16 384 px de côté) : le profil release
+/// arrête le programme à la moindre panique, un décodeur qui en déclencherait une fermerait Hearth
+/// (relancé ensuite par le superviseur) — rien ne peut la rattraper ici.
 pub fn decode(path: &Path, max_w: u32, max_h: u32) -> Option<Buf> {
+    let (w, h) = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?.into_dimensions().ok()?;
+    if w == 0 || h == 0 || w > 16_384 || h > 16_384 {
+        return None;
+    }
     let img = image::open(path).ok()?;
     let img = if img.width() > max_w || img.height() > max_h { img.resize(max_w, max_h, image::imageops::FilterType::Triangle) } else { img };
     let rgba = img.to_rgba8();
@@ -32,8 +39,8 @@ pub fn background() {
 
 static SLOTS: (std::sync::Mutex<u32>, std::sync::Condvar) = (std::sync::Mutex::new(0), std::sync::Condvar::new());
 
-/// Rend le jeton même si `f()` panique (image corrompue décodée par un crate tiers) : sans ça, deux
-/// paniques suffiraient à épuiser les 2 jetons pour de bon, plus aucune jaquette ne chargerait jamais.
+/// Rend le jeton à la fin de `f()`. (Utile seulement en profil debug : en release, `panic = "abort"`
+/// arrête tout le programme à la moindre panique, voir `decode`.)
 struct Slot;
 impl Drop for Slot {
     fn drop(&mut self) {

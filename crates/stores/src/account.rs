@@ -85,7 +85,7 @@ fn load_all() -> std::collections::BTreeMap<String, Session> {
 
 fn save_all(m: &std::collections::BTreeMap<String, Session>) {
     if let Some(enc) = serde_json::to_vec(m).ok().and_then(|b| dpapi::protect(&b)) {
-        let _ = std::fs::write(file(), enc);
+        crate::write_atomic(&file(), &enc);
     }
 }
 
@@ -418,17 +418,6 @@ pub fn install_uri(o: &Owned) -> Option<String> {
     }
 }
 
-
-#[doc(hidden)]
-pub fn epic_debug() -> String {
-    let Some(s) = session("Epic Games") else { return "pas de session".into() };
-    let url = "https://library-service.live.use1a.on.epicgames.com/library/api/public/items?includeMetadata=true&platform=Windows";
-    match http::get_status(url, &[("Authorization", &format!("bearer {}", s.access))]) {
-        Some((st, j)) => format!("HTTP {st}: {}", j.to_string().chars().take(600).collect::<String>()),
-        None => "pas de réponse".into(),
-    }
-}
-
 /// Code d'échange a usage unique pour ouvrir une session dans un autre client (Legendary), sans nouvelle saisie.
 pub fn epic_exchange_code() -> Option<String> {
     let mut s = session("Epic Games")?;
@@ -452,7 +441,7 @@ fn owned_cache_file() -> PathBuf {
 /// Mémorise la bibliothèque possédée : affichée aussitôt à l'ouverture, avant la mise à jour réseau.
 pub fn owned_cache_save(items: &[(Owned, String)]) {
     let v: Vec<serde_json::Value> = items.iter().map(|(o, id)| serde_json::json!({"store": o.store, "title": o.title, "key": o.key, "images": o.images, "id": id})).collect();
-    let _ = std::fs::write(owned_cache_file(), serde_json::Value::Array(v).to_string());
+    crate::write_atomic(&owned_cache_file(), serde_json::Value::Array(v).to_string().as_bytes());
 }
 
 pub fn owned_cache_load() -> Vec<(Owned, String)> {

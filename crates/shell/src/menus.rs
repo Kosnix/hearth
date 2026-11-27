@@ -25,13 +25,14 @@ pub enum Act {
     ShowHidden,
     UpdateYes(String),
     DeleteProfile(usize),
-    CancelDl(usize),
     SelfUpdate,
     ConnectStore(usize),
     ConfirmBtUnpair,
     OfferStore(Option<String>),
     OfferSort(i32),
     LibFilter(u8),
+    Power(i32),
+    CancelDlId(String),
     Cancel,
 }
 
@@ -146,10 +147,6 @@ impl Shell {
                 self.ui.set_zone(back);
                 self.profile_delete(i);
             }
-            Act::CancelDl(i) => {
-                self.ui.set_zone(back);
-                self.dl_cancel(i);
-            }
             Act::ConnectStore(i) => {
                 self.ui.set_zone(back);
                 self.connect_store(i);
@@ -165,6 +162,14 @@ impl Shell {
             Act::OfferStore(f) => self.set_offer_store_filter(f),
             Act::OfferSort(s) => self.set_offer_sort(s),
             Act::LibFilter(f) => self.set_lib_filter(f),
+            Act::Power(a) => {
+                self.ui.set_zone(back);
+                crate::power_do(a);
+            }
+            Act::CancelDlId(id) => {
+                self.ui.set_zone(back);
+                self.dl_cancel_id(&id);
+            }
             Act::ConfirmBtUnpair => {
                 self.ui.set_zone(back);
                 if let Some((id, name)) = self.bt_unpair_id.borrow_mut().take() {
@@ -216,6 +221,9 @@ impl Shell {
                 if e.tile > gid {
                     e.tile -= 1;
                 }
+            }
+            if let Some((t, t0)) = self.ext_pending.get().filter(|(t, _)| *t > gid) {
+                self.ext_pending.set(Some((t - 1, t0)));
             }
             if self.guide_tile.get() > gid {
                 self.guide_tile.set(self.guide_tile.get() - 1);
