@@ -86,8 +86,10 @@ impl Shell {
         });
         w.on_remove_game(|g| {
             with_shell(|s| {
-                let name = s.games.borrow().get(g as usize).map(|x| x.name.clone()).unwrap_or_default();
-                if crate::native::confirm(&format!("{} {name} ?", tr("Désinstaller"))) {
+                let (name, local) = s.games.borrow().get(g as usize).map(|x| (x.name.clone(), x.store.is_empty())).unwrap_or_default();
+                // Jeu ajouté à la main : seulement retiré de Hearth (ses fichiers restent), comme dans la console.
+                let verb = tr(if local { "Retirer de Hearth" } else { "Désinstaller" });
+                if crate::native::confirm(&format!("{verb} {name} ?")) {
                     s.uninstall(g as usize);
                 }
             })

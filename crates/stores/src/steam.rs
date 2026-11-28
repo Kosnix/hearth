@@ -112,7 +112,7 @@ impl Store for Steam {
     }
 
     fn featured(&self, limit: usize) -> Vec<Offer> {
-        let Some(j) = http::get_json("https://store.steampowered.com/api/featuredcategories?cc=fr&l=french", &[]) else { return vec![] };
+        let Some(j) = http::get_json(&format!("https://store.steampowered.com/api/featuredcategories?cc=fr&l={}", crate::steam_lang()), &[]) else { return vec![] };
         let mut seen = vec![];
         let mut out = vec![];
         for section in ["specials", "top_sellers", "new_releases"] {
@@ -144,7 +144,7 @@ impl Store for Steam {
     // L'API non-officielle `storesearch` ne pagine pas (`page`/`start` ignorés, vérifié) : un seul appel,
     // borné à ce qu'elle rend elle-même. "Voir plus" ne fera donc plus grandir Steam au-delà de ça.
     fn search(&self, query: &str, limit: usize) -> Vec<Offer> {
-        let url = format!("https://store.steampowered.com/api/storesearch/?term={}&l=french&cc=FR", crate::art::encode(query));
+        let url = format!("https://store.steampowered.com/api/storesearch/?term={}&l={}&cc=FR", crate::art::encode(query), crate::steam_lang());
         let Some(j) = http::get_json(&url, &[]) else { return vec![] };
         j["items"]
             .as_array()
@@ -185,7 +185,7 @@ fn offer(id: i64, title: &str, fin: i64, disc: i64, cur: &str) -> Offer {
 
 /// Description, genres, date et captures depuis l'API publique de la fiche.
 pub fn details(id: &str, d: &mut crate::Details) {
-    let Some(j) = http::get_json(&format!("https://store.steampowered.com/api/appdetails?appids={id}&l=french&cc=fr"), &[]) else { return };
+    let Some(j) = http::get_json(&format!("https://store.steampowered.com/api/appdetails?appids={id}&l={}&cc=fr", crate::steam_lang()), &[]) else { return };
     let data = &j[id]["data"];
     if let Some(t) = data["short_description"].as_str() {
         d.desc = t.to_string();
@@ -204,7 +204,9 @@ pub fn details(id: &str, d: &mut crate::Details) {
     if !meta.is_empty() {
         d.meta = meta.join("  ·  ");
     }
-    d.shots = data["screenshots"].as_array().into_iter().flatten().filter_map(|s| s["path_thumbnail"].as_str().map(String::from)).take(4).collect();
+    let shots: Vec<&serde_json::Value> = data["screenshots"].as_array().into_iter().flatten().filter(|s| s["path_thumbnail"].is_string()).take(4).collect();
+    d.shots = shots.iter().filter_map(|s| s["path_thumbnail"].as_str().map(String::from)).collect();
+    d.shots_full = shots.iter().map(|s| s["path_full"].as_str().or(s["path_thumbnail"].as_str()).unwrap_or("").to_string()).collect();
 }
 
 /// Compte connecté dans le client Steam (0 : client arrêté ou déconnecté).
@@ -296,7 +298,9 @@ fn patch_overlay(text: &str) -> Option<String> {
         }
         return Some(format!("{}\"EnableGameOverlay\"\t\t\"0\"{}", &text[..i], &text[line_end..]));
     }
-    let key = text.to_lowercase().find("\"system\"")?;
+    // Recherche sur le texte d'origine (une copie en minuscules peut changer la longueur de certains
+    // caractères, et ses positions tomber au milieu d'un caractère : plantage).
+    let key = ["\"system\"", "\"System\"", "\"SYSTEM\""].iter().filter_map(|k| text.find(k)).min()?;
     let brace = key + text[key..].find('{')?;
     Some(format!("{}\n\t\t\"EnableGameOverlay\"\t\t\"0\"{}", &text[..=brace], &text[brace + 1..]))
 }

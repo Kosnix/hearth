@@ -26,6 +26,19 @@ pub mod audio {
         Some((v * 100.0).round() as u32)
     }
 
+    /// Son coupé dans Windows (touche Muet…), indépendamment du niveau.
+    pub fn muted() -> bool {
+        endpoint().ok().and_then(|e| unsafe { e.GetMute() }.ok()).is_some_and(|m| m.as_bool())
+    }
+
+    pub fn set_mute(on: bool) {
+        if let Ok(e) = endpoint() {
+            unsafe {
+                let _ = e.SetMute(on, std::ptr::null());
+            }
+        }
+    }
+
     pub fn set_volume(pct: u32) {
         if let Ok(e) = endpoint() {
             unsafe {

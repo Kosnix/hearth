@@ -771,7 +771,11 @@ impl Shell {
         }
         let Some(g) = self.games.borrow().get(i).cloned() else { return };
         if g.install {
-            self.install_owned(&g);
+            // Un appui (ou un clic) ne doit pas lancer à lui seul un téléchargement de plusieurs Go.
+            self.menu_show(
+                format!("{} {} ?", tr("Installer"), g.name),
+                vec![(tr("Installer"), menus::Act::Install(g.id.clone())), (tr("Annuler"), menus::Act::Cancel)],
+            );
             return;
         }
         // Un jeu de boutique (pas encapsulé dans un job, suivi par sa fenêtre) est déjà en cours de
@@ -814,9 +818,18 @@ impl Shell {
         // Pare-feu : règle d'autorisation posée une fois par jeu (assistant administrateur), pour qu'aucune fenêtre Windows n'apparaisse en jeu.
         {
             let path = g.exe.clone();
+            // Jeux déjà autorisés retenus dans `firewall.txt` : plus de tâche administrateur à chaque lancement.
             std::thread::spawn(move || {
-                if system::admin::enabled() {
-                    let _ = system::admin::request(&format!("firewall {path}"));
+                let list = stores::base_dir().join("firewall.txt");
+                let known = std::fs::read_to_string(&list).unwrap_or_default();
+                if known.lines().any(|l| l.eq_ignore_ascii_case(&path)) || !system::admin::enabled() {
+                    return;
+                }
+                if system::admin::request(&format!("firewall {path}")).is_ok() {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&list) {
+                        let _ = writeln!(f, "{path}");
+                    }
                 }
             });
         }
@@ -971,6 +984,13 @@ impl Shell {
         }
         if input::osk_open() {
             self.pad.invoke_nav(nav as i32);
+            return;
+        }
+        // Jaquette en train de s'agrandir (avant l'écran de lancement) : Retour annule déjà le lancement.
+        if self.zoom.get() == 1 && self.splash_tile.get().is_some() {
+            if nav == Nav::Back {
+                self.cancel_launch();
+            }
             return;
         }
         if wm::find_window(SPLASH_TITLE).is_some_and(wm::is_visible) {
@@ -1367,7 +1387,7 @@ impl Shell {
         let w = self.ui.as_weak();
         std::thread::spawn(move || {
             let net = system::net::current().map_or(-1, |l| if l.wifi { 1 } else { 0 });
-            let vol = system::audio::volume().map_or(-1, |v| v as i32);
+            let vol = system::audio::volume().map_or(-1, |v| if system::audio::muted() { 0 } else { v as i32 });
             // Manette « principale » (Réglages > Manettes) en premier, pour la pastille de la barre d'état.
             let first = settings::ordered_pads(system::pads::list()).into_iter().next();
             let pad = first.as_ref().map_or(-1, |p| p.battery.map_or(101, |b| b as i32));
@@ -1494,14 +1514,13 @@ impl Shell {
         self.guide_tile.set(tile);
         let closing = self.running.borrow().iter().any(|r| r.tile == tile && r.closing) || self.ext_game.borrow().as_ref().is_some_and(|e| e.tile == tile && e.closing);
         self.guide.set_game(name.as_str().into());
-        let started = self.running.borrow().iter().find(|r| r.tile == tile).map(|r| r.started).or_else(|| self.ext_game.borrow().as_ref().filter(|e| e.tile == tile).map(|e| e.started));
-        self.guide.set_session(started.map(|t| session_label(t.elapsed().as_secs())).unwrap_or_default().into());
+        self.guide_session(tile);
         self.guide.set_art(self.tile_for(tile).map(|t| t.cover).unwrap_or_default());
         self.guide.set_closing(closing);
         self.guide.set_pad(self.ui.get_st_pad());
         self.guide.set_mouse_ok(input::sony_connected());
         self.guide.set_sel(0);
-        self.guide.set_volume(system::audio::volume().map_or(-1, |v| v as i32));
+        self.guide.set_volume(system::audio::volume().map_or(-1, |v| if system::audio::muted() { 0 } else { v as i32 }));
         if let Some(h) = wm::find_window(GUIDE_TITLE) {
             // La capture n'est posée qu'une fois l'overlay effectivement retrouvé : sinon elle resterait
             // bloquée à `true` sans aucun guide visible pour la relâcher (Retour), la manette virtuelle
@@ -1524,6 +1543,12 @@ impl Shell {
                 g.set_wifi(w);
             });
         });
+    }
+
+    /// Durée de la partie affichée dans le guide (recalculée chaque seconde tant qu'il est ouvert).
+    fn guide_session(&self, tile: usize) {
+        let started = self.running.borrow().iter().find(|r| r.tile == tile).map(|r| r.started).or_else(|| self.ext_game.borrow().as_ref().filter(|e| e.tile == tile).map(|e| e.started));
+        self.guide.set_session(started.map(|t| session_label(t.elapsed().as_secs())).unwrap_or_default().into());
     }
 
     fn guide_action(&self, item: i32, delta: i32) {
@@ -1577,7 +1602,10 @@ impl Shell {
             (3, d) if d != 0 && self.guide.get_volume() >= 0 => {
                 let v = (self.guide.get_volume() + d * 5).clamp(0, 100);
                 system::audio::set_volume(v as u32);
-                self.guide.set_volume(system::audio::volume().map_or(-1, |v| v as i32));
+                if d > 0 && system::audio::muted() {
+                    system::audio::set_mute(false);
+                }
+                self.guide.set_volume(system::audio::volume().map_or(-1, |v| if system::audio::muted() { 0 } else { v as i32 }));
             }
             (4, d) if d != 0 && self.guide.get_brightness() >= 0 => {
                 let b = (self.guide.get_brightness() + d * 10).clamp(0, 100);
@@ -1612,6 +1640,9 @@ impl Shell {
             self.refresh_status();
         }
         self.set_clock();
+        if wm::find_window(GUIDE_TITLE).is_some_and(wm::is_visible) {
+            self.guide_session(self.guide_tile.get());
+        }
         if self.ui.get_zone() == 8 {
             self.notif_times();
         }
@@ -1903,14 +1934,15 @@ impl Shell {
         let f = self.lib_filter.get();
         self.ui.set_lib_filter_label(if f == 0 { tr("Filtres") } else { tr(LIB_FILTERS[f as usize]) }.into());
         let title = match self.catalog_query.borrow().as_ref() {
-            Some(q) => format!("{} « {q} »", tr("Résultats pour")),
+            Some(q) => tr("Résultats pour « {q} »").replace("{q}", q),
             None => tr("À la une"),
         };
         self.ui.set_offers_title(title.into());
         if !self.boot.get() {
             self.refresh_onboard();
-            // Prix « Gratuit » traduits à la construction des cartes : « À la une » est reconstruit
-            // depuis le cache (aucune requête) ; une recherche en cours garde ses cartes.
+            // Textes des boutiques dans la nouvelle langue (descriptions, « Gratuit ») : « À la une »
+            // est relu ; une recherche en cours garde ses cartes jusqu'à la prochaine.
+            *self.featured.borrow_mut() = None;
             if self.catalog_started.get() && self.catalog_query.borrow().is_none() {
                 self.load_catalog(None);
             }
@@ -2016,7 +2048,7 @@ impl Shell {
         self.ui.set_osel(0);
         self.ui.set_brow(0);
         self.ui.set_offers_title(match &query {
-            Some(q) => format!("{} « {q} »", tr("Résultats pour")),
+            Some(q) => tr("Résultats pour « {q} »").replace("{q}", q),
             None => tr("À la une"),
         }.into());
         *self.catalog_query.borrow_mut() = query.clone();
@@ -2326,6 +2358,7 @@ impl Shell {
         self.ui.set_det_cover(self.offers.row_data(i).map(|r| r.art).unwrap_or_default());
         self.ui.set_det_hero(Default::default());
         self.det_shots.set_vec(vec![]);
+        self.ui.set_det_shots_full(Default::default());
         let rows: Vec<Deal> = o.deals.iter().map(|d| Deal { store: d.store.as_str().into(), price: if d.price == "Gratuit" { tr("Gratuit") } else { d.price.clone() }.into() }).collect();
         self.deals.set_vec(rows);
         *self.det_deals.borrow_mut() = o.deals.clone();
@@ -2337,7 +2370,20 @@ impl Shell {
             let d = stores::details(&o);
             let hero = stores::fetch_first(&o.heroes).and_then(|p| imgload::decode(&p, 1920, 1080));
             let shots: Vec<imgload::Buf> = d.shots.iter().filter_map(|u| stores::fetch_first(std::slice::from_ref(u))).filter_map(|p| imgload::decode(&p, 420, 240)).collect();
+            let full_urls = d.shots_full.clone();
             let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.details_ready(gen, d, hero, shots)));
+            // Captures en pleine taille pour la visionneuse (les vignettes, agrandies, étaient floues) :
+            // ensuite, sans retarder l'affichage de la fiche.
+            let full: Vec<imgload::Buf> = full_urls.iter().filter_map(|u| stores::fetch_first(std::slice::from_ref(u))).filter_map(|p| imgload::decode(&p, 1920, 1080)).collect();
+            if !full.is_empty() {
+                let _ = slint::invoke_from_event_loop(move || {
+                    with_shell(|s| {
+                        if s.det_gen.get() == gen {
+                            s.ui.set_det_shots_full(Rc::new(VecModel::from(full.iter().map(imgload::image).collect::<Vec<_>>())).into());
+                        }
+                    })
+                });
+            }
         });
     }
 
@@ -2605,8 +2651,8 @@ const LIB_FILTERS: [&str; 3] = ["Tous", "À installer", "Cachés"];
 /// Durée de la partie en cours pour le guide : « 12 min », « 1 h 05 ».
 fn session_label(secs: u64) -> String {
     match secs / 60 {
-        m if m < 60 => format!("{} min", m.max(1)),
-        m => format!("{} h {:02}", m / 60, m % 60),
+        m if m < 60 => format!("{} {}", m.max(1), tr("min")),
+        m => format!("{} {} {:02}", m / 60, tr("h"), m % 60),
     }
 }
 
@@ -2873,7 +2919,13 @@ impl Shell {
         let Some(v) = system::audio::volume() else { return };
         let v = (v as i32 + delta).clamp(0, 100);
         system::audio::set_volume(v as u32);
-        let v = system::audio::volume().map_or(v, |x| x as i32);
+        // Son coupé dans Windows : monter le volume le rétablit ; sinon la jauge affiche « Muet ».
+        let mut muted = system::audio::muted();
+        if muted && delta > 0 {
+            system::audio::set_mute(false);
+            muted = false;
+        }
+        let v = if muted { 0 } else { system::audio::volume().map_or(v, |x| x as i32) };
         self.ui.set_st_vol(v);
         self.ui.set_vol_osd(v);
         if i18n::sfx() {
@@ -3167,6 +3219,7 @@ fn cleanup_obsolete() {
         let _ = std::fs::remove_file(base.join(f));
     }
     let _ = std::fs::remove_dir_all(base.join("sfx"));
+    let _ = std::fs::remove_file(base.join("steamcmd").join("hearth-login.log"));
 }
 
 /// Clés abandonnées de `settings.json` (sur le fil de l'interface, comme toutes ses écritures).

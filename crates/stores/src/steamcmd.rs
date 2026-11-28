@@ -207,13 +207,10 @@ pub fn login(user: &str, pass: &str, code: Option<&str>) -> (Login, Option<Pendi
         Ok(x) => x,
         Err(e) => return (Login::Failed(e), None),
     };
-    let log = out.clone();
-    let r = match await_login(child, out, code.is_some(), offset, lock) {
+    match await_login(child, out, code.is_some(), offset, lock) {
         Login_::Done(l) => (l, None),
         Login_::Wait(p) => (Login::NeedCode, Some(p)),
-    };
-    let _ = std::fs::write(dir().join("hearth-login.log"), snapshot(&log, offset));
-    r
+    }
 }
 
 /// Envoie le code Steam Guard au même processus (même session : pas de second essai avec le mot de passe).

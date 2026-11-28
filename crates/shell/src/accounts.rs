@@ -22,13 +22,25 @@ impl Shell {
     /// Installe le client d'une boutique via winget (en tâche de fond, notifications de progression).
     pub fn account_install_client(&self, store: String) {
         let Some(id) = system::install::client_id(&store) else { return };
-        self.push_notif(&tr("Installation"), &format!("{} {store}…", tr("Installation du client")));
-        if !system::admin::enabled() {
-            self.push_notif(&tr("Autorisation administrateur"), &tr("Autorisation administrateur requise : acceptez la fenêtre Windows (une seule fois)"));
+        // Déjà en cours pour cette boutique (validé deux fois) : une seule installation.
+        thread_local! {
+            static INSTALLING: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
         }
+        if INSTALLING.with(|l| l.borrow().contains(&store)) {
+            return;
+        }
+        INSTALLING.with(|l| l.borrow_mut().push(store.clone()));
+        self.push_notif(&tr("Installation"), &format!("{} {store}…", tr("Installation du client")));
         std::thread::spawn(move || {
+            // Hors du fil de l'interface (`schtasks`) : prévient seulement si l'invite Windows va s'afficher.
+            if !system::admin::enabled() {
+                let _ = slint::invoke_from_event_loop(|| {
+                    with_shell(|s| s.push_notif(&tr("Autorisation administrateur"), &tr("Autorisation administrateur requise : acceptez la fenêtre Windows (une seule fois)")))
+                });
+            }
             let r = system::install::winget(id);
             let _ = slint::invoke_from_event_loop(move || {
+                INSTALLING.with(|l| l.borrow_mut().retain(|x| *x != store));
                 with_shell(|s| {
                     match r {
                         Ok(()) => {
@@ -136,6 +148,8 @@ impl Shell {
     pub fn login_cancel(&self) {
         LOGIN_GEN.fetch_add(1, Ordering::SeqCst);
         *self.login.borrow_mut() = None;
+        // Le QR code est aussi affiché dans la version bureau : il disparaît des deux côtés.
+        self.desktop_login_close();
     }
 
     fn login_done(&self, store: &str, name: &str) {
@@ -187,23 +201,21 @@ impl Shell {
             let mut items: Vec<(Owned, String)> = vec![];
             let mut failed = false;
             for store in connected {
-                let fetched: Vec<(Owned, String)> = account::library(store)
-                    .into_iter()
-                    .take(300)
-                    .map(|o| {
+                // Toute la bibliothèque (plus de plafond à 300 jeux : les jaquettes ne sont chargées
+                // qu'à l'affichage). Échec de lecture (réseau, session) ≠ compte réellement sans jeu.
+                match account::library(store) {
+                    Some(list) => items.extend(list.into_iter().map(|o| {
                         let slug = if store == "Steam" { "steam" } else { "epic" };
                         let id = format!("owned-{slug}-{}", o.key.replace([':', '/', '\\'], "_"));
                         (o, id)
-                    })
-                    .collect();
-                if fetched.is_empty() {
-                    failed = true;
-                    items.extend(old.iter().filter(|(o, _)| o.store == store).cloned());
-                } else {
-                    items.extend(fetched);
+                    })),
+                    None => {
+                        failed = true;
+                        items.extend(old.iter().filter(|(o, _)| o.store == store).cloned());
+                    }
                 }
             }
-            if !items.is_empty() && !failed {
+            if !failed {
                 account::owned_cache_save(&items);
             }
             let installed = stores::installed();

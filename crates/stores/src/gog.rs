@@ -32,9 +32,13 @@ impl Store for Gog {
             .filter_map(|id| {
                 let key = format!(r"{GAMES}\{id}");
                 let get = |n: &str| reg::string(HKEY_LOCAL_MACHINE, &key, n);
+                // Contenu additionnel (DLC) : rattaché à un jeu (`dependsOn`), pas un jeu à part.
+                if get("dependsOn").is_some_and(|d| !d.trim().is_empty()) {
+                    return None;
+                }
                 let title = get("gameName")?;
                 let exe = get("exe").or_else(|| get("launchCommand"))?;
-                let args = get("launchParam").map(|a| a.split_whitespace().map(String::from).collect()).unwrap_or_default();
+                let args = get("launchParam").map(|a| split_args(&a)).unwrap_or_default();
                 // Les images viennent de l'API du produit, résolues au téléchargement (cf. art.rs).
                 let art = Art { cover: vec![format!("gog-api:{id}:cover")], hero: vec![format!("gog-api:{id}:hero")], logo: vec![] };
                 Some(Game { id: format!("gog-{id}"), store: "GOG", title, launch: Launch::Exe { path: exe, args }, art })
@@ -61,7 +65,7 @@ fn catalog(params: &str, limit: usize) -> Vec<Offer> {
     let mut out = vec![];
     for page in 1..=limit.div_ceil(PAGE_SIZE) {
         let url = format!(
-            "https://catalog.gog.com/v1/catalog?limit={PAGE_SIZE}&page={page}&{params}&productType=in:game,pack&locale=fr-FR&countryCode=FR&currencyCode=EUR"
+            "https://catalog.gog.com/v1/catalog?limit={PAGE_SIZE}&page={page}&{params}&productType=in:game,pack&locale={}&countryCode=FR&currencyCode=EUR", crate::locale()
         );
         let Some(j) = http::get_json(&url, &[]) else { break };
         let products: Vec<&serde_json::Value> = j["products"].as_array().into_iter().flatten().collect();
@@ -112,4 +116,32 @@ pub fn resolve(spec: &str) -> Option<String> {
         _ => img["logo2x"].as_str().or_else(|| img["logo"].as_str())?,
     };
     Some(absolute(url))
+}
+
+/// Paramètres de lancement : séparés aux espaces, sauf entre guillemets (`-path "C:\Mes jeux"`).
+fn split_args(s: &str) -> Vec<String> {
+    let (mut out, mut cur, mut quoted) = (vec![], String::new(), false);
+    for c in s.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            c if c.is_whitespace() && !quoted => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn args() {
+        assert_eq!(super::split_args(r#"/a -path "C:\Mes jeux" b"#), vec!["/a", "-path", r"C:\Mes jeux", "b"]);
+    }
 }

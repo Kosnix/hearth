@@ -26,6 +26,10 @@ impl Store for Epic {
                 let j: serde_json::Value = serde_json::from_str(std::fs::read_to_string(e.path()).ok()?.trim_start_matches('\u{feff}')).ok()?;
                 let title = j["DisplayName"].as_str()?.to_string();
                 let app = j["AppName"].as_str()?.to_string();
+                // Installation pas terminée dans le lanceur Epic (téléchargement en cours) : pas encore jouable.
+                if j["bIsIncompleteInstall"].as_bool() == Some(true) {
+                    return None;
+                }
                 // Compléments (DLC) et jeux sans exécutable : ignorés.
                 let exe = j["LaunchExecutable"].as_str().filter(|x| !x.is_empty())?;
                 let dir = j["InstallLocation"].as_str()?;
@@ -46,7 +50,7 @@ impl Store for Epic {
     // Promotions gratuites publiques uniquement (pas de catalogue général sans compte) : liste déjà
     // bornée côté serveur, `limit` n'y change donc rien.
     fn featured(&self, _limit: usize) -> Vec<Offer> {
-        let url = "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=fr&country=FR&allowCountries=FR";
+        let url = &format!("https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale={}&country=FR&allowCountries=FR", crate::locale());
         let Some(j) = http::get_json(url, &[]) else { return vec![] };
         j["data"]["Catalog"]["searchStore"]["elements"].as_array().into_iter().flatten().filter_map(offer).collect()
     }
@@ -54,7 +58,7 @@ impl Store for Epic {
     fn search(&self, query: &str, limit: usize) -> Vec<Offer> {
         let body = serde_json::json!({
             "query": "query q($k:String,$c:String!,$l:String,$n:Int){Catalog{searchStore(keywords:$k,country:$c,locale:$l,count:$n,category:\"games/edition/base|bundles/games|editors\"){elements{title description productSlug urlSlug keyImages{type url} price(country:$c){totalPrice{discountPrice}}}}}}",
-            "variables": { "k": query, "c": "FR", "l": "fr", "n": limit }
+            "variables": { "k": query, "c": "FR", "l": crate::locale(), "n": limit }
         });
         let Some(j) = http::post_json("https://store.epicgames.com/graphql", &[], &body.to_string()) else { return vec![] };
         j["data"]["Catalog"]["searchStore"]["elements"].as_array().into_iter().flatten().filter_map(offer).take(limit).collect()

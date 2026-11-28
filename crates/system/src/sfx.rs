@@ -17,7 +17,7 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use windows::Win32::Media::Audio::{
-    waveOutClose, waveOutOpen, waveOutPrepareHeader, waveOutWrite, HWAVEOUT, WAVEFORMATEX, WAVEHDR, WAVE_FORMAT_PCM, WAVE_MAPPER,
+    waveOutClose, waveOutOpen, waveOutPrepareHeader, waveOutReset, waveOutUnprepareHeader, waveOutWrite, HWAVEOUT, WAVEFORMATEX, WAVEHDR, WAVE_FORMAT_PCM, WAVE_MAPPER,
 };
 
 const SR: usize = 44_100;
@@ -334,13 +334,34 @@ fn run(rx: Receiver<Cmd>) {
     let mut music: Option<MusicStream> = None;
     let (mut mgain, mut want) = (0.0f32, false);
     let mut mix = vec![0.0f32; FRAMES * 2];
+    let mut last_done = Instant::now();
     loop {
+        // Sortie audio disparue (casque, écran HDMI débranché…) : plus aucun tampon ne revient, Hearth
+        // restait muet jusqu'à son redémarrage. Au-delà de 2 s sans retour, la sortie est rouverte
+        // (sur le périphérique par défaut du moment).
+        if last_done.elapsed() > Duration::from_secs(2) {
+            unsafe {
+                waveOutReset(out.hwo);
+                for (hdr, _) in out.hdrs.iter_mut() {
+                    waveOutUnprepareHeader(out.hwo, &mut **hdr, size_of::<WAVEHDR>() as u32);
+                }
+                waveOutClose(out.hwo);
+            }
+            out = loop {
+                match open_out() {
+                    Some(o) => break o,
+                    None => std::thread::sleep(Duration::from_secs(2)),
+                }
+            };
+            last_done = Instant::now();
+        }
         let mut worked = false;
         for k in 0..out.hdrs.len() {
             if out.hdrs[k].0.dwFlags & WHDR_DONE == 0 {
                 continue;
             }
             worked = true;
+            last_done = Instant::now();
             while let Ok(c) = rx.try_recv() {
                 match c {
                     // Sons en retard (interface figée un instant) abandonnés : jamais de rafale.

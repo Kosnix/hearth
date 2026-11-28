@@ -84,6 +84,8 @@ pub struct Details {
     pub desc: String,
     pub meta: String,
     pub shots: Vec<String>,
+    /// Mêmes captures en pleine taille (visionneuse plein écran), dans le même ordre.
+    pub shots_full: Vec<String>,
 }
 
 pub trait Store: Send + Sync {
@@ -165,7 +167,7 @@ fn merge(lists: Vec<Vec<Offer>>) -> Vec<Offer> {
 
 /// Fiche détaillée : description, genres, captures (Steam à la demande ; sinon ce que la liste donnait).
 pub fn details(o: &Offer) -> Details {
-    let mut d = Details { desc: o.desc.clone(), meta: o.meta.clone(), shots: vec![] };
+    let mut d = Details { desc: o.desc.clone(), meta: o.meta.clone(), shots: vec![], shots_full: vec![] };
     for deal in &o.deals {
         if let Some(id) = deal.url.strip_prefix("https://store.steampowered.com/app/") {
             steam::details(id.trim_end_matches('/'), &mut d);
@@ -247,6 +249,45 @@ pub fn resolve_art(title: &str) -> Option<Art> {
     let pick = offers.iter().find(|o| norm(&o.title) == n).or_else(|| offers.iter().find(|o| norm(&o.title).starts_with(&n) || n.starts_with(&norm(&o.title))))?;
     let id = pick.url.trim_end_matches('/').rsplit('/').next()?.to_string();
     Some(steam::art(&id))
+}
+
+static LANG: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// Langue de l'interface (« fr », « en »…) : descriptions et recherches des boutiques dans cette langue
+/// (la région de prix, elle, reste la France).
+pub fn set_lang(code: &str) {
+    *LANG.lock().unwrap_or_else(|e| e.into_inner()) = code.to_string();
+}
+
+fn lang() -> String {
+    let l = LANG.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if l.is_empty() { "fr".into() } else { l }
+}
+
+/// Paramètre `l=` des API Steam.
+pub(crate) fn steam_lang() -> &'static str {
+    match lang().as_str() {
+        "fr" => "french",
+        "zh" => "schinese",
+        "es" => "spanish",
+        "ar" => "arabic",
+        "pt" => "brazilian",
+        "ru" => "russian",
+        _ => "english",
+    }
+}
+
+/// Locale des API Epic et GOG (`fr`, `en-US`…).
+pub(crate) fn locale() -> &'static str {
+    match lang().as_str() {
+        "fr" => "fr-FR",
+        "zh" => "zh-Hans",
+        "es" => "es-ES",
+        "ar" => "ar",
+        "pt" => "pt-BR",
+        "ru" => "ru-RU",
+        _ => "en-US",
+    }
 }
 
 /// Écrit `path` via un fichier temporaire puis un renommage (atomique sur NTFS) : une coupure pendant

@@ -150,19 +150,28 @@ impl Shell {
 
     /// Met un jeu Steam dans la file de téléchargement (connexion demandée au besoin).
     pub fn steam_install(&self, game_id: &str) {
+        self.steam_queue(game_id, true);
+    }
+
+    /// `notify` faux : ajout groupé (« Tout mettre à jour »), une seule notification pour l'ensemble.
+    fn steam_queue(&self, game_id: &str, notify: bool) {
         let Some(appid) = appid_of(game_id).map(String::from) else { return };
         if self.scmd_user().is_none() {
             self.scmd_begin(Some(game_id.to_string()));
             return;
         }
         if self.dl.borrow().iter().any(|d| d.appid == appid && matches!(d.state, DlState::Queued | DlState::Active)) {
-            self.push_notif(&tr("Téléchargements"), &tr("Déjà dans la file"));
+            if notify {
+                self.push_notif(&tr("Téléchargements"), &tr("Déjà dans la file"));
+            }
             return;
         }
         self.dl.borrow_mut().retain(|d| d.appid != appid);
         let name = self.name_of(&appid);
         self.dl.borrow_mut().push(Dl { appid, name: name.clone(), pct: 0.0, done: 0.0, total: 0.0, speed: 0.0, eta: None, t: None, state: DlState::Queued });
-        self.push_notif(&tr("Téléchargements"), &format!("{name} : {}", tr("ajouté à la file")));
+        if notify {
+            self.push_notif(&tr("Téléchargements"), &format!("{name} : {}", tr("ajouté à la file")));
+        }
         self.dl_next();
         self.dl_refresh();
     }
@@ -442,8 +451,13 @@ impl Shell {
             RowAct::Search => self.check_updates(true),
             RowAct::UpdateAll => {
                 let all = self.updates.borrow().clone();
+                let n = all.len();
                 for a in all {
-                    self.steam_install(&format!("steam-{a}"));
+                    self.steam_queue(&format!("steam-{a}"), false);
+                }
+                // Une seule notification pour le lot (pas une par jeu).
+                if self.scmd_user().is_some() {
+                    self.push_notif(&tr("Téléchargements"), &tr("{n} mises à jour ajoutées à la file").replace("{n}", &n.to_string()));
                 }
             }
             RowAct::Outdated(a) => self.steam_install(&format!("steam-{a}")),
@@ -468,11 +482,11 @@ fn active_status(d: &Dl) -> String {
         s.push_str(&format!("  ·  {} {}", format!("{mbs:.1}").replace('.', i18n::decimal_sep()), tr("Mo/s")));
         let left = d.eta.unwrap_or_else(|| ((d.total - d.done) / d.speed).max(0.0) as u64);
         let eta = if left < 60 {
-            format!("{left} s")
+            format!("{left} {}", tr("s"))
         } else if left < 3600 {
-            format!("{} min", left.div_ceil(60))
+            format!("{} {}", left.div_ceil(60), tr("min"))
         } else {
-            format!("{} h {:02} min", left / 3600, (left % 3600) / 60)
+            format!("{} {} {:02} {}", left / 3600, tr("h"), (left % 3600) / 60, tr("min"))
         };
         s.push_str(&format!("  ·  {eta} {}", tr("restant")));
     }

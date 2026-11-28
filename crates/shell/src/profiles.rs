@@ -205,15 +205,20 @@ impl Shell {
         let filter = format!("{}\0*.png;*.jpg;*.jpeg\0", tr("Images"));
         let Some(path) = crate::native::open_file(&tr("Choisir une photo"), &filter) else { return };
         let tmp = stores::base_dir().join("avatar-tmp.png");
-        if crate::native::square_image(&path, &tmp) {
-            if let Ok(img) = slint::Image::load_from_path(&tmp) {
-                self.ui.set_av_photo(img);
-                self.photo_fresh.set(true);
-                self.ui.set_avrow(3);
-            }
-        } else {
-            self.push_notif(&tr("Profils"), &tr("Image illisible"));
-        }
+        // Décodage et recadrage hors du fil de l'interface (une grande photo le figeait une seconde ou plus).
+        std::thread::spawn(move || {
+            let ok = crate::native::square_image(&path, &tmp);
+            let _ = slint::invoke_from_event_loop(move || {
+                crate::with_shell(|s| match slint::Image::load_from_path(&tmp).ok().filter(|_| ok) {
+                    Some(img) => {
+                        s.ui.set_av_photo(img);
+                        s.photo_fresh.set(true);
+                        s.ui.set_avrow(3);
+                    }
+                    None => s.push_notif(&tr("Profils"), &tr("Image illisible")),
+                })
+            });
+        });
     }
 
     /// Photo retenue au moment de valider : copie la photo importée dans le dossier du profil. Renvoie vrai s'il y a une photo.

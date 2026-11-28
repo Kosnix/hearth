@@ -16,6 +16,8 @@ pub enum Act {
     // réordonner la liste si un autre jeu est installé/désinstallé par une boutique) — un index capturé
     // à l'ouverture du menu agirait alors sur le jeu qui s'y trouve maintenant, pas celui affiché.
     Launch(String),
+    /// Installer un jeu possédé (sans nouvelle question : c'est déjà la confirmation).
+    Install(String),
     Rename(String),
     Reart(String),
     Hide(String),
@@ -56,7 +58,7 @@ impl Shell {
         let running = self.running.borrow().iter().any(|r| r.tile == gid);
         let mut v: Vec<(String, Act)> = vec![];
         if g.install {
-            v.push((tr("Installer"), Act::Launch(g.id.clone())));
+            v.push((tr("Installer"), Act::Install(g.id.clone())));
         } else {
             v.push((tr(if running { "Reprendre" } else { "Jouer" }), Act::Launch(g.id.clone())));
             v.push((tr("Modifier le nom"), Act::Rename(g.id.clone())));
@@ -108,6 +110,13 @@ impl Shell {
                 let Some(g) = self.gid_of(&id) else { return };
                 self.ui.set_zone(0);
                 self.launch(g);
+            }
+            Act::Install(id) => {
+                self.ui.set_zone(back);
+                let game = self.games.borrow().iter().find(|g| g.id == id).cloned();
+                if let Some(g) = game {
+                    self.install_owned(&g);
+                }
             }
             Act::Rename(id) => {
                 let Some(name) = self.games.borrow().iter().find(|g| g.id == id).map(|g| g.name.clone()) else { return };

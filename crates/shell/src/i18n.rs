@@ -91,6 +91,7 @@ fn system_lang() -> String {
 pub fn set(i: usize, save: bool) {
     LANG.store(i, Ordering::Relaxed);
     let _ = slint::select_bundled_translation(LANGS[i].0);
+    stores::set_lang(LANGS[i].0);
     if save {
         persist();
     }

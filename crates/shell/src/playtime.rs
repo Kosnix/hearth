@@ -65,7 +65,7 @@ pub fn label_in(map: &HashMap<String, Entry>, key: &str) -> String {
     if e.last == 0 {
         return String::new();
     }
-    let played = if e.secs >= 3600 { format!("{} h", e.secs / 3600) } else { format!("{} min", (e.secs / 60).max(1)) };
+    let played = if e.secs >= 3600 { format!("{} {}", e.secs / 3600, tr("h")) } else { format!("{} {}", (e.secs / 60).max(1), tr("min")) };
     let days = days_since(e.last);
     let when = match days {
         0 => tr("aujourd'hui"),
@@ -83,8 +83,8 @@ pub fn last(key: &str, map: &HashMap<String, Entry>) -> u64 {
 /// « 25h 24m » (ou « 12 min », « Jamais joué »).
 pub fn played_in(map: &HashMap<String, Entry>, key: &str) -> String {
     match map.get(key).map(|e| e.secs) {
-        Some(s) if s >= 3600 => format!("{}h {:02}m", s / 3600, (s % 3600) / 60),
-        Some(s) if s > 0 => format!("{} min", (s / 60).max(1)),
+        Some(s) if s >= 3600 => format!("{} {} {:02} {}", s / 3600, tr("h"), (s % 3600) / 60, tr("min")),
+        Some(s) if s > 0 => format!("{} {}", (s / 60).max(1), tr("min")),
         _ => tr("Jamais joué"),
     }
 }

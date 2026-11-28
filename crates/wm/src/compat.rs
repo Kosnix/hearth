@@ -68,7 +68,8 @@ fn set_key(text: &str, key: &str, value: &str) -> String {
     if text.ends_with('\n') {
         out.push(String::new());
     }
-    out.join("\n")
+    // Fins de ligne d'origine conservées (fichiers Windows en CRLF).
+    out.join(if text.contains("\r\n") { "\r\n" } else { "\n" })
 }
 
 fn expand_env(s: &str) -> String {
@@ -102,6 +103,7 @@ mod tests {
     fn ini_edit() {
         let t = "[Video]\nFullscreen = 1\nWidth=1920\n";
         assert_eq!(set_key(t, "fullscreen", "0"), "[Video]\nFullscreen=0\nWidth=1920\n");
+        assert_eq!(set_key("[V]\r\nFullscreen=1\r\n", "fullscreen", "0"), "[V]\r\nFullscreen=0\r\n");
     }
 
     #[test]

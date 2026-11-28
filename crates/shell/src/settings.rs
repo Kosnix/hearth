@@ -190,8 +190,8 @@ fn onoff(v: Option<bool>) -> String {
 fn minutes(m: Option<u32>) -> String {
     match m {
         Some(0) => tr("Jamais"),
-        Some(m) if m >= 60 => format!("{} h", m / 60),
-        Some(m) => format!("{m} min"),
+        Some(m) if m >= 60 => format!("{} {}", m / 60, tr("h")),
+        Some(m) => format!("{m} {}", tr("min")),
         None => "—".into(),
     }
 }
@@ -484,6 +484,9 @@ impl Settings {
                             s.revert = Some((prev, CONFIRM_SECS));
                             out = Outcome::DisplayChanged;
                         }
+                    } else {
+                        // Windows ne propose aucun mode (Bureau à distance, pilote générique…).
+                        s.message = tr("Aucun autre mode disponible");
                     }
                 }
                 (3, 0) => i18n::set_anim(!i18n::anim()),

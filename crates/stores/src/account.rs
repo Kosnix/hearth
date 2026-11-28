@@ -206,10 +206,11 @@ fn epic_refresh(s: &Session) -> Option<Session> {
     (st == 200).then(|| epic_session(&j)).flatten()
 }
 
-fn epic_library(s: &mut Session) -> Vec<Owned> {
+fn epic_library(s: &mut Session) -> Option<Vec<Owned>> {
     let base = "https://library-service.live.use1a.on.epicgames.com/library/api/public/items?includeMetadata=true&platform=Windows";
     let mut records: Vec<serde_json::Value> = vec![];
     let mut cursor = String::new();
+    let mut ok = false;
     for _ in 0..8 {
         let url = if cursor.is_empty() { base.to_string() } else { format!("{base}&cursor={cursor}") };
         let mut res = http::get_status(&url, &[("Authorization", &format!("bearer {}", s.access))]);
@@ -221,11 +222,15 @@ fn epic_library(s: &mut Session) -> Vec<Owned> {
             }
         }
         let Some((200, j)) = res else { break };
+        ok = true;
         records.extend(j["records"].as_array().cloned().unwrap_or_default());
         cursor = j["responseMetadata"]["nextCursor"].as_str().unwrap_or("").to_string();
         if cursor.is_empty() {
             break;
         }
+    }
+    if !ok {
+        return None;
     }
     // Jeux publics (pas les outils Unreal ni les doublons de plateforme), un par produit.
     let mut seen = std::collections::HashSet::new();
@@ -244,7 +249,7 @@ fn epic_library(s: &mut Session) -> Vec<Owned> {
             let token = &token;
             sc.spawn(move || {
                 for ((ns, cat, app), slot) in chunk.iter().zip(slots) {
-                    let meta = http::get_json(&format!("https://catalog-public-service-prod06.ol.epicgames.com/catalog/api/shared/namespace/{ns}/bulk/items?id={cat}&country=FR&locale=fr"), &[("Authorization", &format!("bearer {token}"))]);
+                    let meta = http::get_json(&format!("https://catalog-public-service-prod06.ol.epicgames.com/catalog/api/shared/namespace/{ns}/bulk/items?id={cat}&country=FR&locale={}", crate::locale()), &[("Authorization", &format!("bearer {token}"))]);
                     let Some(item) = meta.as_ref().and_then(|m| m[cat.as_str()].as_object()) else { continue };
                     let title = item.get("title").and_then(|t| t.as_str()).unwrap_or(app).to_string();
                     let images: Vec<String> = ["DieselGameBoxTall", "OfferImageTall", "Thumbnail"]
@@ -256,7 +261,7 @@ fn epic_library(s: &mut Session) -> Vec<Owned> {
             });
         }
     });
-    out.into_iter().flatten().collect()
+    Some(out.into_iter().flatten().collect())
 }
 
 // ---------- Steam (connexion par QR code) ----------
@@ -335,7 +340,7 @@ fn steam_refresh(s: &Session) -> Option<Session> {
     (st == 200).then(|| j["response"]["access_token"].as_str().map(|a| Session { access: a.to_string(), ..s.clone() })).flatten()
 }
 
-fn steam_library(s: &mut Session) -> Vec<Owned> {
+fn steam_library(s: &mut Session) -> Option<Vec<Owned>> {
     let url = |s: &Session| {
         format!(
             "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?access_token={}&steamid={}&include_appinfo=1&include_played_free_games=1&format=json",
@@ -351,8 +356,8 @@ fn steam_library(s: &mut Session) -> Vec<Owned> {
             res = http::get_status(&url(s), &[]);
         }
     }
-    let Some((200, j)) = res else { return vec![] };
-    j["response"]["games"]
+    let Some((200, j)) = res else { return None };
+    let games = j["response"]["games"]
         .as_array()
         .into_iter()
         .flatten()
@@ -361,7 +366,8 @@ fn steam_library(s: &mut Session) -> Vec<Owned> {
             let base = format!("https://cdn.cloudflare.steamstatic.com/steam/apps/{id}/");
             Some(Owned { store: "Steam", title: g["name"].as_str()?.to_string(), key: id.to_string(), images: vec![format!("{base}library_600x900_2x.jpg"), format!("{base}library_600x900.jpg"), format!("{base}header.jpg")] })
         })
-        .collect()
+        .collect();
+    Some(games)
 }
 
 // ---------- API commune ----------
@@ -388,12 +394,13 @@ pub fn poll(c: &Challenge) -> Poll {
 }
 
 /// Jeux possédés d'une boutique connectée (réseau, bloquant).
-pub fn library(store: &str) -> Vec<Owned> {
-    let Some(mut s) = session(store) else { return vec![] };
+/// `None` : bibliothèque illisible (réseau, session) ; `Some(vec![])` : compte réellement sans jeu.
+pub fn library(store: &str) -> Option<Vec<Owned>> {
+    let mut s = session(store)?;
     match store {
         "Epic Games" => epic_library(&mut s),
         "Steam" => steam_library(&mut s),
-        _ => vec![],
+        _ => Some(vec![]),
     }
 }
 
