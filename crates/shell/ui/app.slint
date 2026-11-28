@@ -29,6 +29,7 @@ export struct ProfileRow {
     photo: image,
     active: bool,
     add: bool,
+    played: string, // temps de jeu total du profil
 }
 
 export struct DlRow {
@@ -591,6 +592,8 @@ component NavKeys inherits FocusScope {
         if (e.text == Key.Menu || e.text == Key.Insert) { root.nav(7); return accept; }
         if (typing) {
             if (e.text == Key.Return) { root.typed("\n"); return accept; }
+            // Ctrl+Retour arrière : efface le dernier mot.
+            if (e.text == Key.Backspace && e.modifiers.control) { root.typed("\u{7f}"); return accept; }
             if (e.text == Key.Backspace) { root.typed("\u{8}"); return accept; }
             if (e.modifiers.control && (e.text == "v" || e.text == "V" || e.text == "\u{16}")) { root.typed("\u{16}"); return accept; }
             if (!e.modifiers.control && !e.modifiers.alt) { root.typed(e.text); return accept; }
@@ -672,6 +675,7 @@ export component App inherits Window {
     in-out property <int> menu-return: 0;
     // Fiche d'un jeu de la boutique.
     in property <string> det-title;
+    in property <bool> det-owned;
     in property <string> det-desc;
     in property <string> det-meta;
     in property <image> det-hero;
@@ -707,11 +711,19 @@ export component App inherits Window {
     in property <string> clock;
     in property <[string]> cats;
     in property <int> st-net: -1; // -1 hors ligne, 0 Ethernet, 1 Wi-Fi
+    in property <int> st-bars: 4; // force du signal Wi-Fi (1 à 4)
+    in property <int> st-pc: -1; // batterie du PC (%), -1 sans batterie
+    in property <bool> st-pc-charging;
     in property <int> st-vol: -1;
+    in property <bool> hearth-upd; // mise à jour de Hearth disponible
     in property <int> st-pad: -1; // -1 aucune, 0..100 batterie, 101 inconnue
     in property <bool> st-pad-charging: false; // DualSense uniquement (lecture HID brute)
     in-out property <bool> dlbtn: false; // focus sur le bouton Annuler du téléchargement sélectionné
     callback dl-cancel(int);
+    callback dl-retry(int);
+    callback dl-clear-done();
+    in property <bool> dl-done; // des lignes « Terminé » ou « Échec » à effacer
+    in property <string> dl-free; // espace libre du disque des jeux, sous le titre
     in property <bool> oobe-on;
     in property <bool> oobe-pad;
     in property <[SettingRow]> oobe-rows;
@@ -773,7 +785,7 @@ export component App inherits Window {
     callback nav-key(int); // touche du clavier physique (le shell joue les sons puis appelle nav)
     callback game-menu(int);
     callback add-menu();
-    callback power(int); // 0 veille, 1 redémarrer, 2 éteindre
+    callback power(int); // 0 veille, 1 redémarrer, 2 éteindre, 3 redémarrer Hearth
     callback desktop();
     callback search-open();
     callback lib-search-open();
@@ -853,7 +865,10 @@ export component App inherits Window {
             else if (a == 1) { dlbtn = false; dlsel = step(dlsel, dl-rows.length, 1); }
             else if (a == 3) { if (dl-rows.length > 0 && dl-rows[dlsel].cancel) { dlbtn = true; } }
             else if (a == 2) { dlbtn = false; }
-            else if (a == 7) { if (dl-rows.length > 0 && dl-rows[dlsel].cancel) { dl-cancel(dlsel); } }
+            // Options : annuler un téléchargement en cours, ou réessayer un téléchargement en échec (kind 4).
+            else if (a == 7) { if (dl-rows.length > 0 && dl-rows[dlsel].cancel) { dl-cancel(dlsel); } else if (dl-rows.length > 0 && dl-rows[dlsel].kind == 4) { dl-retry(dlsel); } }
+            // Triangle : retire les lignes terminées ou en échec.
+            else if (a == 14 && dl-done) { dl-clear-done(); }
             else if (a == 4 && dl-rows.length > 0) {
                 if (dl-rows[dlsel].cancel) { if (dlbtn) { dl-cancel(dlsel); } else { dlbtn = true; } }
                 else { dl-pick(dlsel); }
@@ -919,9 +934,11 @@ export component App inherits Window {
                 else if (a == 5) { sfocus = 0; }
             }
         } else if (zone == 2) {
-            if (a == 0) { pw = step(pw, 5, -1); }
-            else if (a == 1) { pw = step(pw, 5, 1); }
-            else if (a == 5 || (a == 4 && pw == 4)) { zone = 1; }
+            if (a == 0) { pw = step(pw, 6, -1); }
+            else if (a == 1) { pw = step(pw, 6, 1); }
+            else if (a == 5 || (a == 4 && pw == 5)) { zone = 1; }
+            // Relance la console seule (sans redémarrer le PC).
+            else if (a == 4 && pw == 4) { power(3); }
             else if (a == 4 && pw == 3) { desktop(); }
             else if (a == 4) { power(pw); }
         } else if (zone == 1) {
@@ -1684,7 +1701,8 @@ export component App inherits Window {
             width: 40px + (st-net < 0 ? offl.preferred-width + 12px : 0px);
             Text {
                 x: 0px;
-                text: st-net == 0 ? "\u{E839}" : "\u{E701}";
+                // Wi-Fi : icône selon la force du signal (1 à 4 barres).
+                text: st-net == 0 ? "\u{E839}" : st-bars <= 1 ? "\u{E872}" : st-bars == 2 ? "\u{E873}" : st-bars == 3 ? "\u{E874}" : "\u{E701}";
                 font-family: Theme.icons;
                 font-size: 34px;
                 vertical-alignment: center;
@@ -1717,6 +1735,25 @@ export component App inherits Window {
                 font-size: 24px;
                 vertical-alignment: center;
                 color: Theme.dim;
+            }
+        }
+        // Batterie du PC (portables seulement) : jauge Segoe 0 à 10, éclair en charge.
+        if st-pc >= 0: Rectangle {
+            width: 44px + pctxt.preferred-width;
+            Text {
+                x: 0px;
+                text: st-pc-charging ? "\u{E83E}" : ["\u{E850}", "\u{E851}", "\u{E852}", "\u{E853}", "\u{E854}", "\u{E855}", "\u{E856}", "\u{E857}", "\u{E858}", "\u{E859}", "\u{E85A}"][min(10, round(st-pc / 10))];
+                font-family: Theme.icons;
+                font-size: 30px;
+                vertical-alignment: center;
+                color: st-pc-charging ? Theme.ok : (st-pc <= 15 ? Theme.danger : Theme.text);
+            }
+            pctxt := Text {
+                x: 42px;
+                text: st-pc + "%";
+                font-size: 24px;
+                vertical-alignment: center;
+                color: st-pc <= 15 && !st-pc-charging ? Theme.danger : Theme.dim;
             }
         }
         if st-pad >= 0: Rectangle {
@@ -1819,7 +1856,8 @@ export component App inherits Window {
         spacing: 18px;
         for g[i] in ["\u{E710}", "\u{E896}", "bell", "\u{E713}", "\u{E7E8}"]: TopIcon {
             glyph: g;
-            badge: i == 1 ? dl-badge : (i == 2 ? unread : 0);
+            // Réglages : pastille quand une mise à jour de Hearth attend (Réglages > Mises à jour).
+            badge: i == 1 ? dl-badge : (i == 2 ? unread : (i == 3 && hearth-upd ? 1 : 0));
             selected: zone == 1 && top == i + 2;
             clicked => {
                 root.top = i + 2;
@@ -1953,6 +1991,16 @@ export component App inherits Window {
         background: #000000;
         opacity: dim;
     }
+    // Heure en grand sur l'écran assombri (apparaît avec le fondu).
+    if dim > 0: Text {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        text: clock;
+        font-size: 220px;
+        font-weight: 300;
+        color: #ffffff;
+        opacity: dim / 0.7 * 0.55;
+    }
 
     // --- Fiche d'un jeu de la boutique : description, captures, prix par boutique ---
     if under == 7: Rectangle {
@@ -2024,7 +2072,8 @@ export component App inherits Window {
             x: 564px;
             y: 270px;
             width: parent.width - 660px;
-            text: det-meta;
+            // Jeu déjà dans la bibliothèque : dit aussi dans la fiche (comme sur la jaquette).
+            text: (det-owned ? @tr("Possédé") + "  ·  " : "") + det-meta;
             font-size: 26px;
             color: Theme.dim;
             overflow: elide;
@@ -2149,7 +2198,7 @@ export component App inherits Window {
         Text {
             x: 84px;
             y: 240px;
-            text: @tr("Mises à jour et téléchargements des jeux installés par Hearth");
+            text: @tr("Mises à jour et téléchargements des jeux installés par Hearth") + (dl-free != "" ? "  ·  " + dl-free : "");
             font-size: 28px;
             color: Theme.dim;
         }
@@ -2241,6 +2290,8 @@ export component App inherits Window {
             Hint { btn: 0; label: @tr("Valider"); }
             Hint { btn: 1; label: @tr("Retour"); }
             if dl-rows.length > 0 && dl-rows[dlsel].cancel: Hint { btn: 3; label: @tr("Annuler le téléchargement"); }
+            if dl-rows.length > 0 && dl-rows[dlsel].kind == 4: Hint { btn: 3; label: @tr("Réessayer"); }
+            if dl-done: Hint { btn: 4; label: @tr("Effacer les terminés"); }
         }
     }
 
@@ -2303,9 +2354,9 @@ export component App inherits Window {
                 font-weight: 600;
                 color: i == pfsel ? Theme.on-accent : Theme.text;
             }
-            if p.active: Text {
+            if p.active || p.played != "": Text {
                 x: parent.width - self.width - 36px;
-                text: @tr("Profil actif");
+                text: p.active ? @tr("Profil actif") + (p.played != "" ? "  ·  " + p.played : "") : p.played;
                 font-size: 26px;
                 color: i == pfsel ? Theme.on-accent : Theme.text;
             }
@@ -2452,10 +2503,10 @@ export component App inherits Window {
         }
         Rectangle {
             width: 460px;
-            height: 5 * 76px + 32px;
+            height: 6 * 76px + 32px;
             border-radius: Theme.r-lg;
             background: Theme.panel;
-            for item[i] in [@tr("Mettre en veille"), @tr("Redémarrer"), @tr("Éteindre"), @tr("Bureau Windows"), @tr("Annuler")]: Rectangle {
+            for item[i] in [@tr("Mettre en veille"), @tr("Redémarrer"), @tr("Éteindre"), @tr("Bureau Windows"), @tr("Redémarrer Hearth"), @tr("Annuler")]: Rectangle {
                 x: 16px;
                 y: 16px + i * 76px;
                 width: parent.width - 32px;
@@ -2468,7 +2519,7 @@ export component App inherits Window {
                     font-size: Theme.t-callout;
                     color: i == pw ? Theme.on-accent : Theme.text;
                 }
-                if i < 4 && i != pw && i + 1 != pw: Rectangle {
+                if i < 5 && i != pw && i + 1 != pw: Rectangle {
                     x: 24px;
                     y: parent.height;
                     width: parent.width - 48px;
@@ -3397,6 +3448,7 @@ export component GuideMenu inherits Window {
     in property <image> art;
     in property <bool> closing;
     in property <string> session; // durée de la partie en cours, ex. « 1 h 05 »
+    in property <string> info; // boutique et temps de jeu total du jeu
     in property <int> volume: -1; // %, -1 = indisponible
     in property <int> brightness: -1;
     in property <int> wifi: -1; // -1 indisponible, 0 coupé, 1 actif
@@ -3405,7 +3457,7 @@ export component GuideMenu inherits Window {
     in property <string> clock; // heure, en haut à droite
     in property <int> pad: -1; // batterie de la manette (%), -1 inconnue
     in property <bool> mouse-ok: true; // mode souris disponible (manette Sony branchée)
-    property <int> count: mouse-ok ? 7 : 6;
+    property <int> count: mouse-ok ? 8 : 7;
     in-out property <int> sel: 0;
     // item (0 reprendre, 1 accueil, 2 fermer, 3 volume, 4 luminosité, 5 wifi ; -1 = fermer le menu),
     // delta : 0 valider, -1/+1 gauche/droite
@@ -3477,7 +3529,10 @@ export component GuideMenu inherits Window {
         x: 140px;
         y: 96px;
         // « En cours · 1 h 05 » : depuis combien de temps on joue (durée calculée côté Rust).
-        text: session == "" ? @tr("En cours") : @tr("En cours") + "  ·  " + session;
+        // Partie en cours, puis boutique et temps de jeu total (`info`).
+        text: (session == "" ? @tr("En cours") : @tr("En cours") + "  ·  " + session) + (info != "" ? "  ·  " + info : "");
+        width: parent.width - 140px - 190px;
+        overflow: elide;
         font-size: 20px;
         color: Theme.dim;
     }
@@ -3554,13 +3609,20 @@ export component GuideMenu inherits Window {
             selected: sel == 5;
             clicked => { root.sel = 5; root.action(5, 0); }
         }
+        GuideRow {
+            glyph: "\u{E722}";
+            label: @tr("Capture d'écran");
+            value: @tr("Images › Hearth");
+            selected: sel == 6;
+            clicked => { root.sel = 6; root.action(6, 0); }
+        }
         // Mode souris : lu sur les manettes Sony seulement (sinon la manette paraîtrait morte).
         if mouse-ok: GuideRow {
             glyph: "\u{E765}";
             label: @tr("Souris et clavier");
             value: "L3 + R3";
-            selected: sel == 6;
-            clicked => { root.sel = 6; root.action(6, 0); }
+            selected: sel == 7;
+            clicked => { root.sel = 7; root.action(7, 0); }
         }
     }
     // Notifications.
@@ -3683,6 +3745,17 @@ export component Splash inherits Window {
         font-size: 32px;
         font-weight: 700;
         color: Theme.text;
+        opacity: launch-t;
+    }
+    // Astuce discrète en bas : le menu du jeu s'ouvre avec le bouton guide.
+    Text {
+        x: 0px;
+        y: parent.height - 120px;
+        width: parent.width;
+        horizontal-alignment: center;
+        text: @tr("Astuce : le bouton PS (ou Xbox) ouvre le menu du jeu");
+        font-size: 24px;
+        color: Theme.dim;
         opacity: launch-t;
     }
     // Léger voile pour que la roue reste visible sur n'importe quel fond.
@@ -3888,6 +3961,7 @@ export component DesktopWindow inherits Window {
     callback install(int);
     callback hide-game(int);
     callback remove-game(int);
+    callback open-folder(int);
     callback query-changed(string);
     callback filter-changed(int);
     callback add-local();
@@ -4032,7 +4106,7 @@ export component DesktopWindow inherits Window {
                         Text {
                             x: 76px;
                             y: 12px;
-                            width: parent.width - 76px - 360px;
+                            width: parent.width - 76px - 450px;
                             text: g.name;
                             font-size: 20px;
                             font-weight: 700;
@@ -4053,6 +4127,15 @@ export component DesktopWindow inherits Window {
                             primary: true;
                             label: g.running ? @tr("Reprendre") : (g.installed ? @tr("Jouer") : @tr("Installer"));
                             clicked => { if (g.installed) { root.play(g.gid); } else { root.install(g.gid); } }
+                        }
+                        // Ouvre l'Explorateur sur le dossier du jeu (fichier sélectionné).
+                        DeskButton {
+                            x: parent.width - 430px;
+                            y: 16px;
+                            width: 80px;
+                            visible: g.installed;
+                            label: @tr("Dossier");
+                            clicked => { root.open-folder(g.gid); }
                         }
                         DeskButton {
                             x: parent.width - 180px;

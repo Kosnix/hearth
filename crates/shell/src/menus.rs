@@ -31,11 +31,14 @@ pub enum Act {
     ShowHidden,
     UpdateYes(String),
     DeleteProfile(usize),
+    ProfileRename(String),
+    ProfileAvatar(String),
     SelfUpdate,
     ConnectStore(usize),
     ConfirmBtUnpair,
     OfferStore(Option<String>),
     OfferSort(i32),
+    OfferFree,
     LibFilter(u8),
     Power(i32),
     CancelDlId(String),
@@ -82,7 +85,14 @@ impl Shell {
             v.push((tr(if g.store.is_empty() { "Retirer de Hearth" } else { "Désinstaller" }), Act::Uninstall(g.id.clone())));
         }
         v.push((tr("Annuler"), Act::Cancel));
-        self.menu_show(g.name, v);
+        // Titre : nom, temps de jeu et dernière partie (jeu installé déjà lancé).
+        let pt = crate::playtime::load();
+        let key = crate::playtime_key(&g);
+        let title = match crate::playtime::last_in(&pt, &key) {
+            last if !g.install && last != "—" => format!("{}  ·  {}  ·  {} {last}", g.name, crate::playtime::played_in(&pt, &key), tr("dernière partie")),
+            _ => g.name,
+        };
+        self.menu_show(title, v);
     }
 
     /// Une mise à jour est disponible : on demande à l'utilisateur.
@@ -180,6 +190,8 @@ impl Shell {
             }
             Act::AddGame => self.add_open(),
             Act::ShowHidden => self.show_hidden(),
+            Act::ProfileRename(id) => self.profile_rename_open(&id),
+            Act::ProfileAvatar(id) => self.profile_avatar_open(&id),
             Act::DeleteProfile(i) => {
                 self.ui.set_zone(back);
                 self.profile_delete(i);
@@ -198,6 +210,11 @@ impl Shell {
             }
             Act::OfferStore(f) => self.set_offer_store_filter(f),
             Act::OfferSort(s) => self.set_offer_sort(s),
+            Act::OfferFree => {
+                self.offer_free.set(!self.offer_free.get());
+                self.reveal_offers();
+                self.open_offer_filters();
+            }
             Act::LibFilter(f) => self.set_lib_filter(f),
             Act::Power(a) => {
                 self.ui.set_zone(back);

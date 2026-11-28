@@ -152,6 +152,24 @@ pub fn music() -> bool {
 }
 
 
+/// Minutes sans activité avant d'assombrir l'accueil (0 : jamais). Lu une fois, gardé en mémoire.
+static DIM_MIN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(u32::MAX);
+
+pub fn dim_min() -> u32 {
+    let v = DIM_MIN.load(Ordering::Relaxed);
+    if v != u32::MAX {
+        return v;
+    }
+    let v = pref("dim_min").and_then(|s| s.parse().ok()).unwrap_or(5);
+    DIM_MIN.store(v, Ordering::Relaxed);
+    v
+}
+
+pub fn set_dim_min(m: u32) {
+    DIM_MIN.store(m, Ordering::Relaxed);
+    set_pref("dim_min", &m.to_string());
+}
+
 pub fn set_sfx(on: bool) {
     SFX.store(on, Ordering::Relaxed);
     set_pref("sfx", if on { "1" } else { "0" });

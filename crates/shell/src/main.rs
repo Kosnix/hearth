@@ -128,6 +128,9 @@ struct Shell {
     rename_id: RefCell<Option<String>>,
     /// Jeu dont on saisit les arguments de lancement au clavier virtuel.
     kb_args: RefCell<Option<String>>,
+    /// Profil existant dont on modifie le nom (clavier) ou l'avatar (éditeur).
+    profile_edit: RefCell<Option<String>>,
+    avatar_for: RefCell<Option<String>>,
     scmd_stage: Cell<u8>,
     steam_wait: Cell<bool>,
     /// Un lanceur de boutique (Epic, GOG Galaxy) démarre avant un jeu (voir `launchers`).
@@ -215,6 +218,8 @@ struct Shell {
     offer_filter: RefCell<Option<String>>,
     /// 0 pertinence (ordre renvoyé par les boutiques), 1 nom A→Z, 2 prix croissant, 3 prix décroissant.
     offer_sort: Cell<i32>,
+    /// Filtre « Gratuits uniquement » de la Boutique.
+    offer_free: Cell<bool>,
     featured: RefCell<Option<Featured>>,
     store_status: RefCell<Vec<(String, bool, usize)>>,
     catalog_started: Cell<bool>,
@@ -234,6 +239,9 @@ struct Shell {
     guess_title: RefCell<String>,
     notifs: Rc<VecModel<Notif>>,
     toast_gen: Cell<u32>,
+    /// Titre de la bannière affichée et nombre de notifications regroupées dessous.
+    toast_key: RefCell<String>,
+    toast_n: Cell<u32>,
     splash_timer: slint::Timer,
     splash_start: Cell<Option<std::time::Instant>>,
     splash_uri: Cell<bool>,
@@ -337,6 +345,8 @@ fn main() -> Result<(), slint::PlatformError> {
         menu_acts: RefCell::new(vec![]),
         rename_id: RefCell::new(None),
         kb_args: RefCell::new(None),
+        profile_edit: RefCell::new(None),
+        avatar_for: RefCell::new(None),
         scmd_stage: Cell::new(0),
         steam_wait: Cell::new(false),
         launcher_wait: Cell::new(false),
@@ -403,6 +413,7 @@ fn main() -> Result<(), slint::PlatformError> {
         offer_store_names: RefCell::new(vec![]),
         offer_filter: RefCell::new(None),
         offer_sort: Cell::new(0),
+        offer_free: Cell::new(false),
         featured: RefCell::new(Default::default()),
         store_status: RefCell::new(vec![]),
         catalog_started: Cell::new(false),
@@ -422,6 +433,8 @@ fn main() -> Result<(), slint::PlatformError> {
         guess_title: RefCell::new(String::new()),
         notifs: Rc::new(VecModel::default()),
         toast_gen: Cell::new(0),
+        toast_key: RefCell::new(String::new()),
+        toast_n: Cell::new(0),
         splash_timer: slint::Timer::default(),
         splash_start: Cell::new(None),
         splash_uri: Cell::new(false),
@@ -466,6 +479,9 @@ fn main() -> Result<(), slint::PlatformError> {
     shell.refresh_lang();
     shell.apply_font();
     shell.ui.set_rows(shell.settings.rows.clone().into());
+    if let Some(c) = i18n::pref("settings_cat").and_then(|c| c.parse::<i32>().ok()).filter(|c| (0..settings::cats().len() as i32).contains(c)) {
+        shell.ui.set_cat(c);
+    }
     shell.ui.set_offers(shell.offers.clone().into());
     shell.ui.set_notifs(shell.notifs.clone().into());
     let s = shell.clone();
@@ -754,6 +770,14 @@ fn main() -> Result<(), slint::PlatformError> {
         let s = shell.clone();
         move || s.avatar_photo()
     });
+    shell.ui.on_dl_retry({
+        let s = shell.clone();
+        move |i| s.dl_retry(i as usize)
+    });
+    shell.ui.on_dl_clear_done({
+        let s = shell.clone();
+        move || s.dl_clear_done()
+    });
     shell.ui.on_dl_cancel({
         let s = shell.clone();
         move |i| s.dl_cancel_ask(i as usize)
@@ -877,12 +901,15 @@ impl Shell {
                 }
                 self.rebuild();
             }
-            Err(_e) => {
+            Err(e) => {
                 self.hide_splash();
                 if self.zoom.get() != 0 {
                     self.zoom_out();
                 }
                 system::sfx::play(system::sfx::Sfx::Error);
+                // Dire pourquoi (exécutable déplacé ou supprimé, droits…) plutôt qu'un simple son.
+                let why = if Path::new(&exe_path).exists() { e.message() } else { tr("fichier introuvable") };
+                self.push_notif(&g.name, &format!("{} ({why})", tr("Impossible de lancer le jeu")));
             }
         }
     }
@@ -900,6 +927,7 @@ impl Shell {
         let label = tr(match a {
             0 => "Mettre en veille quand même",
             1 => "Redémarrer quand même",
+            3 => "Redémarrer Hearth quand même",
             _ => "Éteindre quand même",
         });
         self.menu_show(format!("{what}."), vec![(label, menus::Act::Power(a)), (tr("Annuler"), menus::Act::Cancel)]);
@@ -1090,6 +1118,10 @@ impl Shell {
     }
 
     fn open_cat(&self, cat: i32) {
+        // Dernière catégorie ouverte retrouvée au prochain démarrage.
+        if !self.oobe_active() {
+            i18n::set_pref("settings_cat", &cat.to_string());
+        }
         let hint = self.settings.open(cat);
         self.ui.set_shint(hint.into());
         if cat == 6 {
@@ -1319,7 +1351,7 @@ impl Shell {
         match k {
             settings::Kb::Continue => self.kb_refresh(),
             settings::Kb::Cancel => {
-                let back = if self.kb_profile.replace(false) {
+                let back = if self.kb_profile.replace(false) || self.profile_edit.borrow_mut().take().is_some() {
                     11
                 } else if self.kb_search.replace(false) | self.kb_lib_search.replace(false) {
                     0
@@ -1347,7 +1379,10 @@ impl Shell {
                     self.oobe_profile_name(text);
                     return;
                 }
-                if self.kb_profile.replace(false) {
+                let profile_edit = self.profile_edit.borrow_mut().take();
+                if let Some(id) = profile_edit {
+                    self.profile_renamed(&id, &text);
+                } else if self.kb_profile.replace(false) {
                     self.profile_named(text);
                 } else if self.scmd_stage.get() != 0 {
                     self.scmd_text(text);
@@ -1458,7 +1493,16 @@ impl Shell {
     pub fn refresh_status(&self) {
         let w = self.ui.as_weak();
         std::thread::spawn(move || {
-            let net = system::net::current().map_or(-1, |l| if l.wifi { 1 } else { 0 });
+            let link = system::net::current();
+            let net = link.as_ref().map_or(-1, |l| if l.wifi { 1 } else { 0 });
+            // Signal Wi-Fi : Windows donne 0 à 5 barres, l'icône en a 4.
+            let bars = link.as_ref().and_then(|l| l.bars).map_or(4, |b| ((b as i32 * 4 + 4) / 5).clamp(1, 4));
+            // Batterie du PC (portable) : -1 sans batterie.
+            let (pc_bat, pc_charging) = {
+                let mut st = windows::Win32::System::Power::SYSTEM_POWER_STATUS::default();
+                let ok = unsafe { windows::Win32::System::Power::GetSystemPowerStatus(&mut st) }.is_ok();
+                if ok && st.BatteryFlag & 128 == 0 && st.BatteryLifePercent <= 100 { (st.BatteryLifePercent as i32, st.ACLineStatus == 1) } else { (-1, false) }
+            };
             let vol = system::audio::volume().map_or(-1, |v| if system::audio::muted() { 0 } else { v as i32 });
             // Manette « principale » (Réglages > Manettes) en premier, pour la pastille de la barre d'état.
             let first = settings::ordered_pads(system::pads::list()).into_iter().next();
@@ -1466,6 +1510,9 @@ impl Shell {
             let charging = first.is_some_and(|p| p.charging);
             let _ = w.upgrade_in_event_loop(move |ui| {
                 ui.set_st_net(net);
+                ui.set_st_bars(bars);
+                ui.set_st_pc(pc_bat);
+                ui.set_st_pc_charging(pc_charging);
                 ui.set_st_vol(vol);
                 ui.set_st_pad(pad);
                 ui.set_st_pad_charging(charging);
@@ -1594,6 +1641,17 @@ impl Shell {
         self.guide_tile.set(tile);
         let closing = self.running.borrow().iter().any(|r| r.tile == tile && r.closing) || self.ext_game.borrow().as_ref().is_some_and(|e| e.tile == tile && e.closing);
         self.guide.set_game(name.as_str().into());
+        // Boutique et temps de jeu total (hors partie en cours, comptée à la fin).
+        let info = self.games.borrow().get(tile).map(|g| {
+            let pt = playtime::load();
+            let store = if g.store.is_empty() { tr("Local") } else { g.store.clone() };
+            format!("{store}  ·  {}", playtime::played_in(&pt, &playtime_key(g)))
+        });
+        self.guide.set_info(info.unwrap_or_default().into());
+        // Notifications du guide avec leur heure relative (« il y a 5 min »), recalculée à l'ouverture.
+        let now = unix_now();
+        let notes: Vec<SharedString> = self.notifs.iter().take(MAX_NOTES).map(|n| format!("{}  ·  {}", n.text, notif_age(now.saturating_sub(n.stamp as u64))).into()).collect();
+        self.notes.set_vec(notes);
         self.guide_session(tile);
         self.guide.set_art(self.tile_for(tile).map(|t| t.cover).unwrap_or_default());
         self.guide.set_closing(closing);
@@ -1714,6 +1772,28 @@ impl Shell {
                 }
             }
             (6, 0) => {
+                // Le guide est masqué avant la capture (le temps que l'écran se redessine), puis on revient au jeu.
+                self.hide_guide();
+                let name = self.games.borrow().get(tile).map(|g| g.name.clone()).unwrap_or_else(|| "Hearth".into());
+                if let Some(h) = game() {
+                    wm::focus(h);
+                }
+                slint::Timer::single_shot(Duration::from_millis(400), move || {
+                    let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+                    let safe: String = name.chars().map(|c| if c.is_alphanumeric() || c == ' ' { c } else { '_' }).collect();
+                    let file = std::path::PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default())
+                        .join("Pictures")
+                        .join("Hearth")
+                        .join(format!("{} {:04}-{:02}-{:02} {:02}.{:02}.{:02}.png", safe.trim(), t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond));
+                    std::thread::spawn(move || {
+                        let ok = native::screenshot(&file);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            with_shell(|s| s.push_notif(&tr("Capture d'écran"), &if ok { file.display().to_string() } else { tr("Échec de la capture") }))
+                        });
+                    });
+                });
+            }
+            (7, 0) => {
                 self.hide_guide();
                 self.pad_toggle();
             }
@@ -1885,6 +1965,12 @@ impl Shell {
         if !i18n::toasts() {
             return;
         }
+        // Bannières de même titre à la suite (ex. plusieurs téléchargements) : une seule, avec un compteur.
+        let n = if self.ui.get_toast_on() && *self.toast_key.borrow() == title { self.toast_n.get() + 1 } else { 1 };
+        *self.toast_key.borrow_mut() = title.to_string();
+        self.toast_n.set(n);
+        let title = if n > 1 { format!("{title} ({n})") } else { title.to_string() };
+        let title = title.as_str();
         self.ui.set_toast_title(title.into());
         self.ui.set_toast_text(text.into());
         self.ui.set_toast_on(true);
@@ -2200,8 +2286,7 @@ impl Shell {
         }.into());
         *self.catalog_query.borrow_mut() = query.clone();
         self.catalog_limit.set(OFFERS_PAGE);
-        *self.offer_filter.borrow_mut() = None;
-        self.offer_sort.set(0);
+        // Filtre et tri choisis gardés (y compris en revenant à « À la une »).
         if query.is_none() {
             if let Some(f) = self.featured.borrow().as_ref() {
                 self.apply_offers(&f.offers, &f.art);
@@ -2350,7 +2435,8 @@ impl Shell {
         // Une offre n'apparaît qu'une fois sa jaquette reçue : jamais de tuile vide (initiale seule),
         // ni pendant le chargement ni pour un jeu sans aucun visuel.
         let has_art = |u: &Offer| u.art.size().width > 0;
-        let keep = |d: &stores::Offer, u: &Offer| filter.as_deref().is_none_or(|f| d.store == f) && has_art(u);
+        let free_only = self.offer_free.get();
+        let keep = |d: &stores::Offer, u: &Offer| filter.as_deref().is_none_or(|f| d.store == f) && has_art(u) && (!free_only || d.cents == Some(0));
         let mut kept: Vec<&(stores::Offer, Offer)> = full.iter().filter(|(d, u)| keep(d, u)).collect();
         if !full.is_empty() {
             let pending = full.iter().enumerate().any(|(i, (_, u))| !has_art(u) && !no_art.contains(&i));
@@ -2376,6 +2462,7 @@ impl Shell {
             v.push((mark(current.as_deref() == Some(name.as_str()), name.clone()), menus::Act::OfferStore(Some(name.clone()))));
         }
         let sort = self.offer_sort.get();
+        v.push((mark(self.offer_free.get(), tr("Gratuits uniquement")), menus::Act::OfferFree));
         for (i, label) in [tr("Pertinence"), tr("Nom (A→Z)"), tr("Prix croissant"), tr("Prix décroissant")].into_iter().enumerate() {
             v.push((mark(sort == i as i32, label), menus::Act::OfferSort(i as i32)));
         }
@@ -2390,7 +2477,7 @@ impl Shell {
         let n = {
             let games = self.games.borrow();
             let lib: Vec<&Game> = games.iter().filter(|g| (g.install || g.hidden) && self.dl_pct_of(g) < 0).collect();
-            [lib.len(), lib.iter().filter(|g| g.install).count(), lib.iter().filter(|g| g.hidden).count()]
+            [lib.len(), lib.iter().filter(|g| g.install).count(), lib.iter().filter(|g| g.hidden).count(), lib.iter().filter(|g| g.store == "Steam").count(), lib.iter().filter(|g| g.store == "Epic Games").count()]
         };
         let mut v: Vec<(String, menus::Act)> = LIB_FILTERS
             .iter()
@@ -2517,6 +2604,7 @@ impl Shell {
         let gen = self.det_gen.get() + 1;
         self.det_gen.set(gen);
         self.ui.set_det_title(o.title.as_str().into());
+        self.ui.set_det_owned(self.offers.row_data(i).is_some_and(|r| r.owned));
         self.ui.set_det_desc(o.desc.as_str().into());
         self.ui.set_det_meta(o.meta.as_str().into());
         self.ui.set_det_cover(self.offers.row_data(i).map(|r| r.art).unwrap_or_default());
@@ -2806,11 +2894,17 @@ impl Shell {
         let done = ((shown_exe || shown_ext) && el > 5.0) || gave_up_exe || el > 90.0;
         if done || wm::find_window(SPLASH_TITLE).is_none_or(|h| !wm::is_visible(h)) {
             self.hide_splash();
+            // Le jeu s'est arrêté avant d'ouvrir sa fenêtre : on le dit, plutôt qu'un retour muet à l'accueil.
+            if gave_up_exe && !shown_exe {
+                if let Some(name) = tile.and_then(|t| self.games.borrow().get(t).map(|g| g.name.clone())) {
+                    self.push_notif(&name, &tr("Le jeu s'est fermé au démarrage"));
+                }
+            }
         }
     }
 }
 
-const LIB_FILTERS: [&str; 3] = ["Tous", "À installer", "Cachés"];
+const LIB_FILTERS: [&str; 5] = ["Tous", "À installer", "Cachés", "Steam", "Epic Games"];
 
 /// Durée de la partie en cours pour le guide : « 12 min », « 1 h 05 ».
 fn session_label(secs: u64) -> String {
@@ -2821,7 +2915,7 @@ fn session_label(secs: u64) -> String {
 }
 
 /// Clé de temps de jeu : identifiant du jeu, sinon son nom.
-fn playtime_key(g: &Game) -> String {
+pub(crate) fn playtime_key(g: &Game) -> String {
     if g.id.is_empty() {
         format!("name-{}", g.name)
     } else {
@@ -2961,12 +3055,14 @@ impl Shell {
             let filter_ok = match self.lib_filter.get() {
                 1 => g.install,
                 2 => g.hidden,
+                3 => g.store == "Steam",
+                4 => g.store == "Epic Games",
                 _ => true,
             };
             if (g.install || g.hidden) && !downloading {
                 lib_total += 1;
             }
-            if (g.install || g.hidden || all_tab) && filter_ok && !downloading && (query.is_empty() || t.name.to_lowercase().contains(&query)) {
+            if (g.install || g.hidden || all_tab) && filter_ok && !downloading && (query.is_empty() || t.name.to_lowercase().contains(&query) || g.store.to_lowercase().contains(&query)) {
                 b.push(t.clone());
             }
             // Un jeu caché dont on relance le téléchargement (mise à jour…) doit quand même montrer
@@ -3118,7 +3214,8 @@ impl Shell {
         if unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut p) }.is_ok() && CURSOR.with(|c| c.replace((p.x, p.y))) != (p.x, p.y) {
             self.last_activity.set(std::time::Instant::now());
         }
-        let idle = self.last_activity.get().elapsed() > Duration::from_secs(300)
+        let dim_min = i18n::dim_min();
+        let idle = dim_min > 0 && self.last_activity.get().elapsed() > Duration::from_secs(dim_min as u64 * 60)
             && self.fg_main.get()
             && self.ui.get_zone() <= 1
             && self.running.borrow().is_empty()
@@ -3410,6 +3507,11 @@ pub(crate) fn power_do(a: i32) {
         },
         1 => drop(Command::new("shutdown").args(["/r", "/t", "0"]).spawn()),
         2 => drop(Command::new("shutdown").args(["/s", "/t", "0"]).spawn()),
+        // Le superviseur relance la console (même code que le changement de profil).
+        3 => {
+            wm::cursor::restore();
+            std::process::exit(profiles::EXIT_RESTART)
+        }
         _ => {}
     }
 }

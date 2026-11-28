@@ -438,17 +438,40 @@ const NO_LAUNCHER_DESC: [&str; 10] = [
 /// L'option fait-elle démarrer le jeu sans son launcher ? Par ses arguments, sa description, ou un
 /// exécutable différent de celui par défaut quand ce dernier est un launcher.
 pub fn skips_launcher(o: &LaunchOpt, default_exe: &str) -> bool {
+    launcher_score(o, default_exe) > 0
+}
+
+/// Outils proposés à côté du jeu (gestionnaire de mods, éditeur, réglages…) : jamais pris pour « le jeu sans launcher ».
+const NOT_THE_GAME: [&str; 11] = ["mod", "manager", "editor", "setup", "config", "tool", "crash", "report", "benchmark", "server", "dedicated"];
+
+/// 2 : arguments ou description annoncent un lancement sans launcher ; 1 : seulement un autre
+/// exécutable que le launcher par défaut (moins sûr) ; 0 : rien.
+pub fn launcher_score(o: &LaunchOpt, default_exe: &str) -> u8 {
     let a: String = o.args.to_lowercase().chars().filter(|c| c.is_alphanumeric() || *c == '=').collect();
     if NO_LAUNCHER_ARGS.iter().any(|k| a.contains(k)) || a.contains("launcher=0") || a.contains("launcher=false") {
-        return true;
+        return 2;
     }
     let d = o.desc.to_lowercase();
     if NO_LAUNCHER_DESC.iter().any(|k| d.contains(k)) {
-        return true;
+        return 2;
     }
     let name = |p: &str| p.rsplit(['\\', '/']).next().unwrap_or(p).to_lowercase();
     let (def, exe) = (name(default_exe), name(&o.exe));
-    def.contains("launcher") && !exe.is_empty() && exe != def && !exe.contains("launcher")
+    let tool = NOT_THE_GAME.iter().any(|t| exe.contains(t) || d.contains(t));
+    (def.contains("launcher") && !exe.is_empty() && exe != def && !exe.contains("launcher") && !tool) as u8
+}
+
+/// Règle courante quand Steam ne propose rien : `XLauncher.exe` lance `X.exe`, placé à côté
+/// (Bethesda : `Fallout4Launcher.exe` → `Fallout4.exe`). Chemin relatif du jeu, s'il existe.
+pub fn sibling_game_exe(root: &Path, default_exe: &str) -> Option<String> {
+    // Positions calculées sur la version en minuscules : seulement pour un nom ASCII (même longueur).
+    if !default_exe.is_ascii() {
+        return None;
+    }
+    let lower = default_exe.to_lowercase();
+    let cut = lower.rfind("launcher.exe")?;
+    let candidate = format!("{}.exe", &default_exe[..cut]);
+    (cut > 0 && root.join(&candidate).is_file()).then_some(candidate)
 }
 
 /// Options de lancement Windows publiées par Steam pour ces jeux (connexion anonyme : aucun compte
@@ -584,5 +607,10 @@ mod tests {
         assert!(!skips_launcher(&q, "Game.exe"));
         let r = LaunchOpt { exe: "Game.exe".into(), args: String::new(), desc: String::new() };
         assert!(skips_launcher(&r, "GameLauncher.exe"));
+        // Warhammer III : le gestionnaire de mods n'est pas « le jeu sans launcher », « Skip Launcher » l'est (score 2).
+        let m = LaunchOpt { exe: "twmm/twmm.exe".into(), args: String::new(), desc: "TW Mod Manager".into() };
+        assert_eq!(launcher_score(&m, "launcher/launcher.exe"), 0);
+        let g = LaunchOpt { exe: "Warhammer3.exe".into(), args: String::new(), desc: "Play Game (Skip Launcher)".into() };
+        assert_eq!(launcher_score(&g, "launcher/launcher.exe"), 2);
     }
 }

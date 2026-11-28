@@ -94,6 +94,17 @@ impl Shell {
                 }
             })
         });
+        w.on_open_folder(|g| {
+            with_shell(|s| {
+                let exe = s.games.borrow().get(g as usize).map(|x| x.exe.clone()).unwrap_or_default();
+                // Jeux lancés par Legendary : leur exécutable est l'outil, pas le jeu → dossier des jeux Epic.
+                if std::path::Path::new(&exe) == stores::epiccmd::exe() {
+                    let _ = std::process::Command::new("explorer.exe").arg(stores::epiccmd::dir().join("games")).spawn();
+                } else if !exe.is_empty() && std::path::Path::new(&exe).exists() {
+                    let _ = std::process::Command::new("explorer.exe").arg(format!("/select,{exe}")).spawn();
+                }
+            })
+        });
         w.on_query_changed(|q| {
             with_shell(|s| {
                 *s.desk_query.borrow_mut() = q.to_string();

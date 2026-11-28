@@ -12,7 +12,7 @@ system.workspace = true
 stores.workspace = true
 wm.workspace = true
 slint = { version = "1.19", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "renderer-skia", "renderer-software", "accessibility", "unstable-winit-030"] }
-windows = { workspace = true, features = ["Win32_System_Power", "Win32_System_SystemInformation", "Win32_Globalization", "Win32_UI_Controls_Dialogs", "Win32_UI_WindowsAndMessaging"] }
+windows = { workspace = true, features = ["Win32_System_Power", "Win32_System_SystemInformation", "Win32_Globalization", "Win32_UI_Controls_Dialogs", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
 
 [build-dependencies]
 slint-build = "1.19"

@@ -46,3 +46,40 @@ pub fn confirm(text: &str) -> bool {
     use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, IDYES, MB_ICONQUESTION, MB_YESNO};
     unsafe { MessageBoxW(None, &HSTRING::from(text), &HSTRING::from("Hearth"), MB_YESNO | MB_ICONQUESTION) == IDYES }
 }
+
+/// Capture de l'écran principal enregistrée en PNG dans `dest` (GDI : un jeu en plein écran exclusif
+/// peut donner une image noire). Bloquant.
+pub fn screenshot(dest: &std::path::Path) -> bool {
+    use windows::Win32::Graphics::Gdi::*;
+    let (x, y, w, h) = wm::primary_monitor();
+    if w <= 0 || h <= 0 {
+        return false;
+    }
+    unsafe {
+        let screen = GetDC(None);
+        let mem = CreateCompatibleDC(Some(screen));
+        let bmp = CreateCompatibleBitmap(screen, w, h);
+        let old = SelectObject(mem, bmp.into());
+        let ok = BitBlt(mem, 0, 0, w, h, Some(screen), x, y, SRCCOPY).is_ok();
+        let mut info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER { biSize: size_of::<BITMAPINFOHEADER>() as u32, biWidth: w, biHeight: -h, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() },
+            ..Default::default()
+        };
+        let mut px = vec![0u8; (w * h * 4) as usize];
+        let lines = GetDIBits(mem, bmp, 0, h as u32, Some(px.as_mut_ptr().cast()), &mut info, DIB_RGB_COLORS);
+        SelectObject(mem, old);
+        let _ = DeleteObject(bmp.into());
+        let _ = DeleteDC(mem);
+        ReleaseDC(None, screen);
+        if !ok || lines == 0 {
+            return false;
+        }
+        // BGRA → RGBA, opaque.
+        for p in px.as_chunks_mut::<4>().0 {
+            p.swap(0, 2);
+            p[3] = 255;
+        }
+        let _ = std::fs::create_dir_all(dest.parent().unwrap_or(std::path::Path::new(".")));
+        image::save_buffer(dest, &px, w as u32, h as u32, image::ColorType::Rgba8).is_ok()
+    }
+}

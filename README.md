@@ -47,6 +47,9 @@ Secours si l'interface ne s'affiche pas : Ctrl+Alt+Suppr → Gestionnaire des t�
 
 - Pendant un jeu, **Guide/PS** ouvre le menu guide (reprendre, accueil, fermer le jeu, son, luminosité, Wi-Fi, notifications). Jeux anti-triche ou en plein écran exclusif : le jeu est réduit et la console revient, sans overlay.
 - Compatibilité par jeu : `crates/wm/compat.json` (`args`, `borderless`, `anticheat`, `ini`) ; dans `games.json`, `"anticheat": true` force le mode sans modification.
+- Ajouter un jeu (bouton « + » ou version bureau) : exécutable `.exe`, ou script `.bat`, `.cmd`, `.ps1` (lancé par `cmd`/PowerShell, suivi comme un jeu).
+- Menu d'un jeu (Options) : « Arguments de lancement » (ajoutés à la commande ; pour un jeu lancé par le client Steam, via `steam://run/<id>//<arguments>/`) et, pour les jeux Steam, « Options de lancement Steam » (options publiées par Steam, lues par SteamCMD sans compte). Au premier démarrage d'un jeu Steam, une option qui évite son launcher (`-nolauncher`, `-skiplauncher`, `--skip-launcher`, `-bypasslauncher`, `-disablelauncher`, description « Skip launcher »…, ou `XLauncher.exe` → `X.exe` à côté) est appliquée d'office. Test : `cargo run -p stores --example launch_opts -- <appid>`.
+- Test sans manette : Ctrl+Alt+Maj+F1..F12 = haut, bas, gauche, droite, valider, retour, guide, menu, Triangle, Carré, L1, R1 (`tools/dev.ps1` : `Press up|…|tri|sq|l1|r1`).
 - Journal du superviseur : `%LOCALAPPDATA%\Hearth\supervisor.log`.
 - Style : toutes les couleurs et tailles sont dans `Theme` (`crates/shell/ui/app.slint`).
 

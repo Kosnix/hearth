@@ -23,6 +23,8 @@ pub fn cats() -> Vec<String> {
 const CONFIRM_SECS: u32 = 15;
 const SLEEP_CHOICES: [u32; 5] = [0, 15, 30, 60, 120];
 const SCREEN_CHOICES: [u32; 6] = [0, 5, 10, 15, 30, 60];
+/// Assombrissement de l'accueil inactif (minutes, 0 : jamais).
+const DIM_CHOICES: [u32; 4] = [0, 2, 5, 10];
 
 /// Données lentes (WinRT, commandes), lues hors du thread UI.
 #[derive(Default)]
@@ -94,7 +96,7 @@ pub fn fetch(cat: i32) -> Fetched {
         7 => Fetched { drives: system::storage::drives(), ..Default::default() },
         8 => Fetched { gpus: system::drivers::gpus(), ..Default::default() },
         9 => Fetched { plans: system::power::plans(), sleep_min: system::power::timeout(true), screen_min: system::power::timeout(false), ..Default::default() },
-        11 => Fetched { about: system::about::info(), ..Default::default() },
+        11 => Fetched { about: system::about::info(), link: system::net::current(), ..Default::default() },
         12 => {
             let mut accounts: Vec<(String, bool, Option<String>)> = stores::all().iter().map(|s| (s.name().to_string(), s.detected(), stores::account::session(s.name()).map(|a| a.name))).collect();
             accounts.push(("@admin".into(), system::admin::enabled(), None));
@@ -322,6 +324,7 @@ impl Settings {
                         row("Fréquence", s.hzs.get(s.hi).map_or("—".into(), |z| format!("{z} Hz")), s.hzs.len() > 1),
                         row("Appliquer", String::new(), false),
                         row("Animations", onoff(Some(i18n::anim())), false),
+                        row("Assombrir l'écran après", minutes(Some(i18n::dim_min())), true),
                     ]
                 }
             },
@@ -383,7 +386,8 @@ impl Settings {
             5 => vec![row("Langue", i18n::LANGS[i18n::lang()].1.into(), true), row("Disposition du clavier", crate::keyboard::layout().name.into(), true)],
             6 => vec![row("Windows Update", if s.loading { tr("Recherche en cours…") } else if s.data.update.is_empty() { tr("Rechercher des mises à jour") } else { s.data.update.clone() }, false)],
             7 if s.loading => vec![row("Lecture…", String::new(), false)],
-            7 => s.data.drives.iter().map(|d| row(&d.name, format!("{} {} {}{}", gb(d.free), tr("libres sur"), gb(d.total), if d.removable { " (USB)" } else { "" }), false)).collect(),
+            // Espace libre, total, et part libre en pourcentage.
+            7 => s.data.drives.iter().map(|d| row(&d.name, format!("{} {} {} ({} %){}", gb(d.free), tr("libres sur"), gb(d.total), (d.free * 100).checked_div(d.total).unwrap_or(0), if d.removable { " (USB)" } else { "" }), false)).collect(),
             8 if s.loading => vec![row("Détection du matériel…", String::new(), false)],
             8 => {
                 let mut v: Vec<SettingRow> = s.data.gpus.iter().map(|g| row(&g.name, format!("{} {} {}", g.vendor, tr("pilote"), g.version), false)).collect();
@@ -413,6 +417,10 @@ impl Settings {
                 v.push(row("Assistant de démarrage", tr("Revoir"), false));
                 v.push(row("Ouvrir la version bureau", String::new(), false));
                 v.push(row("Importer mes jeux", String::new(), false));
+                // En dernier : les lignes actionnables au-dessus gardent leur position.
+                if let Some(l) = &s.data.link {
+                    v.push(row("Réseau", format!("{}  ·  {}", l.name, l.ip), false));
+                }
                 v
             }
             _ => vec![],
@@ -436,7 +444,11 @@ impl Settings {
                     audio::set_volume((v as i32 + d * 5).clamp(0, 100) as u32);
                 }
             }
-            (0, 2, d) if d != 0 => i18n::set_sfx_vol((i18n::sfx_vol() as i32 + d * 10).clamp(0, 100) as u32),
+            (0, 2, d) if d != 0 => {
+                i18n::set_sfx_vol((i18n::sfx_vol() as i32 + d * 10).clamp(0, 100) as u32);
+                // Son d'essai au nouveau niveau.
+                system::sfx::play(system::sfx::Sfx::Select);
+            }
             (0, 3, d) if d != 0 => i18n::set_music_vol((i18n::music_vol() as i32 + d * 10).clamp(0, 100) as u32),
             (0, 4, 0) => i18n::set_music(!i18n::music()),
             (4, r, d) if d != 0 && s.data.pads.len() > 1 && (r as usize) < s.data.pads.len() => {
@@ -490,6 +502,7 @@ impl Settings {
                     }
                 }
                 (3, 0) => i18n::set_anim(!i18n::anim()),
+                (4, d) if d != 0 => i18n::set_dim_min(cycle(&DIM_CHOICES, Some(i18n::dim_min()), d)),
                 _ => {}
             },
             (1, 0, 0) => s.revert = None, // garder
@@ -680,6 +693,12 @@ impl Settings {
             "\n" | "\r" => return Kb::Done(s.kb_ssid.clone(), s.kb_text.clone()),
             "\u{8}" => {
                 s.kb_text.pop();
+            }
+            // Ctrl+Retour arrière : le dernier mot (et les espaces qui le suivent).
+            "\u{7f}" => {
+                let t = s.kb_text.trim_end().to_string();
+                let cut = t.rfind(' ').map_or(0, |i| i + 1);
+                s.kb_text.truncate(cut);
             }
             _ => {
                 // Les touches de fonction arrivent en caractères privés (U+F700…) : ignorées.

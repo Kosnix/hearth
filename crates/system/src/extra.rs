@@ -169,6 +169,8 @@ pub mod net {
         pub name: String,
         pub wifi: bool,
         pub ip: String,
+        /// Barres de signal Wi-Fi (0 à 5), si Windows les donne.
+        pub bars: Option<u8>,
     }
 
     /// Connexion Internet active (Wi-Fi ou Ethernet) et adresse IPv4.
@@ -187,7 +189,8 @@ pub mod net {
             .and_then(|h| h.CanonicalName().ok())
             .map(|s| s.to_string())
             .unwrap_or_default();
-        Some(Link { name, wifi, ip })
+        let bars = p.GetSignalBars().ok().and_then(|b| b.Value().ok());
+        Some(Link { name, wifi, ip, bars })
     }
 }
 

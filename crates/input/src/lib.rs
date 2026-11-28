@@ -130,6 +130,7 @@ pub fn spawn(on_nav: impl Fn(Nav) + Send + Sync + 'static) {
         let mut next_repeat = Instant::now();
         let mut hold_start = Instant::now();
         let mut next_vol = Instant::now();
+        let mut next_erase = Instant::now();
         loop {
             while let Some(nav) = poll_hotkey() {
                 on_nav(nav);
@@ -174,6 +175,13 @@ pub fn spawn(on_nav: impl Fn(Nav) + Send + Sync + 'static) {
                 // Maintenu : la répétition accélère après 1,2 s (défilement rapide des longues listes).
                 let fast = FAST_REPEAT.load(Ordering::Relaxed) && now.duration_since(hold_start) > Duration::from_millis(1200);
                 next_repeat = now + if fast { REPEAT_FAST } else { REPEAT_RATE };
+            }
+            // Carré / X maintenu : efface en continu (claviers virtuels ; sans effet ailleurs).
+            if pressed & X != 0 {
+                next_erase = now + REPEAT_DELAY;
+            } else if cur & X != 0 && now >= next_erase {
+                on_nav(Nav::Erase);
+                next_erase = now + REPEAT_RATE;
             }
             // L2/R2 maintenus : le volume continue de varier (un pas toutes les 150 ms).
             if pressed & (L2 | R2) != 0 {

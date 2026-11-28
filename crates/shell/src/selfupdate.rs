@@ -63,6 +63,7 @@ impl Shell {
                             s.hearth_prompted.set(false);
                         }
                         *s.hearth_update.borrow_mut() = Some(f.clone());
+                        s.ui.set_hearth_upd(true);
                         if manual {
                             s.hearth_prompted.set(false);
                         }

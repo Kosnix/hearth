@@ -84,8 +84,8 @@ impl Shell {
 
     pub fn profile_open(&self) {
         let s = load();
-        let mut rows: Vec<ProfileRow> = s.profiles.iter().map(|p| ProfileRow { name: p.name.as_str().into(), avatar: p.avatar, photo: photo_of(&p.id, p.photo), active: p.id == s.current, add: false }).collect();
-        rows.push(ProfileRow { name: tr("Nouveau profil").into(), avatar: 0, photo: Default::default(), active: false, add: true });
+        let mut rows: Vec<ProfileRow> = s.profiles.iter().map(|p| ProfileRow { name: p.name.as_str().into(), avatar: p.avatar, photo: photo_of(&p.id, p.photo), active: p.id == s.current, add: false, played: total_played(&p.id).into() }).collect();
+        rows.push(ProfileRow { name: tr("Nouveau profil").into(), avatar: 0, photo: Default::default(), active: false, add: true, played: Default::default() });
         self.profile_rows.set_vec(rows);
         let max = self.profile_rows.row_count().saturating_sub(1) as i32;
         if self.ui.get_pfsel() > max {
@@ -131,6 +131,8 @@ impl Shell {
             return;
         }
         *self.new_profile.borrow_mut() = name;
+        // Création d'un profil : pas la modification d'un avatar existant laissée en suspens (Retour).
+        *self.avatar_for.borrow_mut() = None;
         self.avatar_editor_open(3, Default::default());
         self.ui.set_zone(12);
     }
@@ -138,6 +140,20 @@ impl Shell {
     pub fn avatar_pick(&self, a: i32) {
         if self.oobe_avatar.replace(false) && self.oobe_active() {
             self.oobe_avatar_set(a);
+            return;
+        }
+        // Avatar d'un profil existant (menu Options d'un profil).
+        if let Some(id) = self.avatar_for.borrow_mut().take() {
+            let mut s = load();
+            let photo = self.avatar_commit_photo(&id);
+            if let Some(p) = s.profiles.iter_mut().find(|p| p.id == id) {
+                p.avatar = a;
+                p.photo = photo;
+            }
+            save(&s);
+            self.profile_refresh_top();
+            self.profile_open();
+            self.ui.set_zone(11);
             return;
         }
         let name = std::mem::take(&mut *self.new_profile.borrow_mut());
@@ -173,14 +189,51 @@ impl Shell {
     pub fn profile_menu(&self, i: usize) {
         let s = load();
         let Some(p) = s.profiles.get(i) else { return };
-        if p.id == s.current || p.id == "default" {
-            self.push_notif(&tr("Profils"), &tr("Ce profil ne peut pas être supprimé"));
-            return;
+        // Nom et avatar modifiables pour tout profil ; suppression seulement hors profil actif et par défaut.
+        let mut v = vec![
+            (tr("Modifier le nom"), crate::menus::Act::ProfileRename(p.id.clone())),
+            (tr("Changer l'avatar"), crate::menus::Act::ProfileAvatar(p.id.clone())),
+        ];
+        if p.id != s.current && p.id != "default" {
+            v.push((tr("Supprimer"), crate::menus::Act::DeleteProfile(i)));
         }
-        self.menu_show(
-            format!("{} {} ?", tr("Supprimer le profil"), p.name),
-            vec![(tr("Supprimer"), crate::menus::Act::DeleteProfile(i)), (tr("Annuler"), crate::menus::Act::Cancel)],
-        );
+        v.push((tr("Annuler"), crate::menus::Act::Cancel));
+        self.menu_show(p.name.clone(), v);
+    }
+
+    /// Nom d'un profil existant saisi au clavier virtuel.
+    pub fn profile_rename_open(&self, id: &str) {
+        let s = load();
+        let Some(p) = s.profiles.iter().find(|p| p.id == id) else { return };
+        *self.profile_edit.borrow_mut() = Some(id.to_string());
+        self.settings.kb_open_text(&p.name);
+        self.kb_refresh();
+        self.ui.set_kbx(0);
+        self.ui.set_kby(0);
+        self.ui.set_kb_title(tr("Nom du profil").into());
+        self.ui.set_zone(4);
+    }
+
+    pub fn profile_renamed(&self, id: &str, name: &str) {
+        let name = name.trim();
+        if !name.is_empty() {
+            let mut s = load();
+            if let Some(p) = s.profiles.iter_mut().find(|p| p.id == id) {
+                p.name = name.to_string();
+            }
+            save(&s);
+            self.profile_refresh_top();
+        }
+        self.profile_open();
+        self.ui.set_zone(11);
+    }
+
+    /// Avatar d'un profil existant : même éditeur que pour un nouveau profil.
+    pub fn profile_avatar_open(&self, id: &str) {
+        let s = load();
+        let Some(p) = s.profiles.iter().find(|p| p.id == id) else { return };
+        *self.avatar_for.borrow_mut() = Some(id.to_string());
+        self.avatar_editor_open(p.avatar, photo_of(&p.id, p.photo));
     }
 
 }
@@ -238,5 +291,19 @@ impl Shell {
     pub fn profile_photo_current(&self) -> slint::Image {
         let p = self.profile_current();
         photo_of(&p.id, p.photo)
+    }
+}
+
+/// Temps de jeu total d'un profil (« 25 h », « 40 min »), vide s'il n'a jamais joué.
+fn total_played(id: &str) -> String {
+    let secs: u64 = std::fs::read_to_string(dir_of(id).join("playtime.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s.trim_start_matches('\u{feff}')).ok())
+        .and_then(|j| j.as_object().map(|m| m.values().filter_map(|e| e["secs"].as_u64()).sum()))
+        .unwrap_or(0);
+    match secs {
+        0 => String::new(),
+        s if s >= 3600 => format!("{} {} {}", s / 3600, tr("h"), tr("de jeu")),
+        s => format!("{} {} {}", (s / 60).max(1), tr("min"), tr("de jeu")),
     }
 }

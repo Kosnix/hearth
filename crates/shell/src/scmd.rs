@@ -352,11 +352,19 @@ impl Shell {
                     _ => false,
                 })
                 .collect();
-            let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.updates_found(old, manual)));
+            // Aucune version lue alors qu'il y a des jeux : la recherche a échoué (réseau, session).
+            let failed = latest.is_empty();
+            let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.updates_found(old, manual, failed)));
         });
     }
 
-    fn updates_found(&self, old: Vec<String>, manual: bool) {
+    fn updates_found(&self, old: Vec<String>, manual: bool, failed: bool) {
+        if failed {
+            if manual {
+                self.push_notif(&tr("Téléchargements"), &tr("Recherche des mises à jour impossible (réseau ou connexion Steam)"));
+            }
+            return;
+        }
         let fresh = old.iter().filter(|a| !self.updates.borrow().contains(a)).count();
         *self.updates.borrow_mut() = old.clone();
         if manual && old.is_empty() {
@@ -433,10 +441,16 @@ impl Shell {
                 DlState::Failed(e) => format!("{} : {e}", tr("échec")),
                 _ => tr("Terminé"),
             };
-            rows.push((row(d.name.clone(), status, -1, 2), RowAct::Item(d.appid.clone())));
+            let kind = if matches!(d.state, DlState::Failed(_)) { 4 } else { 2 };
+            rows.push((row(d.name.clone(), status, -1, kind), RowAct::Item(d.appid.clone())));
         }
         let badge = dl.iter().filter(|d| matches!(d.state, DlState::Active | DlState::Queued)).count() + outdated.len();
         self.ui.set_dl_badge(badge as i32);
+        self.ui.set_dl_done(dl.iter().any(|d| matches!(d.state, DlState::Done | DlState::Failed(_))));
+        // Espace libre du disque où vont les jeux installés par Hearth.
+        let root = steamcmd::dir().to_string_lossy().chars().take(3).collect::<String>().to_uppercase();
+        let free = system::storage::drives().into_iter().find(|d| d.name.eq_ignore_ascii_case(&root)).map(|d| format!("{} {} {}", d.free / 1_000_000_000, tr("Go libres sur"), root.trim_end_matches('\\')));
+        self.ui.set_dl_free(free.unwrap_or_default().into());
         *self.dl_acts.borrow_mut() = rows.iter().map(|(_, a)| a.clone()).collect();
         self.dl_rows.set_vec(rows.into_iter().map(|(r, _)| r).collect::<Vec<_>>());
         let max = self.dl_rows.row_count().saturating_sub(1) as i32;
@@ -602,6 +616,25 @@ impl Shell {
         );
     }
 
+    /// Options sur une ligne en échec : le téléchargement repart (remis en file).
+    pub fn dl_retry(&self, i: usize) {
+        let Some(RowAct::Item(a)) = self.dl_acts.borrow().get(i).cloned() else { return };
+        if let Some(d) = self.dl.borrow_mut().iter_mut().find(|d| d.appid == a && matches!(d.state, DlState::Failed(_))) {
+            d.state = DlState::Queued;
+            d.pct = 0.0;
+        }
+        self.dl_next();
+        self.dl_refresh();
+        self.rebuild();
+    }
+
+    /// Triangle : retire les lignes « Terminé » et « Échec ».
+    pub fn dl_clear_done(&self) {
+        self.dl.borrow_mut().retain(|d| matches!(d.state, DlState::Active | DlState::Queued));
+        self.ui.set_dlsel(0);
+        self.dl_refresh();
+    }
+
     /// Annule réellement (après confirmation) : arrête le processus s'il est actif, ou retire l'élément de la file.
     pub fn dl_cancel_id(&self, a: &str) {
         // Terminé entre-temps (la question est restée affichée) : plus rien à annuler.
@@ -716,15 +749,25 @@ impl Shell {
         let Some(g) = self.games.borrow().iter().find(|g| g.id == id).cloned() else { return };
         let default_exe = opts.first().map(|o| o.exe.clone()).unwrap_or_default();
         let root = if g.uri.is_none() { install_root(&g.exe) } else { None };
-        let pick = opts.iter().filter(|o| steamcmd::skips_launcher(o, &default_exe)).find_map(|o| {
-            let other_exe = !o.exe.eq_ignore_ascii_case(&default_exe);
-            match (&root, other_exe) {
-                (Some(r), true) => Some((o.args.clone(), Some(r.join(&o.exe).to_string_lossy().into_owned()))),
-                (None, true) if !o.args.is_empty() => Some((o.args.clone(), None)),
-                (_, false) => Some((o.args.clone(), None)),
-                _ => None,
-            }
-        });
+        // Les options les plus sûres d'abord (arguments ou description « sans launcher »), puis un autre
+        // exécutable que le launcher ; en dernier recours, la règle `XLauncher.exe` → `X.exe` à côté.
+        let mut ranked: Vec<&steamcmd::LaunchOpt> = opts.iter().filter(|o| steamcmd::skips_launcher(o, &default_exe)).collect();
+        ranked.sort_by_key(|o| std::cmp::Reverse(steamcmd::launcher_score(o, &default_exe)));
+        let pick = ranked
+            .into_iter()
+            .find_map(|o| {
+                let other_exe = !o.exe.eq_ignore_ascii_case(&default_exe);
+                match (&root, other_exe) {
+                    (Some(r), true) => Some((o.args.clone(), Some(r.join(&o.exe).to_string_lossy().into_owned()))),
+                    (None, true) if !o.args.is_empty() => Some((o.args.clone(), None)),
+                    (_, false) => Some((o.args.clone(), None)),
+                    _ => None,
+                }
+            })
+            .or_else(|| {
+                let r = root.as_ref()?;
+                steamcmd::sibling_game_exe(r, &default_exe).map(|x| (String::new(), Some(r.join(x).to_string_lossy().into_owned())))
+            });
         match pick {
             Some((args, exe)) if g.user_args.trim().is_empty() && g.exe_override.is_none() => {
                 self.set_launch(id, args.clone(), exe);
