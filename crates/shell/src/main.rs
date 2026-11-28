@@ -1907,6 +1907,14 @@ impl Shell {
             None => tr("À la une"),
         };
         self.ui.set_offers_title(title.into());
+        if !self.boot.get() {
+            self.refresh_onboard();
+            // Prix « Gratuit » traduits à la construction des cartes : « À la une » est reconstruit
+            // depuis le cache (aucune requête) ; une recherche en cours garde ses cartes.
+            if self.catalog_started.get() && self.catalog_query.borrow().is_none() {
+                self.load_catalog(None);
+            }
+        }
         self.oobe_relang();
     }
 

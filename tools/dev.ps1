@@ -1,6 +1,6 @@
 # Outils de test autonome de Hearth (à dot-sourcer : . .\tools\dev.ps1)
 #   Deploy          compile, arrête la console, copie les binaires installés, relance
-#   Press 'g'       simule un bouton : up down left right enter back g(uide) m(enu)
+#   Press 'g'       simule un bouton : up down left right enter back g(uide) m(enu) tri sq l1 r1
 #   Fg              décrit la fenêtre au premier plan
 #   Shot [nom]      capture d'écran -> C:\dev\shots\<nom>.png
 #   Ask             met la fenêtre de Claude au premier plan pour poser une question
@@ -49,7 +49,7 @@ function Deploy {
 }
 
 function Press([string]$key, [int]$wait = 600) {
-    $idx = @{ up = 0; down = 1; left = 2; right = 3; enter = 4; back = 5; g = 6; m = 7 }[$key]
+    $idx = @{ up = 0; down = 1; left = 2; right = 3; enter = 4; back = 5; g = 6; m = 7; tri = 8; sq = 9; l1 = 10; r1 = 11 }[$key]
     # F1..F8 (0x70..) ; instance de dev : F13..F20 (0x7C..), que SendKeys ne sait pas envoyer.
     $base = 0x70; if ($env:HEARTH_DEV_TOPMOST) { $base = 0x7C }
     $vk = $base + $idx

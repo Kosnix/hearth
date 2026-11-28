@@ -190,9 +190,9 @@ pub fn spawn(on_nav: impl Fn(Nav) + Send + Sync + 'static) {
     });
 }
 
-/// Ctrl+Alt+Maj + F1..F8 (haut, bas, gauche, droite, valider, retour, guide, menu) = bouton de manette, quel que soit le focus : permet de piloter
+/// Ctrl+Alt+Maj + F1..F12 (haut, bas, gauche, droite, valider, retour, guide, menu, Triangle, Carré, L1, R1) = bouton de manette, quel que soit le focus : permet de piloter
 /// et tester la console sans manette (scripts : SendKeys "^%+{UP}", "^%+g"…).
-const HOTKEYS: [(VIRTUAL_KEY, Nav); 8] = [
+const HOTKEYS: [(VIRTUAL_KEY, Nav); 12] = [
     (VK_F1, Nav::Up),
     (VK_F2, Nav::Down),
     (VK_F3, Nav::Left),
@@ -201,6 +201,10 @@ const HOTKEYS: [(VIRTUAL_KEY, Nav); 8] = [
     (VK_F6, Nav::Back),
     (VK_F7, Nav::Guide),
     (VK_F8, Nav::Menu),
+    (VK_F9, Nav::Alt),
+    (VK_F10, Nav::Erase),
+    (VK_F11, Nav::TabPrev),
+    (VK_F12, Nav::TabNext),
 ];
 
 fn register_hotkeys() {
