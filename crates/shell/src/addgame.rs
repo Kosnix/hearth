@@ -43,9 +43,11 @@ pub fn list_dir(dir: &Path) -> Vec<Entry> {
         let path = e.path();
         match e.file_type() {
             Ok(t) if t.is_dir() => dirs.push(Entry { label: name, sub: String::new(), glyph: "\u{E838}", path, is_dir: true }),
-            Ok(_) if path.extension().is_some_and(|x| x.eq_ignore_ascii_case("exe")) => {
-                let size = e.metadata().map(|m| m.len() / 1_000_000).unwrap_or(0);
-                exes.push(Entry { label: name, sub: format!("{size} Mo"), glyph: "\u{E7FC}", path, is_dir: false });
+            Ok(_) if crate::launchable(&path) => {
+                // Un script ne pèse rien : on dit ce que c'est plutôt que « 0 Mo ».
+                let exe = path.extension().is_some_and(|x| x.eq_ignore_ascii_case("exe"));
+                let sub = if exe { format!("{} Mo", e.metadata().map(|m| m.len() / 1_000_000).unwrap_or(0)) } else { crate::i18n::tr("Script") };
+                exes.push(Entry { label: name, sub, glyph: if exe { "\u{E7FC}" } else { "\u{E756}" }, path, is_dir: false });
             }
             _ => {}
         }

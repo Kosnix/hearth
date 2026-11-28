@@ -19,6 +19,10 @@ pub enum Act {
     /// Installer un jeu possédé (sans nouvelle question : c'est déjà la confirmation).
     Install(String),
     Rename(String),
+    Args(String),
+    SteamOptions(String),
+    /// Option de lancement Steam choisie : (jeu, arguments, exécutable éventuel).
+    LaunchOption(String, String, Option<String>),
     Reart(String),
     Hide(String),
     Uninstall(String),
@@ -63,6 +67,12 @@ impl Shell {
             v.push((tr(if running { "Reprendre" } else { "Jouer" }), Act::Launch(g.id.clone())));
             v.push((tr("Modifier le nom"), Act::Rename(g.id.clone())));
             v.push((tr("Changer le visuel"), Act::Reart(g.id.clone())));
+            let args = if g.user_args.trim().is_empty() { tr("Arguments de lancement") } else { format!("{} ({})", tr("Arguments de lancement"), g.user_args.trim()) };
+            v.push((args, Act::Args(g.id.clone())));
+            // Jeux Steam : options de lancement publiées par Steam (dont, souvent, « sans launcher »).
+            if scmd::appid_of(&g.id).is_some() {
+                v.push((tr("Options de lancement Steam"), Act::SteamOptions(g.id.clone())));
+            }
         }
         if self.is_scmd_game(&g.exe) && !running {
             v.push((tr("Vérifier / mettre à jour"), Act::UpdateYes(g.id.clone())));
@@ -82,6 +92,8 @@ impl Shell {
             format!("{} : {}", tr("Mise à jour disponible"), g.name),
             vec![(tr("Mettre à jour maintenant"), Act::UpdateYes(g.id)), (tr("Plus tard"), Act::Cancel)],
         );
+        // Ouverte toute seule (voir `maybe_prompt_update`) : sélection sur « Plus tard ».
+        self.ui.set_msel(1);
     }
 
     /// Index courant d'un jeu par son identifiant stable (peut avoir bougé, ou disparu, depuis
@@ -117,6 +129,22 @@ impl Shell {
                 if let Some(g) = game {
                     self.install_owned(&g);
                 }
+            }
+            Act::Args(id) => {
+                let Some(cur) = self.games.borrow().iter().find(|g| g.id == id).map(|g| g.user_args.clone()) else { return };
+                *self.kb_args.borrow_mut() = Some(id);
+                self.settings.kb_open_text(&cur);
+                self.kb_refresh();
+                self.ui.set_kbx(0);
+                self.ui.set_kby(0);
+                self.ui.set_kb_title(tr("Arguments de lancement").into());
+                self.ui.set_zone(4);
+            }
+            Act::SteamOptions(id) => self.steam_launch_options(&id),
+            Act::LaunchOption(id, args, exe) => {
+                self.ui.set_zone(back);
+                self.set_launch(&id, args, exe);
+                self.push_notif(&tr("Arguments de lancement"), &tr("Option de lancement appliquée"));
             }
             Act::Rename(id) => {
                 let Some(name) = self.games.borrow().iter().find(|g| g.id == id).map(|g| g.name.clone()) else { return };
@@ -200,6 +228,25 @@ impl Shell {
             g.hidden = hidden;
         }
         self.rebuild();
+    }
+
+    /// Arguments (et éventuellement autre exécutable) de lancement d'un jeu, enregistrés par jeu.
+    pub fn set_launch(&self, id: &str, args: String, exe: Option<String>) {
+        let args = args.trim().to_string();
+        let exe_set = exe.is_some();
+        self.set_override(id, |o| {
+            o.args = Some(args.clone()).filter(|a| !a.is_empty());
+            if exe_set {
+                o.exe = exe.clone();
+            }
+            o.launch_checked = true;
+        });
+        if let Some(g) = self.games.borrow_mut().iter_mut().find(|g| g.id == id) {
+            g.user_args = args;
+            if exe_set {
+                g.exe_override = exe;
+            }
+        }
     }
 
     pub fn rename_game(&self, id: &str, name: &str) {

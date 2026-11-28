@@ -99,8 +99,10 @@ pub fn spawn(on_event: Arc<dyn Fn(Nav) + Send + Sync>) {
             if active() && !osk() {
                 let st = r.sticks;
                 let (x, y) = (curve(st[0]), curve(st[1]));
-                fx += x * 9.0;
-                fy += y * 9.0;
+                // Vitesse proportionnelle à la définition (référence 1920 px) : sinon le curseur rampait en 4K.
+                let speed = 9.0 * (unsafe { windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN) }.max(1920) as f64 / 1920.0);
+                fx += x * speed;
+                fy += y * speed;
                 let (dx, dy) = (fx as i32, fy as i32);
                 if dx != 0 || dy != 0 {
                     mouse(dx, dy, 0, MOUSEEVENTF_MOVE);

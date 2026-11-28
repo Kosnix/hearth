@@ -407,3 +407,182 @@ pub fn main_exe(root: &Path) -> Option<PathBuf> {
     }
     r
 }
+
+/// Option de lancement publiée par Steam pour un jeu (onglet « Options de lancement » du client).
+#[derive(Clone, Debug)]
+pub struct LaunchOpt {
+    /// Exécutable, relatif au dossier d'installation du jeu.
+    pub exe: String,
+    pub args: String,
+    pub desc: String,
+}
+
+/// Arguments courants qui font démarrer un jeu sans son launcher (comparés sans casse, tirets,
+/// soulignés ni espaces : `-nolauncher`, `--skip-launcher`, `-skip_launcher`… se valent).
+pub const NO_LAUNCHER_ARGS: [&str; 8] = ["nolauncher", "skiplauncher", "bypasslauncher", "disablelauncher", "withoutlauncher", "launcherskip", "nolauncherwindow", "skipthelauncher"];
+
+/// Descriptions d'options qui annoncent un lancement sans launcher (en minuscules).
+const NO_LAUNCHER_DESC: [&str; 10] = [
+    "without launcher",
+    "without the launcher",
+    "skip launcher",
+    "skip the launcher",
+    "no launcher",
+    "bypass launcher",
+    "bypass the launcher",
+    "launch directly",
+    "sans launcher",
+    "sans le launcher",
+];
+
+/// L'option fait-elle démarrer le jeu sans son launcher ? Par ses arguments, sa description, ou un
+/// exécutable différent de celui par défaut quand ce dernier est un launcher.
+pub fn skips_launcher(o: &LaunchOpt, default_exe: &str) -> bool {
+    let a: String = o.args.to_lowercase().chars().filter(|c| c.is_alphanumeric() || *c == '=').collect();
+    if NO_LAUNCHER_ARGS.iter().any(|k| a.contains(k)) || a.contains("launcher=0") || a.contains("launcher=false") {
+        return true;
+    }
+    let d = o.desc.to_lowercase();
+    if NO_LAUNCHER_DESC.iter().any(|k| d.contains(k)) {
+        return true;
+    }
+    let name = |p: &str| p.rsplit(['\\', '/']).next().unwrap_or(p).to_lowercase();
+    let (def, exe) = (name(default_exe), name(&o.exe));
+    def.contains("launcher") && !exe.is_empty() && exe != def && !exe.contains("launcher")
+}
+
+/// Options de lancement Windows publiées par Steam pour ces jeux (connexion anonyme : aucun compte
+/// nécessaire). Bloquant (SteamCMD). Les jeux absents de la réponse n'ont pas pu être lus.
+pub fn launch_options(ids: &[String]) -> HashMap<String, Vec<LaunchOpt>> {
+    let mut map = HashMap::new();
+    if ids.is_empty() {
+        return map;
+    }
+    let _lock = Lock::acquire();
+    if ensure().is_err() {
+        return map;
+    }
+    let mut args: Vec<&str> = vec!["+@NoPromptForPassword", "1", "+login", "anonymous", "+app_info_update", "1"];
+    for id in ids {
+        args.push("+app_info_print");
+        args.push(id);
+    }
+    args.push("+quit");
+    let Ok(out) = run(&args) else { return map };
+    for block in out.split("AppID : ").skip(1) {
+        let id: String = block.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let Some(start) = block.find('{') else { continue };
+        let tree = vdf(&block[start..]);
+        let mut opts = vec![];
+        if let Some(launch) = get(&tree, "config").and_then(|c| get(c, "launch")) {
+            for (_, entry) in launch {
+                let Vdf::Obj(e) = entry else { continue };
+                let s = |k: &str| match get_str(e, k) {
+                    Some(v) => v.to_string(),
+                    None => String::new(),
+                };
+                let os = get(e, "config").and_then(|c| get_str(c, "oslist")).unwrap_or("windows").to_lowercase();
+                if !os.contains("windows") || s("executable").is_empty() {
+                    continue;
+                }
+                opts.push(LaunchOpt { exe: s("executable"), args: s("arguments"), desc: s("description") });
+            }
+        }
+        if !id.is_empty() {
+            map.insert(id, opts);
+        }
+    }
+    map
+}
+
+/// Arbre VDF texte (sortie d'`app_info_print`) : paires clé/valeur, valeurs chaîne ou bloc.
+enum Vdf {
+    Str(String),
+    Obj(Vec<(String, Vdf)>),
+}
+
+fn get<'a>(o: &'a [(String, Vdf)], k: &str) -> Option<&'a [(String, Vdf)]> {
+    o.iter().find_map(|(key, v)| match v {
+        Vdf::Obj(x) if key.eq_ignore_ascii_case(k) => Some(x.as_slice()),
+        _ => None,
+    })
+}
+
+fn get_str<'a>(o: &'a [(String, Vdf)], k: &str) -> Option<&'a str> {
+    o.iter().find_map(|(key, v)| match v {
+        Vdf::Str(s) if key.eq_ignore_ascii_case(k) => Some(s.as_str()),
+        _ => None,
+    })
+}
+
+/// Lit le premier bloc `{ … }` de `text`.
+fn vdf(text: &str) -> Vec<(String, Vdf)> {
+    let mut tokens = vec![];
+    let mut it = text.chars().peekable();
+    while let Some(c) = it.next() {
+        match c {
+            '{' | '}' => tokens.push(c.to_string()),
+            '"' => {
+                let mut s = String::from("\"");
+                while let Some(c) = it.next() {
+                    match c {
+                        '\\' => {
+                            if let Some(n) = it.next() {
+                                s.push(n);
+                            }
+                        }
+                        '"' => break,
+                        c => s.push(c),
+                    }
+                }
+                tokens.push(s);
+            }
+            _ => {}
+        }
+    }
+    fn obj(t: &[String], i: &mut usize) -> Vec<(String, Vdf)> {
+        let mut out = vec![];
+        while *i < t.len() {
+            let tok = &t[*i];
+            *i += 1;
+            if tok == "}" {
+                break;
+            }
+            let Some(key) = tok.strip_prefix('"') else { continue };
+            let Some(next) = t.get(*i) else { break };
+            *i += 1;
+            if next == "{" {
+                out.push((key.to_string(), Vdf::Obj(obj(t, i))));
+            } else if let Some(v) = next.strip_prefix('"') {
+                out.push((key.to_string(), Vdf::Str(v.to_string())));
+            }
+        }
+        out
+    }
+    let mut i = 1; // après la première accolade
+    if tokens.first().map(String::as_str) != Some("{") {
+        return vec![];
+    }
+    obj(&tokens, &mut i)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_launch_options() {
+        let t = "{\n\"common\" { \"name\" \"X\" }\n\"config\" {\n\"launch\" {\n\"0\" { \"executable\" \"Launcher.exe\" \"type\" \"default\" \"config\" { \"oslist\" \"windows\" } }\n\"1\" { \"executable\" \"bin\\\\Game.exe\" \"arguments\" \"-nolauncher\" \"description\" \"Play\" }\n\"2\" { \"executable\" \"game.sh\" \"config\" { \"oslist\" \"linux\" } }\n}\n}\n}";
+        let tree = vdf(t);
+        let launch = get(get(&tree, "config").unwrap(), "launch").unwrap();
+        assert_eq!(launch.len(), 3);
+        let o = LaunchOpt { exe: "bin\\Game.exe".into(), args: "-nolauncher".into(), desc: "Play".into() };
+        assert!(skips_launcher(&o, "Launcher.exe"));
+        let p = LaunchOpt { exe: "Game.exe".into(), args: "--skip-launcher".into(), desc: String::new() };
+        assert!(skips_launcher(&p, "Game.exe"));
+        let q = LaunchOpt { exe: "Game.exe".into(), args: "-dx11".into(), desc: "DirectX 11".into() };
+        assert!(!skips_launcher(&q, "Game.exe"));
+        let r = LaunchOpt { exe: "Game.exe".into(), args: String::new(), desc: String::new() };
+        assert!(skips_launcher(&r, "GameLauncher.exe"));
+    }
+}

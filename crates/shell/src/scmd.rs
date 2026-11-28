@@ -623,3 +623,120 @@ impl Shell {
         self.rebuild();
     }
 }
+
+/// Dossier d'installation d'un jeu Steam lancé par son exécutable (installé par Hearth) : le dossier
+/// juste sous `steamapps\common`. Les options de lancement de Steam y sont relatives.
+fn install_root(exe: &str) -> Option<std::path::PathBuf> {
+    std::path::Path::new(exe).ancestors().find(|p| p.parent().and_then(|q| q.file_name()).is_some_and(|n| n.eq_ignore_ascii_case("common"))).map(|p| p.to_path_buf())
+}
+
+impl Shell {
+    /// Menu des options de lancement publiées par Steam pour ce jeu (lues par SteamCMD, sans compte).
+    pub fn steam_launch_options(&self, id: &str) {
+        let Some(appid) = appid_of(id).map(String::from) else { return };
+        self.push_notif(&tr("Options de lancement Steam"), &tr("Lecture des options…"));
+        let id = id.to_string();
+        std::thread::spawn(move || {
+            let opts = steamcmd::launch_options(std::slice::from_ref(&appid)).remove(&appid);
+            let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.launch_options_ready(&id, opts)));
+        });
+    }
+
+    fn launch_options_ready(&self, id: &str, opts: Option<Vec<steamcmd::LaunchOpt>>) {
+        let Some(g) = self.games.borrow().iter().find(|g| g.id == id).cloned() else { return };
+        let Some(opts) = opts else {
+            self.push_notif(&tr("Options de lancement Steam"), &tr("Lecture impossible (réseau ?)"));
+            return;
+        };
+        let root = if g.uri.is_none() { install_root(&g.exe) } else { None };
+        let default_exe = opts.first().map(|o| o.exe.clone()).unwrap_or_default();
+        let mut v: Vec<(String, crate::menus::Act)> = vec![];
+        // Les options sans launcher d'abord.
+        let mut sorted = opts.clone();
+        sorted.sort_by_key(|o| !steamcmd::skips_launcher(o, &default_exe));
+        for o in sorted {
+            let skip = steamcmd::skips_launcher(&o, &default_exe);
+            let mut label = if o.desc.is_empty() { o.exe.clone() } else { o.desc.clone() };
+            if !o.args.is_empty() {
+                label.push_str(&format!("  ({})", o.args));
+            }
+            if skip {
+                label = format!("{} · {label}", tr("Sans launcher"));
+            }
+            // Autre exécutable : seulement pour un jeu lancé par son exécutable (pas par le client Steam).
+            let other_exe = !o.exe.eq_ignore_ascii_case(&default_exe);
+            let exe = match (&root, other_exe) {
+                (Some(r), true) => Some(r.join(&o.exe).to_string_lossy().into_owned()),
+                _ => None,
+            };
+            if other_exe && exe.is_none() && o.args.is_empty() {
+                continue; // rien d'applicable via le client Steam
+            }
+            v.push((label, crate::menus::Act::LaunchOption(id.to_string(), o.args.clone(), exe)));
+        }
+        if v.is_empty() {
+            self.push_notif(&tr("Options de lancement Steam"), &tr("Steam ne propose aucune option pour ce jeu"));
+            return;
+        }
+        v.push((tr("Aucun argument"), crate::menus::Act::LaunchOption(id.to_string(), String::new(), root.as_ref().map(|_| g.exe.clone()))));
+        v.push((tr("Annuler"), crate::menus::Act::Cancel));
+        self.menu_show(format!("{} : {}", tr("Options de lancement Steam"), g.name), v);
+    }
+
+    /// Jeux Steam installés jamais examinés : leurs options de lancement sont lues (SteamCMD, sans
+    /// compte) et, si l'une fait démarrer le jeu sans son launcher, elle est appliquée d'office (sauf
+    /// arguments déjà choisis par l'utilisateur). Une seule fois par jeu.
+    pub fn auto_launch_options(&self) {
+        let todo: Vec<(String, String)> = self
+            .games
+            .borrow()
+            .iter()
+            .filter(|g| !g.install && g.id.starts_with("steam-"))
+            .filter(|g| !self.overrides.borrow().get(&g.id).is_some_and(|o| o.launch_checked))
+            .filter_map(|g| appid_of(&g.id).map(|a| (g.id.clone(), a.to_string())))
+            .collect();
+        if todo.is_empty() {
+            return;
+        }
+        std::thread::spawn(move || {
+            let ids: Vec<String> = todo.iter().map(|(_, a)| a.clone()).collect();
+            let found = steamcmd::launch_options(&ids);
+            let _ = slint::invoke_from_event_loop(move || {
+                with_shell(|s| {
+                    for (id, appid) in todo {
+                        let Some(opts) = found.get(&appid) else { continue }; // non lu : réessayé plus tard
+                        s.auto_apply_launch(&id, opts);
+                    }
+                })
+            });
+        });
+    }
+
+    fn auto_apply_launch(&self, id: &str, opts: &[steamcmd::LaunchOpt]) {
+        let Some(g) = self.games.borrow().iter().find(|g| g.id == id).cloned() else { return };
+        let default_exe = opts.first().map(|o| o.exe.clone()).unwrap_or_default();
+        let root = if g.uri.is_none() { install_root(&g.exe) } else { None };
+        let pick = opts.iter().filter(|o| steamcmd::skips_launcher(o, &default_exe)).find_map(|o| {
+            let other_exe = !o.exe.eq_ignore_ascii_case(&default_exe);
+            match (&root, other_exe) {
+                (Some(r), true) => Some((o.args.clone(), Some(r.join(&o.exe).to_string_lossy().into_owned()))),
+                (None, true) if !o.args.is_empty() => Some((o.args.clone(), None)),
+                (_, false) => Some((o.args.clone(), None)),
+                _ => None,
+            }
+        });
+        match pick {
+            Some((args, exe)) if g.user_args.trim().is_empty() && g.exe_override.is_none() => {
+                self.set_launch(id, args.clone(), exe);
+                let what = if args.is_empty() { tr("exécutable du jeu") } else { args };
+                self.push_notif(&g.name, &format!("{} : {what}", tr("Lancement sans launcher appliqué")));
+            }
+            // Rien à appliquer (ou choix de l'utilisateur déjà fait) : examiné, on n'y revient plus.
+            _ => {
+                let mut ov = self.overrides.borrow_mut();
+                ov.entry(id.to_string()).or_default().launch_checked = true;
+                crate::prefs::save(&ov);
+            }
+        }
+    }
+}

@@ -94,14 +94,31 @@ impl Shell {
         self.ui.set_zone(5);
         *self.login.borrow_mut() = Some(ch.clone());
         if !ch.needs_code {
+            let mut ch = ch;
             std::thread::spawn(move || {
                 for _ in 0..(300 / ch.interval.max(2)) {
                     std::thread::sleep(Duration::from_secs(ch.interval.max(2)));
                     if LOGIN_GEN.load(Ordering::SeqCst) != gen {
                         return;
                     }
-                    match account::poll(&ch) {
+                    match account::poll(&mut ch) {
                         Poll::Pending => {}
+                        // QR code renouvelé par Steam : le nouveau remplace l'ancien à l'écran (et sur le bureau).
+                        Poll::Renewed => {
+                            let url = ch.url.clone();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                with_shell(|s| {
+                                    if LOGIN_GEN.load(Ordering::SeqCst) != gen {
+                                        return;
+                                    }
+                                    if let Some((w, h, px)) = stores::qr::rgb(&url, 8) {
+                                        let buf = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::clone_from_slice(&px, w, h);
+                                        s.ui.set_qr(slint::Image::from_rgb8(buf));
+                                        s.desktop_show_login(&s.ui.get_qr_title(), s.ui.get_qr(), &s.ui.get_qr_hint(), false);
+                                    }
+                                })
+                            });
+                        }
                         Poll::Done(session) => {
                             let store = ch.store.to_string();
                             let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.login_done(&store, &session.name)));
@@ -210,8 +227,15 @@ impl Shell {
                         (o, id)
                     })),
                     None => {
-                        failed = true;
                         items.extend(old.iter().filter(|(o, _)| o.store == store).cloned());
+                        // Session refusée (jetons expirés) : on prévient, une fois, au lieu de réessayer.
+                        if account::take_expired(store) {
+                            let _ = slint::invoke_from_event_loop(move || {
+                                with_shell(|s| s.push_notif(store, &tr("Session expirée : reconnectez-vous (Réglages > Comptes)")))
+                            });
+                        } else {
+                            failed = true;
+                        }
                     }
                 }
             }

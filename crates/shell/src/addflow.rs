@@ -52,7 +52,7 @@ impl Shell {
         }
         items.extend(entries.iter().map(|e| item(&tr(&e.label), &e.sub, e.glyph)));
         let hint = match &dir {
-            None => tr("Choisissez le dossier puis l'exécutable (.exe) du jeu"),
+            None => tr("Choisissez le dossier puis l'exécutable du jeu (.exe, ou script .bat, .cmd, .ps1)"),
             Some(d) => d.display().to_string(),
         };
         *self.pick_mode.borrow_mut() = match dir {

@@ -62,6 +62,12 @@ struct Game {
     install: bool,
     #[serde(skip)]
     hidden: bool,
+    /// Arguments de lancement ajoutés par l'utilisateur (ou appliqués d'office pour passer le launcher).
+    #[serde(skip)]
+    user_args: String,
+    /// Autre exécutable à lancer (option de lancement Steam sans launcher), chemin complet.
+    #[serde(skip)]
+    exe_override: Option<String>,
 }
 
 /// Jeu lancé par le client d'une boutique (Steam…) : seule sa fenêtre est connue, il n'est pas encapsulé.
@@ -120,6 +126,8 @@ struct Shell {
     owned: RefCell<Vec<(stores::account::Owned, String)>>,
     menu_acts: RefCell<Vec<menus::Act>>,
     rename_id: RefCell<Option<String>>,
+    /// Jeu dont on saisit les arguments de lancement au clavier virtuel.
+    kb_args: RefCell<Option<String>>,
     scmd_stage: Cell<u8>,
     steam_wait: Cell<bool>,
     /// Un lanceur de boutique (Epic, GOG Galaxy) démarre avant un jeu (voir `launchers`).
@@ -170,6 +178,8 @@ struct Shell {
     updates: RefCell<Vec<String>>,
     hearth_update: RefCell<Option<(String, String)>>,
     hearth_prompted: Cell<bool>,
+    /// Dernière vérification de mise à jour de Hearth : `None` jamais faite, `Some(false)` GitHub injoignable.
+    hearth_checked: Cell<Option<bool>>,
     /// Octets reçus / total, pendant le téléchargement de la mise à jour de Hearth (affiché dans
     /// Téléchargements comme les jeux) ; `None` hors téléchargement.
     hearth_dl: RefCell<Option<std::sync::Arc<(std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64)>>>,
@@ -326,6 +336,7 @@ fn main() -> Result<(), slint::PlatformError> {
         owned: RefCell::new(vec![]),
         menu_acts: RefCell::new(vec![]),
         rename_id: RefCell::new(None),
+        kb_args: RefCell::new(None),
         scmd_stage: Cell::new(0),
         steam_wait: Cell::new(false),
         launcher_wait: Cell::new(false),
@@ -366,6 +377,7 @@ fn main() -> Result<(), slint::PlatformError> {
         updates: RefCell::new(vec![]),
         hearth_update: RefCell::new(None),
         hearth_prompted: Cell::new(false),
+        hearth_checked: Cell::new(None),
         hearth_dl: RefCell::new(None),
         hearth_dl_timer: slint::Timer::default(),
         sound_catalog: RefCell::new(vec![]),
@@ -722,6 +734,7 @@ fn main() -> Result<(), slint::PlatformError> {
     std::thread::spawn(cleanup_obsolete);
     cleanup_obsolete_prefs();
     shell.start_art();
+    shell.auto_launch_options();
     shell.refresh_owned();
     // Diagnostic de latence (HEARTH_PERF) : délai entre l'ordre de navigation et l'image suivante réellement rendue.
     if std::env::var_os("HEARTH_PERF").is_some() {
@@ -804,17 +817,39 @@ impl Shell {
         }
         if let Some(uri) = &g.uri {
             // Lancement par le client de la boutique : le jeu n'est pas encapsulé, on suivra sa fenêtre (tick).
-            system::open_uri(uri);
+            // Arguments de l'utilisateur : `steam://run/<id>//<arguments>/`, le moyen prévu par Steam.
+            let uri = match (uri.strip_prefix("steam://rungameid/"), g.user_args.trim()) {
+                (Some(id), a) if !a.is_empty() => format!("steam://run/{id}//{}/", a.replace(' ', "%20")),
+                _ => uri.clone(),
+            };
+            system::open_uri(&uri);
             self.ext_pending.set(Some((i, std::time::Instant::now())));
             if steam_uri {
                 self.steam_keep(1800);
             }
             return;
         }
-        let exe = Path::new(&g.exe);
+        // Exécutable remplacé (option de lancement Steam sans launcher), sinon celui du jeu.
+        let exe_path = g.exe_override.clone().filter(|p| Path::new(p).exists()).unwrap_or_else(|| g.exe.clone());
+        let exe = Path::new(&exe_path);
         let compat = wm::compat::lookup(exe);
         compat.apply_ini();
-        let args: Vec<String> = g.args.iter().chain(&compat.args).cloned().collect();
+        // Arguments : ceux du jeu (boutique, games.json), de la base de compatibilité, puis ceux de l'utilisateur.
+        let mut args: Vec<String> = g.args.iter().chain(&compat.args).cloned().collect();
+        args.extend(split_args(&g.user_args));
+        // Script (.bat/.cmd lancés tels quels par Windows via cmd ; .ps1 par PowerShell), dossier du script
+        // comme dossier du jeu.
+        let script_dir = exe.parent().map(Path::to_path_buf);
+        let ext = exe.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let (exe, args): (PathBuf, Vec<String>) = if ext == "ps1" {
+            let mut a: Vec<String> = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"].iter().map(|s| s.to_string()).collect();
+            a.push(exe_path.clone());
+            a.extend(args);
+            (PathBuf::from("powershell.exe"), a)
+        } else {
+            (exe.to_path_buf(), args)
+        };
+        let exe = exe.as_path();
         // Pare-feu : règle d'autorisation posée une fois par jeu (assistant administrateur), pour qu'aucune fenêtre Windows n'apparaisse en jeu.
         {
             let path = g.exe.clone();
@@ -833,7 +868,7 @@ impl Shell {
                 }
             });
         }
-        match wm::Session::launch(exe, &args) {
+        match wm::Session::launch(exe, &args, script_dir.as_deref()) {
             Ok(session) => {
                 let hands_off = g.anticheat || compat.anticheat || !compat.borderless;
                 self.running.borrow_mut().push(Running { tile: i, session, hands_off, closing: false, started: std::time::Instant::now() });
@@ -1069,7 +1104,11 @@ impl Shell {
     fn hearth_update_row(&self) -> SettingRow {
         let value = match self.hearth_update.borrow().as_ref() {
             Some((ver, _)) => format!("{} {ver}", tr("Mise à jour disponible :")),
-            None => format!("{} · {}", env!("HEARTH_VERSION"), tr("à jour")),
+            None => match self.hearth_checked.get() {
+                Some(true) => format!("{} · {}", env!("HEARTH_VERSION"), tr("à jour")),
+                Some(false) => format!("{} · {}", env!("HEARTH_VERSION"), tr("vérification impossible")),
+                None => format!("{} · {}", env!("HEARTH_VERSION"), tr("non vérifié")),
+            },
         };
         SettingRow { label: tr("Hearth").into(), value: value.into(), adjustable: false }
     }
@@ -1112,12 +1151,25 @@ impl Shell {
                 });
             }
             settings::Outcome::Password(ssid) => {
-                self.settings.kb_open(&ssid);
-                self.kb_refresh();
-                self.ui.set_kbx(0);
-                self.ui.set_kby(0);
-                self.ui.set_kb_title(format!("{} {ssid}", tr("Mot de passe :")).into());
-                self.ui.set_zone(4);
+                // Réseau déjà enregistré dans Windows : connexion directe, le mot de passe n'est demandé
+                // qu'en cas d'échec.
+                self.settings.set_message(format!("{} {ssid}…", tr("Connexion à")));
+                std::thread::spawn(move || {
+                    let ok = system::wifi::has_profile(&ssid) && system::wifi::connect(&ssid, None);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        with_shell(|s| {
+                            if ok {
+                                s.settings.set_message(format!("{} {ssid}", tr("Connecté à")));
+                                s.settings.start_loading();
+                                s.spawn_fetch(2);
+                            } else {
+                                s.settings.set_message(String::new());
+                                s.wifi_password(&ssid);
+                            }
+                            s.open_cat_keep(2);
+                        })
+                    });
+                });
             }
             settings::Outcome::Connect(ssid) => self.connect(ssid, None),
             settings::Outcome::LangChanged => {
@@ -1231,7 +1283,9 @@ impl Shell {
 
     fn kb_refresh(&self) {
         let text = self.settings.kb_text();
-        let shown = if self.scmd_stage.get() == 2 { "•".repeat(text.chars().count()) } else { text };
+        // Mots de passe masqués : SteamCMD et Wi-Fi.
+        let secret = self.scmd_stage.get() == 2 || !self.settings.kb_ssid().is_empty();
+        let shown = if secret { "•".repeat(text.chars().count()) } else { text };
         self.ui.set_kb_text(shown.into());
         self.ui.set_kb_alt(keyboard::layout().alt_label.into());
         let keys: Vec<SharedString> = self.settings.kb_keys().into_iter().map(Into::into).collect();
@@ -1277,7 +1331,7 @@ impl Shell {
                     self.home_zone()
                 } else if self.kb_oobe_name.replace(false) {
                     13
-                } else if self.rename_id.borrow_mut().take().is_some() {
+                } else if self.rename_id.borrow_mut().take().is_some() || self.kb_args.borrow_mut().take().is_some() {
                     0
                 } else if self.scmd_stage.get() != 0 {
                     self.scmd_cancel();
@@ -1300,6 +1354,10 @@ impl Shell {
                 } else if let Some(id) = renaming {
                     self.ui.set_zone(0);
                     self.rename_game(&id, text.trim());
+                } else if let Some(id) = self.kb_args.borrow_mut().take() {
+                    self.ui.set_zone(0);
+                    self.set_launch(&id, text, None);
+                    self.push_notif(&tr("Arguments de lancement"), &tr("Enregistrés"));
                 } else if self.kb_sgdb.replace(false) {
                     self.ui.set_zone(self.home_zone());
                     i18n::set_pref("steamgriddb_key", text.trim());
@@ -1330,12 +1388,26 @@ impl Shell {
                         self.ui.set_lsel(0);
                         self.ui.set_lbrow(1);
                     }
+                } else if !ssid.is_empty() && text.chars().count() < 8 {
+                    // Clé WPA trop courte : refusée par le réseau après 10 s d'attente ; on le dit tout de
+                    // suite et le clavier reste ouvert pour corriger.
+                    self.push_notif("Wi-Fi", &tr("Mot de passe trop court (8 caractères minimum)"));
                 } else {
                     self.ui.set_zone(self.home_zone());
                     self.connect(ssid, Some(text));
                 }
             }
         }
+    }
+
+    /// Saisie du mot de passe d'un réseau Wi-Fi (masqué, voir `kb_refresh`).
+    fn wifi_password(&self, ssid: &str) {
+        self.settings.kb_open(ssid);
+        self.kb_refresh();
+        self.ui.set_kbx(0);
+        self.ui.set_kby(0);
+        self.ui.set_kb_title(format!("{} {ssid}", tr("Mot de passe :")).into());
+        self.ui.set_zone(4);
     }
 
     /// Clavier virtuel quitté sans passer par Annuler (bouton guide / Origine) : la saisie en cours est
@@ -1434,8 +1506,16 @@ impl Shell {
     }
 
     fn set_clock(&self) {
-        let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
-        let c: slint::SharedString = format!("{:02}:{:02}", t.wHour, t.wMinute).into();
+        // Format de l'heure de Windows (24 h, ou 12 h avec AM/PM selon la région), sans les secondes.
+        use windows::Win32::Globalization::{GetTimeFormatEx, TIME_NOSECONDS};
+        let mut buf = [0u16; 32];
+        let n = unsafe { GetTimeFormatEx(windows::core::PCWSTR::null(), TIME_NOSECONDS, None, windows::core::PCWSTR::null(), Some(&mut buf)) } as usize;
+        let c: slint::SharedString = if n > 1 {
+            String::from_utf16_lossy(&buf[..n - 1]).into()
+        } else {
+            let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+            format!("{:02}:{:02}", t.wHour, t.wMinute).into()
+        };
         self.ui.set_clock(c.clone());
         self.guide.set_clock(c);
     }
@@ -1610,7 +1690,28 @@ impl Shell {
             (4, d) if d != 0 && self.guide.get_brightness() >= 0 => {
                 let b = (self.guide.get_brightness() + d * 10).clamp(0, 100);
                 self.guide.set_brightness(b);
-                std::thread::spawn(move || system::display::set_brightness(b as u32));
+                // Un seul envoi DDC/CI à la fois, avec la dernière valeur demandée : des appuis rapides
+                // lançaient des commandes concurrentes à l'écran, et la valeur finale était aléatoire.
+                use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+                static WANT: AtomicI32 = AtomicI32::new(-1);
+                static BUSY: AtomicBool = AtomicBool::new(false);
+                WANT.store(b, Ordering::SeqCst);
+                if !BUSY.swap(true, Ordering::SeqCst) {
+                    std::thread::spawn(|| {
+                        loop {
+                            let v = WANT.swap(-1, Ordering::SeqCst);
+                            if v < 0 {
+                                BUSY.store(false, Ordering::SeqCst);
+                                // Valeur arrivée entre-temps : on reprend la main si personne d'autre ne l'a.
+                                if WANT.load(Ordering::SeqCst) >= 0 && !BUSY.swap(true, Ordering::SeqCst) {
+                                    continue;
+                                }
+                                break;
+                            }
+                            system::display::set_brightness(v as u32);
+                        }
+                    });
+                }
             }
             (6, 0) => {
                 self.hide_guide();
@@ -1767,8 +1868,11 @@ impl Shell {
         if self.ui.get_zone() == 8 && self.notifs.row_count() > 1 {
             self.ui.set_nsel((self.ui.get_nsel() + 1).min(29));
         }
+        // Au-delà de 30 : la plus ancienne non épinglée part (la mise à jour de Hearth en attente reste).
         if self.notifs.row_count() > 30 {
-            self.notifs.remove(30);
+            if let Some(i) = (0..self.notifs.row_count()).rev().find(|&i| self.notifs.row_data(i).is_some_and(|n| !n.pinned)) {
+                self.notifs.remove(i);
+            }
         }
         self.update_unread();
         self.notes.insert(0, text.into());
@@ -1835,6 +1939,8 @@ impl Shell {
         if i < 0 {
             let keep: Vec<Notif> = self.notifs.iter().filter(|n| n.pinned).collect();
             self.notifs.set_vec(keep);
+            // La liste du guide en jeu aussi.
+            self.notes.set_vec(Vec::<SharedString>::new());
         } else if (i as usize) < self.notifs.row_count() {
             if self.notifs.row_data(i as usize).is_some_and(|n| n.pinned) {
                 self.hearth_update_install();
@@ -1887,9 +1993,46 @@ fn load_games(installed: Vec<stores::Game>, overrides: &std::collections::HashMa
                 g.name = n.clone();
             }
             g.hidden = o.hidden;
+            g.user_args = o.args.clone().unwrap_or_default();
+            g.exe_override = o.exe.clone();
         }
     }
     games
+}
+
+/// Prix d'une boutique (« 17,99 € », « Gratuit ») dans la langue de l'interface : mot traduit,
+/// séparateur décimal de la langue (le montant et la devise ne changent pas).
+fn price_text(p: &str) -> String {
+    if p == "Gratuit" {
+        tr("Gratuit")
+    } else {
+        p.replace(',', i18n::decimal_sep())
+    }
+}
+
+/// Arguments saisis : séparés aux espaces, sauf entre guillemets (`-path "C:\Mes jeux"`).
+fn split_args(s: &str) -> Vec<String> {
+    let (mut out, mut cur, mut quoted) = (vec![], String::new(), false);
+    for c in s.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            c if c.is_whitespace() && !quoted => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// Fichiers qu'on peut ajouter comme jeu : exécutables et scripts (.bat, .cmd, .ps1).
+pub(crate) fn launchable(p: &Path) -> bool {
+    p.extension().is_some_and(|x| ["exe", "bat", "cmd", "ps1"].iter().any(|e| x.eq_ignore_ascii_case(e)))
 }
 
 fn name_hash(s: &str) -> u32 {
@@ -1924,7 +2067,11 @@ impl Shell {
     fn refresh_lang(&self) {
         self.apply_font();
         let cats: Vec<SharedString> = settings::cats().into_iter().map(Into::into).collect();
-        self.ui.set_cats(Rc::new(VecModel::from(cats)).into());
+        self.ui.set_cats(Rc::new(VecModel::from(cats.clone())).into());
+        // Version bureau : mêmes catégories, dans la nouvelle langue.
+        if let Some(w) = self.desktop.borrow().as_ref() {
+            w.set_cats(Rc::new(VecModel::from(cats)).into());
+        }
         // Pas avant la création de la fenêtre : COM multithread sur ce thread ferait échouer winit.
         if self.ui.get_zone() == 3 {
             self.open_cat_keep(self.ui.get_cat());
@@ -2063,7 +2210,7 @@ impl Shell {
                 return;
             }
         }
-        self.fetch_catalog(gen, query, OFFERS_PAGE);
+        self.fetch_catalog(gen, query, OFFERS_PAGE, false);
     }
 
     /// « Voir plus » : relit le catalogue/la recherche courante, en demandant 24 jeux de plus par
@@ -2075,14 +2222,17 @@ impl Shell {
         let limit = self.catalog_limit.get() + OFFERS_PAGE;
         self.catalog_limit.set(limit);
         let query = self.catalog_query.borrow().clone();
-        self.fetch_catalog(gen, query, limit);
+        self.fetch_catalog(gen, query, limit, true);
     }
 
     /// Requête réseau proprement dite (chargement initial ou « Voir plus ») : liste puis visuels.
-    fn fetch_catalog(&self, gen: u32, query: Option<String>, limit: usize) {
-        self.offers.set_vec(vec![]);
-        self.offer_data.borrow_mut().clear();
-        self.ui.set_offers_state("loading".into());
+    /// `keep` (« Voir plus ») : les cartes déjà affichées restent en place pendant le chargement.
+    fn fetch_catalog(&self, gen: u32, query: Option<String>, limit: usize, keep: bool) {
+        if !keep {
+            self.offers.set_vec(vec![]);
+            self.offer_data.borrow_mut().clear();
+            self.ui.set_offers_state("loading".into());
+        }
         std::thread::spawn(move || {
             let offers = match &query {
                 Some(q) => stores::search(q, limit),
@@ -2126,7 +2276,19 @@ impl Shell {
     fn offers_listed(&self, gen: u32, featured: bool, offers: Vec<stores::Offer>) {
         let paths: Vec<Option<imgload::Buf>> = vec![None; offers.len()];
         if self.catalog_gen.get() == gen {
+            // Jaquettes déjà reçues (« Voir plus » relit toute la liste) : reprises tout de suite, les
+            // cartes ne disparaissent pas le temps de leur nouveau téléchargement.
+            let prev: std::collections::HashMap<String, slint::Image> =
+                self.offers_full.borrow().iter().filter(|(_, u)| u.art.size().width > 0).map(|(d, u)| (d.title.clone(), u.art.clone())).collect();
             self.apply_offers(&offers, &paths);
+            if !prev.is_empty() {
+                for (d, u) in self.offers_full.borrow_mut().iter_mut() {
+                    if let Some(img) = prev.get(&d.title) {
+                        u.art = img.clone();
+                    }
+                }
+                self.reveal_offers();
+            }
         }
         if featured {
             *self.featured.borrow_mut() = Some(Featured { offers, art: paths, no_art: Default::default() });
@@ -2298,7 +2460,7 @@ impl Shell {
             .zip(paths)
             .map(|(o, p)| Offer {
                 title: o.title.as_str().into(),
-                price: if o.price == "Gratuit" { tr("Gratuit") } else { o.price.clone() }.into(),
+                price: price_text(&o.price).into(),
                 store: o.store.as_str().into(),
                 art: p.as_ref().map(imgload::image).unwrap_or_default(),
                 owned: false,
@@ -2329,7 +2491,9 @@ impl Shell {
 
     fn search_open(&self) {
         self.kb_search.set(true);
-        self.settings.kb_open("");
+        // Recherche en cours reprise (comme dans la Bibliothèque), modifiable.
+        let cur = self.catalog_query.borrow().clone().unwrap_or_default();
+        self.settings.kb_open_text(&cur);
         self.kb_refresh();
         self.ui.set_kbx(0);
         self.ui.set_kby(0);
@@ -2359,7 +2523,7 @@ impl Shell {
         self.ui.set_det_hero(Default::default());
         self.det_shots.set_vec(vec![]);
         self.ui.set_det_shots_full(Default::default());
-        let rows: Vec<Deal> = o.deals.iter().map(|d| Deal { store: d.store.as_str().into(), price: if d.price == "Gratuit" { tr("Gratuit") } else { d.price.clone() }.into() }).collect();
+        let rows: Vec<Deal> = o.deals.iter().map(|d| Deal { store: d.store.as_str().into(), price: price_text(&d.price).into() }).collect();
         self.deals.set_vec(rows);
         *self.det_deals.borrow_mut() = o.deals.clone();
         *self.det_title.borrow_mut() = o.title.clone();
@@ -2368,7 +2532,7 @@ impl Shell {
         self.ui.set_zone(7);
         std::thread::spawn(move || {
             let d = stores::details(&o);
-            let hero = stores::fetch_first(&o.heroes).and_then(|p| imgload::decode(&p, 1920, 1080));
+            let hero = stores::fetch_first(&o.heroes).and_then(|p| imgload::decode(&p, 2560, 1440));
             let shots: Vec<imgload::Buf> = d.shots.iter().filter_map(|u| stores::fetch_first(std::slice::from_ref(u))).filter_map(|p| imgload::decode(&p, 420, 240)).collect();
             let full_urls = d.shots_full.clone();
             let _ = slint::invoke_from_event_loop(move || with_shell(|s| s.details_ready(gen, d, hero, shots)));
@@ -2900,6 +3064,7 @@ impl Shell {
         if now != cur {
             self.reload_games(inst);
             self.start_art();
+            self.auto_launch_options();
         }
     }
 }
@@ -3109,7 +3274,7 @@ impl Shell {
         if let Some((tile, t0)) = self.ext_pending.get() {
             if t0.elapsed() > Duration::from_secs(240) {
                 self.ext_pending.set(None);
-            } else if let Some(h) = wm::foreground_game(&["steam.exe", "steamwebhelper.exe", "explorer.exe", "hearth-shell.exe", "hearth.exe", "claude.exe", "cmd.exe"]) {
+            } else if let Some(h) = wm::foreground_game(&["steam.exe", "steamwebhelper.exe", "explorer.exe", "hearth-shell.exe", "hearth.exe", "cmd.exe"]) {
                 let tree = wm::ProcTree::new(wm::window_pid(h));
                 *self.ext_game.borrow_mut() = Some(ExtGame { tile, hwnd: h, started: std::time::Instant::now(), closing: false, tree, lost: None });
                 self.ext_pending.set(None);

@@ -165,7 +165,7 @@ pub fn ensure_art_for(id: &str, title: &str, art: &crate::Art, sgdb_key: Option<
             candidates.extend(key.and_then(|k| steamgriddb(id, title, k)));
         }
         for url in candidates {
-            if let Some((data, ext)) = download(&url, match kind { "hero" => (1920, 1080), "logo" => (1000, 400), _ => (720, 1080) }) {
+            if let Some((data, ext)) = download(&url, match kind { "hero" => (3840, 2160), "logo" => (1000, 400), _ => (720, 1080) }) {
                 if std::fs::create_dir_all(&dir).is_ok() {
                     for old in ["png", "jpg", "jpeg"] {
                         let _ = std::fs::remove_file(dir.join(format!("{kind}.{old}")));

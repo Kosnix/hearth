@@ -33,6 +33,8 @@ pub enum Poll {
     Pending,
     Done(Session),
     Failed(String),
+    /// Steam a renouvelé le QR code (l'ancien n'est plus valable) : `url` de la challenge mise à jour.
+    Renewed,
 }
 
 /// Jeu possédé (peut ne pas être installé).
@@ -181,7 +183,11 @@ pub fn exchange(store: &str, code: &str) -> Result<Session, String> {
         return Err("boutique non prise en charge".into());
     }
     let basic = epic_basic();
-    let code = code.trim().trim_matches('"');
+    // Page renvoyée par Epic collée en entier (`{"redirectUrl":…,"authorizationCode":"…"}`) : on en
+    // extrait le code, sinon le texte saisi tel quel.
+    let code = code.trim();
+    let from_json = serde_json::from_str::<serde_json::Value>(code).ok().and_then(|j| j["authorizationCode"].as_str().map(String::from));
+    let code = from_json.as_deref().unwrap_or(code).trim_matches('"');
     let (st, j) = http::post_form_status(&format!("{EPIC_OAUTH}/token"), &[("Authorization", &basic)], &format!("grant_type=authorization_code&code={}&token_type=eg1", enc(code))).ok_or("réseau indisponible")?;
     if st != 200 {
         return Err(j["errorMessage"].as_str().unwrap_or("code refusé").to_string());
@@ -220,6 +226,9 @@ fn epic_library(s: &mut Session) -> Option<Vec<Owned>> {
                 store_session("Epic Games", s.clone());
                 res = http::get_status(&url, &[("Authorization", &format!("bearer {}", s.access))]);
             }
+        }
+        if matches!(res, Some((401 | 403, _))) {
+            mark_expired("Epic Games");
         }
         let Some((200, j)) = res else { break };
         ok = true;
@@ -303,11 +312,11 @@ fn jwt_sub(token: &str) -> Option<String> {
     j["sub"].as_str().map(String::from)
 }
 
-fn steam_poll(c: &Challenge) -> Poll {
-    let Some((cid, rid)) = c.state.split_once('|') else { return Poll::Failed("état invalide".into()) };
+fn steam_poll(c: &mut Challenge) -> Poll {
+    let Some((cid, rid_b64)) = c.state.split_once('|').map(|(a, b)| (a.to_string(), b.to_string())) else { return Poll::Failed("état invalide".into()) };
     let mut p = vec![0x08];
     varint(cid.parse().unwrap_or(0), &mut p);
-    let rid = b64_decode(rid);
+    let rid = b64_decode(&rid_b64);
     p.push(0x12);
     varint(rid.len() as u64, &mut p);
     p.extend_from_slice(&rid);
@@ -321,7 +330,19 @@ fn steam_poll(c: &Challenge) -> Poll {
                     access: a.to_string(),
                     refresh: rf.to_string(),
                 }),
-                _ => Poll::Pending,
+                _ => {
+                    // QR code renouvelé par Steam (l'ancien expire) : nouvelle adresse et nouvel identifiant.
+                    let new_url = r["new_challenge_url"].as_str().filter(|u| !u.is_empty());
+                    let new_cid = r["new_client_id"].as_str().map(String::from).or_else(|| r["new_client_id"].as_u64().map(|n| n.to_string()));
+                    match (new_url, new_cid) {
+                        (Some(u), Some(id)) => {
+                            c.url = u.to_string();
+                            c.state = format!("{id}|{rid_b64}");
+                            Poll::Renewed
+                        }
+                        _ => Poll::Pending,
+                    }
+                }
             }
         }
         Some((_, _)) => Poll::Failed("connexion refusée ou expirée".into()),
@@ -356,6 +377,9 @@ fn steam_library(s: &mut Session) -> Option<Vec<Owned>> {
             res = http::get_status(&url(s), &[]);
         }
     }
+    if matches!(res, Some((401 | 403, _))) {
+        mark_expired("Steam");
+    }
     let Some((200, j)) = res else { return None };
     let games = j["response"]["games"]
         .as_array()
@@ -381,7 +405,7 @@ pub fn begin(store: &str) -> Option<Challenge> {
 }
 
 /// Interroge une connexion en cours ; enregistre la session quand l'utilisateur a validé.
-pub fn poll(c: &Challenge) -> Poll {
+pub fn poll(c: &mut Challenge) -> Poll {
     let r = match c.store {
         "Epic Games" => Poll::Pending,
         "Steam" => steam_poll(c),
@@ -404,7 +428,6 @@ pub fn library(store: &str) -> Option<Vec<Owned>> {
     }
 }
 
-/// Demande l'installation d'un jeu possédé au client de la boutique (qui doit être installé et connecté).
 /// Visuels d'un jeu possédé (Steam : jaquette, héros et logo ; Epic : jaquette de la liste).
 pub fn owned_art(o: &Owned) -> crate::Art {
     match o.store {
@@ -413,6 +436,7 @@ pub fn owned_art(o: &Owned) -> crate::Art {
     }
 }
 
+/// Adresse qui demande l'installation d'un jeu possédé au client de la boutique (installé et connecté).
 pub fn install_uri(o: &Owned) -> Option<String> {
     match o.store {
         "Steam" => Some(format!("steam://install/{}", o.key)),
@@ -466,4 +490,23 @@ pub fn owned_cache_load() -> Vec<(Owned, String)> {
             Some((Owned { store, title: e["title"].as_str()?.to_string(), key: e["key"].as_str()?.to_string(), images }, e["id"].as_str()?.to_string()))
         })
         .collect()
+}
+
+/// Boutiques dont la session a été refusée (jetons expirés, même après rafraîchissement) : il faut se
+/// reconnecter, inutile de réessayer en boucle.
+static EXPIRED: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+
+fn mark_expired(store: &'static str) {
+    let mut e = EXPIRED.lock().unwrap_or_else(|e| e.into_inner());
+    if !e.contains(&store) {
+        e.push(store);
+    }
+}
+
+/// La session de cette boutique a-t-elle été refusée depuis le dernier appel ? (remise à zéro)
+pub fn take_expired(store: &str) -> bool {
+    let mut e = EXPIRED.lock().unwrap_or_else(|e| e.into_inner());
+    let was = e.contains(&store);
+    e.retain(|s| *s != store);
+    was
 }

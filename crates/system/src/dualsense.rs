@@ -17,7 +17,8 @@ use std::sync::{Mutex, OnceLock};
 use hidapi::HidApi;
 
 const VENDOR: u16 = 0x054C;
-const PRODUCT: u16 = 0x0CE6;
+/// DualSense et DualSense Edge (mêmes rapports HID).
+const PRODUCTS: [u16; 2] = [0x0CE6, 0x0DF2];
 
 /// `HidApi::new()` réénumère tous les périphériques HID du système (SetupAPI) : coûteux à refaire à
 /// chaque appel alors que `battery()` est interrogée en continu toutes les 10 s. On garde une seule
@@ -35,7 +36,7 @@ fn with_api<T>(f: impl FnOnce(&HidApi) -> Option<T>) -> Option<T> {
 
 fn open() -> Option<hidapi::HidDevice> {
     with_api(|api| {
-        let path = api.device_list().find(|d| d.vendor_id() == VENDOR && d.product_id() == PRODUCT && d.usage_page() == 0x01 && d.usage() == 0x05)?.path().to_owned();
+        let path = api.device_list().find(|d| d.vendor_id() == VENDOR && PRODUCTS.contains(&d.product_id()) && d.usage_page() == 0x01 && d.usage() == 0x05)?.path().to_owned();
         api.open_path(&path).ok()
     })
 }

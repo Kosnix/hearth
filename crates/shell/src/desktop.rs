@@ -349,7 +349,7 @@ impl Shell {
 
     /// « Ajouter un jeu local… » : choix de l'exécutable, titre deviné, visuels cherchés dans les boutiques.
     fn desktop_add_local(&self) {
-        let Some(exe) = crate::native::open_file(&tr("Exécutable du jeu"), &format!("{} (*.exe)\0*.exe\0", tr("Applications"))) else { return };
+        let Some(exe) = crate::native::open_file(&tr("Exécutable du jeu"), &format!("{} (*.exe, *.bat, *.cmd, *.ps1)\0*.exe;*.bat;*.cmd;*.ps1\0", tr("Applications"))) else { return };
         let title = crate::addgame::guess_title(&exe);
         let exe2 = exe.clone();
         let t2 = title.clone();

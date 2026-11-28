@@ -130,6 +130,40 @@ fn decode(path: &Path) -> Option<Vec<f32>> {
     Some(out)
 }
 
+/// Crête du fichier (valeur absolue maximale), mesurée en le décodant paquet par paquet sans rien
+/// garder : la musique entière en mémoire (des centaines de Mo pour un long morceau) ne servait qu'à ça.
+fn peak(path: &Path) -> Option<f32> {
+    let file = File::open(path).ok()?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(e) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(e);
+    }
+    let probed = symphonia::default::get_probe().format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default()).ok()?;
+    let mut format = probed.format;
+    let track = format.default_track()?;
+    let id = track.id;
+    let mut dec = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).ok()?;
+    let (mut m, mut any) = (0.0f32, false);
+    while let Ok(pkt) = format.next_packet() {
+        if pkt.track_id() != id {
+            continue;
+        }
+        match dec.decode(&pkt) {
+            Ok(buf) => {
+                let spec = *buf.spec();
+                let mut sb = SampleBuffer::<f32>::new(buf.capacity() as u64, spec);
+                sb.copy_interleaved_ref(buf);
+                m = sb.samples().iter().fold(m, |a, x| a.max(x.abs()));
+                any = true;
+            }
+            Err(SymError::DecodeError(_)) => continue,
+            Err(_) => break,
+        }
+    }
+    any.then_some(m)
+}
+
 /// Premier fichier audio de ce nom (toute extension) dans `dir`, en descendant d'un niveau (les packs ont un dossier interne).
 fn find(dir: &Path, stem: &str) -> Option<PathBuf> {
     let mut dirs = vec![dir.to_path_buf()];
@@ -265,10 +299,10 @@ impl MusicStream {
     }
 }
 
-/// Ouvre un flux de musique : le pic (pour la normalisation) est mesuré par un décodage complet jetable,
+/// Ouvre un flux de musique : le pic (pour la normalisation) est mesuré par un premier décodage en flux,
 /// puis le fichier est rouvert pour la lecture en continu par blocs.
 fn open_stream(path: &Path) -> Option<MusicStream> {
-    let peak = decode(path)?.iter().fold(0.0f32, |m, x| m.max(x.abs())).max(0.001);
+    let peak = peak(path)?.max(0.001);
     MusicStream::open(path, 0.9 / peak)
 }
 

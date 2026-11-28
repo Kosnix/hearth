@@ -629,6 +629,11 @@ impl Settings {
         self.state.borrow().kb_text.clone()
     }
 
+    /// Réseau Wi-Fi dont on saisit le mot de passe (vide pour toute autre saisie).
+    pub fn kb_ssid(&self) -> String {
+        self.state.borrow().kb_ssid.clone()
+    }
+
     pub fn kb_acc(&self) -> bool {
         self.state.borrow().kb_acc
     }

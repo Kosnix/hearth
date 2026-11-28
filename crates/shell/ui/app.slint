@@ -1712,7 +1712,8 @@ export component App inherits Window {
             }
             vtxt := Text {
                 x: 46px;
-                text: st-vol < 0 ? "" : st-vol + "%";
+                // Son coupé (ou à 0) : l'icône barrée suffit, pas de « 0% ».
+                text: st-vol <= 0 ? "" : st-vol + "%";
                 font-size: 24px;
                 vertical-alignment: center;
                 color: Theme.dim;
@@ -3332,6 +3333,9 @@ component GuideRow inherits Rectangle {
     in property <string> value;
     in property <int> gauge: -1; // 0..100, -1 = pas de jauge
     in property <bool> selected;
+    /// Réglage indisponible (« — ») : grisé, et sauté par la navigation du guide.
+    in property <bool> enabled: true;
+    opacity: enabled ? 1 : 0.45;
     callback clicked;
     height: 76px;
     border-radius: Theme.r-lg;
@@ -3413,10 +3417,23 @@ export component GuideMenu inherits Window {
     background: Theme.bg;
     forward-focus: keys;
 
+    // Ligne utilisable : Volume, Luminosité et Wi-Fi indisponibles (« — ») sont sautés.
+    pure function usable(i: int) -> bool {
+        return !((i == 3 && volume < 0) || (i == 4 && brightness < 0) || (i == 5 && wifi < 0));
+    }
+    // Un pas (boucle, ou butée bouton maintenu).
+    pure function mv(i: int, d: int) -> int {
+        return repeating ? max(0, min(count - 1, i + d)) : mod(i + d + count, count);
+    }
+    // Pas suivant en sautant jusqu'à trois lignes indisponibles d'affilée.
+    pure function next(i: int, d: int) -> int {
+        return usable(mv(i, d)) ? mv(i, d) : usable(mv(mv(i, d), d)) ? mv(mv(i, d), d) : usable(mv(mv(mv(i, d), d), d)) ? mv(mv(mv(i, d), d), d) : i;
+    }
+
     public function nav(a: int) {
         // Haut/bas bouclent (sauf bouton maintenu) ; Options ferme le menu, comme Retour.
-        if (a == 0) { sel = repeating ? max(0, sel - 1) : mod(sel + count - 1, count); }
-        else if (a == 1) { sel = repeating ? min(count - 1, sel + 1) : mod(sel + 1, count); }
+        if (a == 0) { sel = next(sel, -1); }
+        else if (a == 1) { sel = next(sel, 1); }
         else if (a == 2) { action(sel, -1); }
         else if (a == 3) { action(sel, 1); }
         else if (a == 4) { action(sel, 0); }
@@ -3517,6 +3534,7 @@ export component GuideMenu inherits Window {
             label: @tr("Volume");
             value: volume < 0 ? "—" : volume + " %";
             gauge: volume;
+            enabled: volume >= 0;
             selected: sel == 3;
         }
         GuideRow {
@@ -3525,12 +3543,14 @@ export component GuideMenu inherits Window {
             label: @tr("Luminosité");
             value: brightness < 0 ? "—" : brightness + " %";
             gauge: brightness;
+            enabled: brightness >= 0;
             selected: sel == 4;
         }
         GuideRow {
             glyph: "\u{E701}";
             label: @tr("Wi-Fi");
             value: wifi < 0 ? "—" : wifi == 1 ? @tr("activé") : @tr("coupé");
+            enabled: wifi >= 0;
             selected: sel == 5;
             clicked => { root.sel = 5; root.action(5, 0); }
         }
@@ -3705,8 +3725,10 @@ export component PadOverlay inherits Window {
     public function nav(a: int) {
         if (a == 0) { kby = max(0, kby - 1); }
         else if (a == 1) { kby = min(4, kby + 1); }
-        else if (a == 2) { kbx = max(0, kbx - 1); }
-        else if (a == 3) { kbx = min(kby == 4 ? 5 : 9, kbx + 1); }
+        // Comme le clavier de la console : gauche/droite bouclent sur la rangée, Options valide.
+        else if (a == 2) { kbx = mod(kbx + (kby == 4 ? 5 : 9), kby == 4 ? 6 : 10); }
+        else if (a == 3) { kbx = mod(kbx + 1, kby == 4 ? 6 : 10); }
+        else if (a == 7) { press(4, 4); }
         else if (a == 4) { press(kbx, kby); }
         else if (a == 5) { press(-1, -1); }
         else if (a == 14) { press(2, 4); }

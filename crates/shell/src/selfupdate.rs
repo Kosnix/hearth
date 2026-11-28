@@ -38,15 +38,24 @@ impl Shell {
             self.push_notif("Hearth", &tr("Recherche des mises à jour…"));
         }
         std::thread::spawn(move || {
-            let found = stores::fetch_json(API).and_then(|j| {
+            let resp = stores::fetch_json(API);
+            let reached = resp.is_some();
+            let found = resp.and_then(|j| {
                 let tag = j["tag_name"].as_str()?.to_string();
                 let url = j["assets"].as_array()?.iter().find(|a| a["name"] == ASSET)?["browser_download_url"].as_str()?.to_string();
                 (url.starts_with(ASSET_PREFIX) && newer(&tag, env!("HEARTH_VERSION"))).then_some((tag.trim_start_matches('v').to_string(), url))
             });
             let _ = slint::invoke_from_event_loop(move || {
                 with_shell(|s| {
-                    if manual && found.is_none() {
+                    s.hearth_checked.set(Some(reached));
+                    // « À jour » seulement si GitHub a vraiment répondu (pas en cas d'échec réseau).
+                    if manual && !reached {
+                        s.push_notif("Hearth", &tr("Impossible de vérifier les mises à jour (réseau ?)"));
+                    } else if manual && found.is_none() {
                         s.push_notif("Hearth", &tr("Hearth est à jour"));
+                    }
+                    if s.ui.get_zone() == 3 && s.ui.get_cat() == 6 {
+                        s.open_cat_keep(6);
                     }
                     if let Some(f) = found {
                         let fresh = s.hearth_update.borrow().as_ref().is_none_or(|o| o.0 != f.0);
@@ -90,6 +99,8 @@ impl Shell {
             format!("{} {ver}", tr("Mise à jour de Hearth disponible :")),
             vec![(tr("Installer la mise à jour (silencieux)"), Act::SelfUpdate), (tr("Plus tard"), Act::Cancel)],
         );
+        // Fenêtre qui s'ouvre toute seule : un A destiné à autre chose ne doit pas installer (et redémarrer).
+        self.ui.set_msel(1);
     }
 
     /// Après confirmation (menu ou notification épinglée) : télécharge l'installateur — progression

@@ -39,8 +39,11 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn launch(exe: &Path, args: &[String]) -> windows::core::Result<Session> {
-        let dir = exe.parent().map(Path::to_path_buf).unwrap_or_default();
+    /// `dir` : dossier du jeu (dossier de travail, et repère pour reconnaître ses fenêtres) ; par
+    /// défaut celui de l'exécutable. Un script (.bat, .ps1) est lancé par `cmd`/PowerShell : son
+    /// dossier à lui doit être donné, sinon tout System32 passerait pour le jeu.
+    pub fn launch(exe: &Path, args: &[String], dir: Option<&Path>) -> windows::core::Result<Session> {
+        let dir = dir.map(Path::to_path_buf).or_else(|| exe.parent().map(Path::to_path_buf)).unwrap_or_default();
         let mut line = quote(&exe.to_string_lossy());
         for a in args {
             line.push(' ');

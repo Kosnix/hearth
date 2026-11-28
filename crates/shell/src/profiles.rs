@@ -161,6 +161,9 @@ impl Shell {
         }
         let p = s.profiles.remove(i);
         let _ = std::fs::remove_dir_all(dir_of(&p.id));
+        // Données rangées ailleurs pour ce profil : identifiant SteamCMD et session Legendary (Epic).
+        crate::i18n::set_pref(&format!("steamcmd_user_{}", p.id), "");
+        let _ = std::fs::remove_dir_all(stores::epiccmd::dir().join(format!("config-{}", p.id)));
         save(&s);
         self.push_notif(&tr("Profils"), &format!("{} : {}", tr("Profil supprimé"), p.name));
         self.profile_open();

@@ -11,6 +11,16 @@ pub struct Override {
     pub name: Option<String>,
     #[serde(default)]
     pub hidden: bool,
+    /// Arguments de lancement choisis par l'utilisateur.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<String>,
+    /// Autre exécutable (chemin complet) choisi parmi les options de lancement Steam.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exe: Option<String>,
+    /// Options de lancement Steam déjà examinées (l'application automatique n'a lieu qu'une fois :
+    /// si l'utilisateur efface ensuite les arguments, ils ne reviennent pas).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub launch_checked: bool,
 }
 
 fn file() -> PathBuf {

@@ -311,6 +311,11 @@ pub mod wifi {
         a.NetworkReport().ok()?.AvailableNetworks().ok()?.into_iter().find(|n| n.Ssid().is_ok_and(|s| s == ssid))
     }
 
+    /// Windows connaît-il déjà ce réseau (profil enregistré, mot de passe compris) ? Bloquant (court).
+    pub fn has_profile(ssid: &str) -> bool {
+        super::netsh::profiles().iter().any(|p| p == ssid)
+    }
+
     /// Connexion (mot de passe pour un réseau sécurisé). Bloquant.
     pub fn connect(ssid: &str, password: Option<&str>) -> bool {
         let Some(a) = adapter() else { return super::netsh::connect(ssid, password) };
@@ -474,6 +479,12 @@ mod netsh {
             }
         }
         up.then_some(ssid).flatten()
+    }
+
+    /// Noms des réseaux Wi-Fi enregistrés dans Windows (`netsh wlan show profiles`).
+    pub fn profiles() -> Vec<String> {
+        // Lignes « Profil Tous les utilisateurs : Nom » / « All User Profile : Name ».
+        run("show profiles").lines().filter(|l| l.contains(':') && l.to_lowercase().contains("profil")).filter_map(|l| value(l).map(String::from)).filter(|n| !n.is_empty()).collect()
     }
 
     pub fn scan() -> Vec<Net> {
